@@ -26,7 +26,9 @@ Lab AS sims: `tools/as-http-sim.py`, `tools/as-grpc-json-sim.py`.
 - MAP MO/NI via `ra-jss7` + [`MapUssdAccessAdapter`](src/main/java/et/restlink/ussdgw/access/MapUssdAccessAdapter.java)
 - Diameter / SIP: **do not implement RAs here** — use micro-jainslee `ra-diameter` / `ra-sip-servlet` (Monitor Hub). App keeps thin [`DiameterUssdAccessAdapter`](src/main/java/et/restlink/ussdgw/access/DiameterUssdAccessAdapter.java) / [`SipUssiAccessAdapter`](src/main/java/et/restlink/ussdgw/access/SipUssiAccessAdapter.java) only.
 - Access stubs → [`AccessNiDispatcher`](src/main/java/et/restlink/ussdgw/access/AccessNiDispatcher.java) (`OriginationType`)
-- AS pull: `ra-http-client` + `ra-grpc-client` (Apply wires existing RAs; RA code not in this app)
+- AS pull: `ra-http-client` (`JsonPostRequest` = raw POST body + `HttpCallbackCompletedEvent`)
+  + `ra-grpc-client`. Do **not** use `CallbackRequest` for pull (that wraps
+  `sessionId/status/payload` envelope).
 - AS callback / admin: `ra-http-server` + `ra-grpc-server`
 - Local ESME: **in-tree SMPP RA** (`et.restlink.ussdgw.ra.smpp`) — intentional local RA (not moved to micro-jainslee); optional USSD-over-SMPP stub (`ussd.smpp.ussd.enabled`)
 - Alphabets: **AS-driven** via HTTP `AsResponse.alphabet` (`ucs7`|`ucs8`|`unicode`|`auto`) or SMPP `data_coding` → MAP CBS `0x0F` / `0x44` / `0x48`. GW does not hardcode. AUTO only when AS omits coding.
@@ -74,6 +76,9 @@ Operator toggles (admin Save → `ussd_config` KV overlay → Apply):
 - `ussd.grpc.client.enabled` / `ussd.grpc.server.enabled` (+ invoke timeout, listen port)
 
 Invariant: `1000 ≤ adaptiveGate ≤ asyncGateTimeoutMs < dialogTimeout`.
+EWMA (`α=0.2`, headroom `1.5`, floor `1000ms`) per `networkId`. Feed only on
+**content** AS replies (skip `async=true` ACK); callback ingress derives sample from
+`pullStartedAtMs` when latency unknown. Invalid asyncGate → dialogTimeout (no EWMA).
 
 ## Admin HTTP
 

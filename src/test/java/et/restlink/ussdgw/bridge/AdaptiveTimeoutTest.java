@@ -55,6 +55,15 @@ class AdaptiveTimeoutTest {
     }
 
     @Test
+    void effectiveGateInvalidAsyncIgnoresEwmaUnlikeCeilingFallback() {
+        // Classic SessionBridgeSupport: invalid asyncGate → dialog, no EWMA shrink.
+        AdaptiveTimeout at = new AdaptiveTimeout();
+        at.recordLatency(3, 1000);
+        assertThat(at.effectiveGateMs(3, 0, 60_000)).isEqualTo(60_000);
+        assertThat(at.effectiveGateMs(3, 60_000, 60_000)).isEqualTo(60_000);
+    }
+
+    @Test
     void effectiveGateUsesAsyncCeilingWhenValid() {
         AdaptiveTimeout at = new AdaptiveTimeout();
         at.recordLatency(9, 2000);

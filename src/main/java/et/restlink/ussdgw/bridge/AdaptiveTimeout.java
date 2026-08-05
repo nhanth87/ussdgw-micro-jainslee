@@ -62,17 +62,18 @@ public class AdaptiveTimeout {
 
     /**
      * Classic {@code SessionBridgeSupport.gateTimeoutMs(networkId)}:
-     * if asyncGate is non-positive or not strictly below dialogTimeout, use dialogTimeout
-     * as the ceiling; otherwise EWMA-suggest against asyncGate.
+     * <ul>
+     *   <li>if asyncGate is non-positive or not strictly below dialogTimeout →
+     *       return dialogTimeout as the gate (no EWMA);</li>
+     *   <li>otherwise EWMA-suggest against asyncGate as ceiling.</li>
+     * </ul>
      */
     public long effectiveGateMs(int networkId, long asyncGateTimeoutMs, long dialogTimeoutMs) {
-        long ceiling = (asyncGateTimeoutMs <= 0 || asyncGateTimeoutMs >= dialogTimeoutMs)
-                ? dialogTimeoutMs
-                : asyncGateTimeoutMs;
-        if (ceiling <= 0) {
-            ceiling = 7000L;
+        long dialog = dialogTimeoutMs > 0 ? dialogTimeoutMs : 7000L;
+        if (asyncGateTimeoutMs <= 0 || asyncGateTimeoutMs >= dialog) {
+            return dialog;
         }
-        return suggestGateMs(networkId, ceiling);
+        return suggestGateMs(networkId, asyncGateTimeoutMs);
     }
 
     public double observedLatencyMs(int networkId) {

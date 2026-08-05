@@ -70,8 +70,16 @@ public class VirtualSessionBridge {
             return;
         }
         VirtualSession s = opt.get();
-        if (latencyMs > 0) {
-            adaptive.recordLatency(s.networkId(), latencyMs);
+        // Feed EWMA only for content responses (not ASYNC_ACK). When caller
+        // passes latencyMs<=0 (HTTP/gRPC callback ingress), derive from pull start.
+        if (!response.async()) {
+            long sample = latencyMs;
+            if (sample <= 0 && s.pullStartedAtMs() > 0) {
+                sample = System.currentTimeMillis() - s.pullStartedAtMs();
+            }
+            if (sample > 0) {
+                adaptive.recordLatency(s.networkId(), sample);
+            }
         }
         if (response.async()) {
             return;

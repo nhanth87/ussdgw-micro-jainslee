@@ -78,6 +78,49 @@ class BridgeGateBehaviourTest {
     }
 
     @Test
+    void asyncAckDoesNotPoisonEwma_callbackRecordsFromPullStart() {
+        AdaptiveTimeout adaptive = new AdaptiveTimeout();
+        VirtualSessionBridge bridge = newBridge(store, true);
+        set(bridge, "adaptive", adaptive);
+        bridge.bindSs7(() -> new CapturingPort());
+
+        VirtualSession s = new VirtualSession("vs", "c-ewma", "r1", "2519", 42, "dlg-e", "*123#");
+        s.setInvokeId(1);
+        s.setDialogAlive(true);
+        s.setState(VirtualSessionState.AWAITING_AS);
+        s.setPullStartedAtMs(System.currentTimeMillis() - 2500);
+        store.put(s);
+
+        // Fast ASYNC_ACK must not shrink the gate model
+        bridge.onAsResponse(new AsResponse("c-ewma", "r1", 1, "", AsAction.END, true), 8);
+        assertThat(adaptive.observedLatencyMs(42)).isEqualTo(0d);
+        assertThat(adaptive.suggestGateMs(42, 7000)).isEqualTo(7000);
+
+        // Content callback with latencyMs=-1 derives sample from pullStartedAt
+        bridge.onAsResponse(new AsResponse("c-ewma", "r1", 1, "Hello", AsAction.END, false), -1);
+        assertThat(adaptive.observedLatencyMs(42)).isGreaterThanOrEqualTo(2000d);
+        assertThat(store.get("c-ewma")).isEmpty(); // COMPLETED removed
+    }
+
+    @Test
+    void syncContentRecordsProvidedLatency() {
+        AdaptiveTimeout adaptive = new AdaptiveTimeout();
+        VirtualSessionBridge bridge = newBridge(store, true);
+        set(bridge, "adaptive", adaptive);
+        bridge.bindSs7(() -> new CapturingPort());
+
+        VirtualSession s = new VirtualSession("vs", "c-sync", "r1", "2519", 7, "dlg-s", "*123#");
+        s.setInvokeId(1);
+        s.setDialogAlive(true);
+        s.setState(VirtualSessionState.AWAITING_AS);
+        store.put(s);
+
+        bridge.onAsResponse(new AsResponse("c-sync", "r1", 1, "Bye", AsAction.END, false), 2000);
+        assertThat(adaptive.observedLatencyMs(7)).isEqualTo(2000d);
+        assertThat(adaptive.suggestGateMs(7, 7000)).isEqualTo(3000L);
+    }
+
+    @Test
     void syncAsResponseEndsDialogViaCommand() {
         VirtualSession s = new VirtualSession("vs", "c1", "r1", "2519", 0, "dlg-9", "*123#");
         s.setInvokeId(3);

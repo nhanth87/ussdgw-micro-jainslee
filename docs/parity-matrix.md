@@ -7,7 +7,7 @@
 | Diameter USSD | — | App adapter stub; **RA = micro-jainslee `ra-diameter`** (not in this app) |
 | SMPP USSD TLV | — | **Skeleton** adapter + **local in-tree SMPP RA** (kept in app) |
 | SIP / USSI | SipClient/Server | App adapter stub; **RA = micro-jainslee `ra-sip-servlet`** |
-| HTTP pull AS | HttpClientSbb | HttpClientSbb + ra-http-client callback |
+| HTTP pull AS | HttpClientSbb | HttpClientSbb + `JsonPostRequest` (raw body R/R) |
 | HTTP async callback / NI ingress | HttpServerSbb | HttpServerSbb + /as/callback |
 | gRPC pull | GrpcClientSbb (50ms poll) | GrpcClientSbb callback-only |
 | gRPC server | GrpcServerSbb | GrpcServerSbb |

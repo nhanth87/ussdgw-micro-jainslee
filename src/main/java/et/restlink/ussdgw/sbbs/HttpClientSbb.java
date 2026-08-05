@@ -21,7 +21,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicInteger;
 
-/** HTTP pull toward AS — completion via RA callback event (no poll). */
+/** HTTP pull toward AS — request/response via RA JsonPost (raw body, no poll). */
 public final class HttpClientSbb implements Sbb, SleeEventHandler {
     private final SbbServices services;
     private final Map<String, Long> startedAt = new ConcurrentHashMap<>();
@@ -79,7 +79,7 @@ public final class HttpClientSbb implements Sbb, SleeEventHandler {
             svc().saga().onAsPullFailed(corr, "NO_HTTP_RA");
             return "no-ra";
         }
-        port.sendCommand(new HttpCallbackCommand.CallbackRequest(corr, pull.asUrl(), payload));
+        port.sendCommand(new HttpCallbackCommand.JsonPostRequest(corr, pull.asUrl(), payload));
         return "submitted corr=" + corr;
     }
 
@@ -102,7 +102,7 @@ public final class HttpClientSbb implements Sbb, SleeEventHandler {
                 RaCommandPort port = httpClient;
                 if (port != null && payload != null) {
                     startedAt.put(corr, System.currentTimeMillis());
-                    port.sendCommand(new HttpCallbackCommand.CallbackRequest(corr, url, payload));
+                    port.sendCommand(new HttpCallbackCommand.JsonPostRequest(corr, url, payload));
                     return "retry attempt=" + att.get() + " corr=" + corr;
                 }
             }
