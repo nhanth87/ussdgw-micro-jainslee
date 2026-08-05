@@ -1,0 +1,62 @@
+openapi: 3.0.3
+info:
+  title: RestLink USSD GW — Application Server API
+  version: 1.0.0
+  description: |
+    Greenfield AS contract (not classic XmlMAPDialog).
+
+    Modes:
+    - SYNC — pull returns AsResponse with async=false; GW applies CONTINUE/END on live MAP dialog.
+    - ASYNC_ACK — pull returns async=true; AS later POSTs /as/callback (or gRPC Callback) while dialog may still be open.
+    - BRIDGE — if AS is late past adaptive gate and bridge is armed, GW releases MAP with wait text then NI-pushes on late callback.
+paths:
+  /ussd/pull:
+    post:
+      summary: Synchronous pull from gateway (MO / continue)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AsRequest'
+      responses:
+        '200':
+          description: Immediate menu
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AsResponse'
+  /as/callback:
+    post:
+      summary: Async callback into gateway (unblock / bridge reconcile)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AsResponse'
+      responses:
+        '202':
+          description: Accepted
+components:
+  schemas:
+    AsRequest:
+      type: object
+      properties:
+        sessionId: { type: string }
+        correlationId: { type: string }
+        requestId: { type: string }
+        generation: { type: integer }
+        msisdn: { type: string }
+        shortCode: { type: string }
+        ussdString: { type: string }
+        networkId: { type: integer }
+    AsResponse:
+      type: object
+      properties:
+        correlationId: { type: string }
+        requestId: { type: string }
+        generation: { type: integer }
+        text: { type: string }
+        action: { type: string, enum: [CONTINUE, END, ABORT] }
+        async: { type: boolean, description: If true, AS will POST /as/callback later }

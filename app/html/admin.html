@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>RestLink USSD GW</title>
+  <script src="https://unpkg.com/htmx.org@2.0.4"></script>
+  <style>
+    :root { --ink:#1a2332; --accent:#0b6e4f; --line:#c5d0de; --ok:#0b6e4f; --warn:#b45309; --mute:#64748b; }
+    * { box-sizing: border-box; }
+    body { margin:0; font-family: "IBM Plex Sans", "Segoe UI", sans-serif;
+      background: linear-gradient(165deg, #dfe8f2 0%, #f4f7fb 40%, #e6edf5 100%);
+      color: var(--ink); min-height: 100vh; }
+    header { padding: 2.5rem 1.5rem 1rem; max-width: 1100px; margin: 0 auto; }
+    .brand { font-family: "IBM Plex Serif", Georgia, serif; font-size: 2.4rem;
+      letter-spacing: -0.02em; margin: 0; }
+    .tag { color: #4a5a6a; margin-top: 0.4rem; max-width: 40rem; }
+    nav { display: flex; gap: 0.75rem; flex-wrap: wrap; margin: 1.25rem 0; }
+    nav a, nav button { background: transparent; border: 1px solid var(--line);
+      padding: 0.45rem 0.9rem; border-radius: 2px; cursor: pointer; color: var(--ink);
+      text-decoration: none; font-size: 0.95rem; }
+    nav a:hover, nav button:hover { border-color: var(--accent); color: var(--accent); }
+    nav a.plane { border-color: var(--accent); font-weight: 500; }
+    main { max-width: 1100px; margin: 0 auto; padding: 0 1.5rem 3rem; }
+    #panel { background: rgba(255,255,255,0.55); border: 1px solid var(--line);
+      padding: 1.25rem; min-height: 12rem; }
+    table { width: 100%; border-collapse: collapse; }
+    th, td { text-align: left; padding: 0.4rem 0.5rem; border-bottom: 1px solid var(--line); }
+    form label { margin-right: 0.5rem; display: inline-block; margin-bottom: 0.4rem; }
+    .grid-form { display: flex; flex-wrap: wrap; gap: 0.5rem 1rem; margin-bottom: 1rem; align-items: end; }
+    .grid-form input, .grid-form select { margin-left: 0.25rem; }
+    .notice { color: var(--accent); font-weight: 500; }
+    .hint { color: #4a5a6a; font-size: 0.9rem; }
+    .plane-actions { width: 100%; margin-top: 0.75rem; display: flex; flex-wrap: wrap; gap: 0.4rem; }
+    button { cursor: pointer; }
+    /* OTA-style link status (SMPP fragment) */
+    .link-status-panel { margin: 0.75rem 0 1.25rem; }
+    .link-status-head { display: flex; align-items: center; gap: 0.75rem; }
+    .link-status-head h3 { margin: 0; }
+    .link-status-badge { font-size: 0.75rem; letter-spacing: 0.04em; padding: 0.15rem 0.5rem; border: 1px solid var(--line); }
+    .link-status-badge--ok { color: var(--ok); border-color: var(--ok); }
+    .link-status-badge--mute { color: var(--mute); }
+    .link-status-detail { color: #4a5a6a; font-family: ui-monospace, monospace; font-size: 0.85rem; }
+    .link-status-caption { margin: 0.75rem 0 0.25rem; font-size: 0.85rem; color: #4a5a6a; }
+    .link-status-table { font-size: 0.9rem; }
+    .link-status-mono { font-family: ui-monospace, monospace; }
+    .link-status-state--ok { color: var(--ok); }
+    .link-status-state--warn { color: var(--warn); }
+    .link-status-state--mute { color: var(--mute); }
+    .link-status-empty { color: var(--mute); font-style: italic; }
+    .kv { display: flex; gap: 0.5rem; font-size: 0.85rem; }
+    .kv .ok { color: var(--ok); } .kv .bad { color: #b91c1c; }
+  </style>
+</head>
+<body>
+<header>
+  <h1 class="brand">RestLink USSD GW</h1>
+  <p class="tag">Greenfield gateway — MAP / Diameter / SMPP / SIP access + HTTP/gRPC AS + adaptive bridge.
+    Plane config &amp; live status live on Monitor Hub (OTA pattern).</p>
+  <nav>
+    <button hx-get="/admin/status" hx-target="#panel" hx-swap="innerHTML"
+            hx-headers='{"X-USSD-Admin-Key":"ussd-admin"}'>Status</button>
+    <a class="plane" href="/telemetry/?tab=ss7&amp;key=ussd-admin">SS7</a>
+    <a class="plane" href="/telemetry/?tab=smpp&amp;key=ussd-admin">SMPP</a>
+    <a class="plane" href="/telemetry/?tab=http&amp;key=ussd-admin">HTTP</a>
+    <button hx-get="/admin/ss7/config" hx-target="#panel" hx-swap="innerHTML"
+            hx-headers='{"X-USSD-Admin-Key":"ussd-admin"}'>SS7 form</button>
+    <button hx-get="/admin/smpp/config" hx-target="#panel" hx-swap="innerHTML"
+            hx-headers='{"X-USSD-Admin-Key":"ussd-admin"}'>SMPP form</button>
+    <button hx-get="/admin/http/config" hx-target="#panel" hx-swap="innerHTML"
+            hx-headers='{"X-USSD-Admin-Key":"ussd-admin"}'>HTTP form</button>
+    <button hx-get="/admin/grpc" hx-target="#panel" hx-swap="innerHTML"
+            hx-headers='{"X-USSD-Admin-Key":"ussd-admin"}'>gRPC</button>
+    <button hx-get="/admin/routing" hx-target="#panel" hx-swap="innerHTML"
+            hx-headers='{"X-USSD-Admin-Key":"ussd-admin"}'>Routing</button>
+    <button hx-get="/admin/tenants" hx-target="#panel" hx-swap="innerHTML"
+            hx-headers='{"X-USSD-Admin-Key":"ussd-admin"}'>Tenants</button>
+    <button hx-get="/admin/users" hx-target="#panel" hx-swap="innerHTML"
+            hx-headers='{"X-USSD-Admin-Key":"ussd-admin"}'>Users</button>
+    <button hx-get="/admin/cdr?limit=50" hx-target="#panel" hx-swap="innerHTML"
+            hx-headers='{"X-USSD-Admin-Key":"ussd-admin"}'>CDR</button>
+    <button hx-get="/admin/bridge" hx-target="#panel" hx-swap="innerHTML"
+            hx-headers='{"X-USSD-Admin-Key":"ussd-admin"}'>Bridge</button>
+    <a href="/telemetry/?key=ussd-admin">Monitor Hub</a>
+  </nav>
+</header>
+<main>
+  <div id="panel" hx-get="/admin/status" hx-trigger="load"
+       hx-headers='{"X-USSD-Admin-Key":"ussd-admin"}'>Loading…</div>
+</main>
+</body>
+</html>

@@ -1,0 +1,90 @@
+package et.restlink.ussdgw.bridge;
+
+import et.restlink.ussdgw.access.OriginationType;
+
+import java.util.concurrent.atomic.AtomicInteger;
+
+public final class VirtualSession {
+    private final String virtualSessionId;
+    private final String correlationId;
+    private final String requestId;
+    private final AtomicInteger generation = new AtomicInteger(1);
+    private final String msisdn;
+    private final int networkId;
+    private final String dialogId;
+    private final String shortCode;
+    private volatile VirtualSessionState state = VirtualSessionState.ACTIVE;
+    private volatile String pendingText;
+    private volatile et.restlink.ussdgw.api.UssdAlphabet pendingAlphabet =
+            et.restlink.ussdgw.api.UssdAlphabet.AUTO;
+    private volatile long createdAtMs = System.currentTimeMillis();
+    private volatile long gateDeadlineMs;
+    private volatile long gateMs;
+    private volatile long pullStartedAtMs;
+    private volatile long invokeId;
+    private volatile boolean dialogAlive = true;
+    private volatile boolean adaptiveBridgeArm = true;
+    private volatile String mscGt;
+    private volatile String localGt = "100";
+    private volatile String tenantId;
+    private volatile OriginationType originationType = OriginationType.MAP;
+
+    public VirtualSession(String virtualSessionId, String correlationId, String requestId,
+                          String msisdn, int networkId, String dialogId, String shortCode) {
+        this.virtualSessionId = virtualSessionId;
+        this.correlationId = correlationId;
+        this.requestId = requestId;
+        this.msisdn = msisdn;
+        this.networkId = networkId;
+        this.dialogId = dialogId;
+        this.shortCode = shortCode;
+    }
+
+    public String virtualSessionId() { return virtualSessionId; }
+    public String correlationId() { return correlationId; }
+    public String requestId() { return requestId; }
+    public int generation() { return generation.get(); }
+    public int nextGeneration() { return generation.incrementAndGet(); }
+    public String msisdn() { return msisdn; }
+    public int networkId() { return networkId; }
+    public String dialogId() { return dialogId; }
+    public String shortCode() { return shortCode; }
+    public VirtualSessionState state() { return state; }
+    public void setState(VirtualSessionState state) { this.state = state; }
+    public String pendingText() { return pendingText; }
+    public void setPendingText(String pendingText) { this.pendingText = pendingText; }
+    public et.restlink.ussdgw.api.UssdAlphabet pendingAlphabet() {
+        return pendingAlphabet == null ? et.restlink.ussdgw.api.UssdAlphabet.AUTO : pendingAlphabet;
+    }
+    public void setPendingAlphabet(et.restlink.ussdgw.api.UssdAlphabet pendingAlphabet) {
+        this.pendingAlphabet = pendingAlphabet == null
+                ? et.restlink.ussdgw.api.UssdAlphabet.AUTO : pendingAlphabet;
+    }
+    public long createdAtMs() { return createdAtMs; }
+    public long gateDeadlineMs() { return gateDeadlineMs; }
+    public void setGateDeadlineMs(long gateDeadlineMs) { this.gateDeadlineMs = gateDeadlineMs; }
+    public long gateMs() { return gateMs; }
+    public void setGateMs(long gateMs) { this.gateMs = gateMs; }
+    public long pullStartedAtMs() { return pullStartedAtMs; }
+    public void setPullStartedAtMs(long pullStartedAtMs) { this.pullStartedAtMs = pullStartedAtMs; }
+    public long invokeId() { return invokeId; }
+    public void setInvokeId(long invokeId) { this.invokeId = invokeId; }
+    public boolean dialogAlive() { return dialogAlive; }
+    public void setDialogAlive(boolean dialogAlive) { this.dialogAlive = dialogAlive; }
+    public boolean adaptiveBridgeArm() { return adaptiveBridgeArm; }
+    public void setAdaptiveBridgeArm(boolean adaptiveBridgeArm) { this.adaptiveBridgeArm = adaptiveBridgeArm; }
+    public String mscGt() { return mscGt; }
+    public void setMscGt(String mscGt) { this.mscGt = mscGt; }
+    public String localGt() { return localGt; }
+    public void setLocalGt(String localGt) { this.localGt = localGt; }
+    public void setCreatedAtMs(long createdAtMs) { this.createdAtMs = createdAtMs; }
+    public void setGeneration(int generation) { this.generation.set(Math.max(1, generation)); }
+    public String tenantId() { return tenantId; }
+    public void setTenantId(String tenantId) { this.tenantId = tenantId; }
+    public OriginationType originationType() {
+        return originationType == null ? OriginationType.MAP : originationType;
+    }
+    public void setOriginationType(OriginationType originationType) {
+        this.originationType = originationType == null ? OriginationType.MAP : originationType;
+    }
+}

@@ -1,0 +1,35 @@
+syntax = "proto3";
+package et.restlink.ussdgw.as;
+
+option java_multiple_files = true;
+option java_package = "et.restlink.ussdgw.as.proto";
+
+// Greenfield gRPC AS contract (JSON-over-bytes also supported by lab sims).
+service UssdAs {
+  rpc Pull(AsRequest) returns (AsResponse);
+  rpc Callback(AsResponse) returns (Ack);
+}
+
+message AsRequest {
+  string session_id = 1;
+  string correlation_id = 2;
+  string request_id = 3;
+  int32 generation = 4;
+  string msisdn = 5;
+  string short_code = 6;
+  string ussd_string = 7;
+  int32 network_id = 8;
+}
+
+message AsResponse {
+  string correlation_id = 1;
+  string request_id = 2;
+  int32 generation = 3;
+  string text = 4;
+  string action = 5; // CONTINUE | END | ABORT
+  bool async = 6;
+}
+
+message Ack {
+  bool accepted = 1;
+}

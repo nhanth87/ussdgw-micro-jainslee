@@ -1,0 +1,14 @@
+target/
+dist/lib/
+dist/*.jar
+dist/quarkus/
+dist/quarkus-run.jar
+data/
+logs/
+.idea/
+*.iml
+.classpath
+.project
+.settings/
+tmp/
+dogfood-output/

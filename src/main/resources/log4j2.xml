@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Configuration status="WARN">
+  <Properties>
+    <Property name="LOG_DIR">${sys:ussd.log.dir:-logs}</Property>
+  </Properties>
+  <Appenders>
+    <RollingFile name="APP" fileName="${LOG_DIR}/ussdgw.log"
+                 filePattern="${LOG_DIR}/ussdgw-%d{yyyy-MM-dd}.log.gz">
+      <PatternLayout pattern="%d{yyyy-MM-dd HH:mm:ss.SSS} %-5p [%t] %c{1.} - %m%n"/>
+      <Policies><TimeBasedTriggeringPolicy/></Policies>
+    </RollingFile>
+    <RollingFile name="SLEE" fileName="${LOG_DIR}/ussdgw-slee.log"
+                 filePattern="${LOG_DIR}/ussdgw-slee-%d{yyyy-MM-dd}.log.gz">
+      <PatternLayout pattern="%d{yyyy-MM-dd HH:mm:ss.SSS} %-5p [%t] %m%n"/>
+      <Policies><TimeBasedTriggeringPolicy/></Policies>
+    </RollingFile>
+    <RollingFile name="CDR" fileName="${LOG_DIR}/ussd-cdr.log"
+                 filePattern="${LOG_DIR}/ussd-cdr-%d{yyyy-MM-dd}.log.gz">
+      <PatternLayout pattern="%d{yyyy-MM-dd HH:mm:ss.SSS} %m%n"/>
+      <Policies><TimeBasedTriggeringPolicy/></Policies>
+    </RollingFile>
+    <Console name="CONSOLE" target="SYSTEM_OUT">
+      <PatternLayout pattern="%d{HH:mm:ss.SSS} %-5p %c{1.} - %m%n"/>
+    </Console>
+  </Appenders>
+  <Loggers>
+    <Logger name="SLEE" level="INFO" additivity="false"><AppenderRef ref="SLEE"/><AppenderRef ref="CONSOLE"/></Logger>
+    <Logger name="USSD_CDR" level="INFO" additivity="false"><AppenderRef ref="CDR"/></Logger>
+    <Root level="INFO"><AppenderRef ref="APP"/><AppenderRef ref="CONSOLE"/></Root>
+  </Loggers>
+</Configuration>
