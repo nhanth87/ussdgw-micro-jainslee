@@ -5,6 +5,7 @@ import et.restlink.ussdgw.api.AsResponse;
 import et.restlink.ussdgw.api.AsWireCodec;
 import et.restlink.ussdgw.events.PullHttpEvent;
 import et.restlink.ussdgw.logging.SleeEventTrace;
+import et.restlink.ussdgw.service.AsPullClient;
 import et.restlink.ussdgw.service.SbbServices;
 
 import com.microjainslee.api.ActivityContextInterface;
@@ -18,11 +19,15 @@ import com.microjainslee.ra.httpclient.events.HttpCallbackCompletedEvent;
 
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /** HTTP pull toward AS — completion via RA callback event (no poll). */
 public final class HttpClientSbb implements Sbb, SleeEventHandler {
     private final SbbServices services;
     private final Map<String, Long> startedAt = new ConcurrentHashMap<>();
+    private final Map<String, AtomicInteger> attempts = new ConcurrentHashMap<>();
+    private final Map<String, String> urlByCorr = new ConcurrentHashMap<>();
+    private final Map<String, String> payloadByCorr = new ConcurrentHashMap<>();
 
     @InjectRa(name = "http-callback-ra")
     private volatile RaCommandPort httpClient;
@@ -57,27 +62,74 @@ public final class HttpClientSbb implements Sbb, SleeEventHandler {
 
     private String sendPull(PullHttpEvent pull) {
         AsRequest req = pull.request();
+        String corr = req.correlationId();
+        AsPullClient.Admit admit = svc().asPull().tryAdmit(pull.asUrl());
+        if (!admit.allow()) {
+            svc().saga().onAsPullFailed(corr, admit.reason());
+            return "circuit-open corr=" + corr;
+        }
         String payload = AsWireCodec.encodeRequestString(req);
-        startedAt.put(req.correlationId(), System.currentTimeMillis());
+        startedAt.put(corr, System.currentTimeMillis());
+        attempts.put(corr, new AtomicInteger(0));
+        urlByCorr.put(corr, pull.asUrl());
+        payloadByCorr.put(corr, payload);
         RaCommandPort port = httpClient;
-        if (port == null) return "no-ra";
-        port.sendCommand(new HttpCallbackCommand.CallbackRequest(
-                req.correlationId(), pull.asUrl(), payload));
-        return "submitted corr=" + req.correlationId();
+        if (port == null) {
+            svc().asPull().recordFailure(pull.asUrl());
+            svc().saga().onAsPullFailed(corr, "NO_HTTP_RA");
+            return "no-ra";
+        }
+        port.sendCommand(new HttpCallbackCommand.CallbackRequest(corr, pull.asUrl(), payload));
+        return "submitted corr=" + corr;
     }
 
     private String onCompleted(HttpCallbackCompletedEvent done) {
         String corr = done.getSessionId();
-        Long start = startedAt.remove(corr);
+        Long start = startedAt.get(corr);
         long latency = start == null ? -1 : System.currentTimeMillis() - start;
-        if (done.getErrorMessage() != null && !done.getErrorMessage().isBlank()
-                && done.getStatusCode() <= 0) {
-            return "fail " + done.getErrorMessage();
+        String url = urlByCorr.getOrDefault(corr, "");
+        int status = done.getStatusCode();
+        String err = done.getErrorMessage();
+        AtomicInteger att = attempts.getOrDefault(corr, new AtomicInteger(0));
+        int attempt = att.get();
+
+        boolean transportFail = (err != null && !err.isBlank() && status <= 0);
+        boolean httpFail = status >= 400;
+        if (transportFail || httpFail) {
+            if (svc().asPull().shouldRetry(url, attempt, status, err)) {
+                att.incrementAndGet();
+                String payload = payloadByCorr.get(corr);
+                RaCommandPort port = httpClient;
+                if (port != null && payload != null) {
+                    startedAt.put(corr, System.currentTimeMillis());
+                    port.sendCommand(new HttpCallbackCommand.CallbackRequest(corr, url, payload));
+                    return "retry attempt=" + att.get() + " corr=" + corr;
+                }
+            }
+            clear(corr);
+            svc().asPull().recordFailure(url);
+            svc().saga().onAsPullFailed(corr, transportFail ? "AS_TRANSPORT" : "AS_HTTP_" + status);
+            return "fail " + (err == null ? status : err);
         }
+
         String body = done.getResponseBody();
-        if (body == null || body.isBlank()) return "empty-body";
+        if (body == null || body.isBlank()) {
+            clear(corr);
+            svc().asPull().recordFailure(url);
+            svc().saga().onAsPullFailed(corr, "AS_EMPTY_BODY");
+            return "empty-body";
+        }
+        clear(corr);
+        svc().asPull().recordSuccess(url);
         AsResponse resp = AsWireCodec.decodeResponse(body, corr);
         svc().bridge().onAsResponse(resp, latency);
         return "ok latencyMs=" + latency;
+    }
+
+    private void clear(String corr) {
+        startedAt.remove(corr);
+        attempts.remove(corr);
+        urlByCorr.remove(corr);
+        payloadByCorr.remove(corr);
     }
 }

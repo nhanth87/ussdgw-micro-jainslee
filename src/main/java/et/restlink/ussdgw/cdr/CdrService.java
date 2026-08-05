@@ -6,6 +6,7 @@ import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import jakarta.persistence.EntityManager;
 import jakarta.persistence.TypedQuery;
+import jakarta.transaction.Transactional;
 
 import java.time.Instant;
 import java.util.List;
@@ -78,17 +79,35 @@ public class CdrService {
     }
 
     /** Admin list — newest first. */
+    @Transactional
     public List<CdrEntity> list(int limit) {
+        return list(limit, null);
+    }
+
+    @Transactional
+    public List<CdrEntity> list(int limit, String tenantId) {
         int lim = Math.min(Math.max(limit, 1), MAX_LIMIT);
-        TypedQuery<CdrEntity> q = em.createQuery(
-                "SELECT c FROM CdrEntity c ORDER BY c.recordedAt DESC", CdrEntity.class);
+        TypedQuery<CdrEntity> q;
+        if (tenantId != null && !tenantId.isBlank()) {
+            q = em.createQuery(
+                    "SELECT c FROM CdrEntity c WHERE c.tenantId = :tid ORDER BY c.recordedAt DESC",
+                    CdrEntity.class);
+            q.setParameter("tid", tenantId.trim());
+        } else {
+            q = em.createQuery(
+                    "SELECT c FROM CdrEntity c ORDER BY c.recordedAt DESC", CdrEntity.class);
+        }
         q.setMaxResults(lim);
         return q.getResultList();
     }
 
     /** Backward-compatible view for admin HTML (phase/status fields). */
     public List<CdrRecord> listRecords(int limit) {
-        return list(limit).stream().map(CdrRecord::fromEntity).toList();
+        return listRecords(limit, null);
+    }
+
+    public List<CdrRecord> listRecords(int limit, String tenantId) {
+        return list(limit, tenantId).stream().map(CdrRecord::fromEntity).toList();
     }
 
     static String formatCsv(String corr, String phase, String msisdn, String sc,

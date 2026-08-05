@@ -27,10 +27,22 @@ class AdminHttpHandlerRoutingTest {
         set(cfg, "asyncWaitMessageProp", "Please wait...");
         set(cfg, "asyncHardFailMessageProp", "unavailable");
         set(handler, "config", cfg);
+        AdminAuthService adminAuth = new AdminAuthService();
+        set(adminAuth, "config", cfg);
+        set(adminAuth, "tenantGuard", new et.restlink.ussdgw.tenant.TenantGuard());
+        set(adminAuth, "users", new et.restlink.ussdgw.tenant.AdminUserService());
+        set(handler, "adminAuth", adminAuth);
+        set(handler, "bridgeGate", new et.restlink.ussdgw.service.BridgeGateScheduler());
+        set(handler, "asPull", new et.restlink.ussdgw.service.AsPullClient());
+        set(handler, "saga", new et.restlink.ussdgw.bridge.UssdSagaCoordinator());
         set(handler, "linkStatus", new LinkStatusService());
         set(handler, "cdr", new CdrService() {
             @Override
             public java.util.List<et.restlink.ussdgw.cdr.CdrRecord> listRecords(int limit) {
+                return java.util.List.of();
+            }
+            @Override
+            public java.util.List<et.restlink.ussdgw.cdr.CdrRecord> listRecords(int limit, String tenantId) {
                 return java.util.List.of();
             }
         });
@@ -41,11 +53,20 @@ class AdminHttpHandlerRoutingTest {
             @Override public AdminHttpHandler.HttpReply routingGet() {
                 return AdminHttpHandler.HttpReply.html("<div>routing-ok</div>");
             }
+            @Override public AdminHttpHandler.HttpReply routingGet(AdminAuthService.Principal who) {
+                return routingGet();
+            }
             @Override public AdminHttpHandler.HttpReply tenantsGet() {
                 return AdminHttpHandler.HttpReply.html("<div>tenants-ok</div>");
             }
+            @Override public AdminHttpHandler.HttpReply tenantsGet(AdminAuthService.Principal who) {
+                return tenantsGet();
+            }
             @Override public AdminHttpHandler.HttpReply usersGet() {
                 return AdminHttpHandler.HttpReply.html("<div>users-ok</div>");
+            }
+            @Override public AdminHttpHandler.HttpReply usersGet(AdminAuthService.Principal who) {
+                return usersGet();
             }
         };
         set(handler, "catalog", catalog);
@@ -75,6 +96,11 @@ class AdminHttpHandlerRoutingTest {
             }
         };
         set(handler, "planes", planes);
+        set(handler, "campaigns", new AdminCampaignHandler() {
+            @Override public AdminHttpHandler.HttpReply get(AdminAuthService.Principal who) {
+                return AdminHttpHandler.HttpReply.html("<div>campaigns-ok</div>");
+            }
+        });
     }
 
     @Test
@@ -148,6 +174,15 @@ class AdminHttpHandlerRoutingTest {
                 Map.of("X-USSD-Admin-Key", "ussd-admin"), Map.of(), null);
         assertThat(r).isPresent();
         assertThat(new String(r.get().body())).contains("routing-ok");
+    }
+
+    @Test
+    void campaignsPanel() {
+        Optional<AdminHttpHandler.HttpReply> r = handler.tryHandle(
+                "GET", "/admin/campaigns",
+                Map.of("X-USSD-Admin-Key", "ussd-admin"), Map.of(), null);
+        assertThat(r).isPresent();
+        assertThat(new String(r.get().body())).contains("campaigns-ok");
     }
 
     @Test

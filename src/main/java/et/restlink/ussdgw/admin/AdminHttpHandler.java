@@ -3,6 +3,7 @@ package et.restlink.ussdgw.admin;
 import et.restlink.ussdgw.admin.smpp.SmppAdminBindings;
 import et.restlink.ussdgw.admin.smpp.SmppAdminController;
 import et.restlink.ussdgw.bridge.AdaptiveTimeout;
+import et.restlink.ussdgw.bridge.UssdSagaCoordinator;
 import et.restlink.ussdgw.bridge.VirtualSessionBridge;
 import et.restlink.ussdgw.bridge.VirtualSessionStore;
 import et.restlink.ussdgw.cdr.CdrRecord;
@@ -11,6 +12,8 @@ import et.restlink.ussdgw.config.SmppConfigSupport;
 import et.restlink.ussdgw.config.Ss7ConfigSupport;
 import et.restlink.ussdgw.config.UssdConfigService;
 import et.restlink.ussdgw.ra.smpp.SmppEndpointRegistry;
+import et.restlink.ussdgw.service.AsPullClient;
+import et.restlink.ussdgw.service.BridgeGateScheduler;
 import et.restlink.ussdgw.service.SmppApplyService;
 import et.restlink.ussdgw.service.Ss7ApplyService;
 
@@ -51,11 +54,16 @@ public class AdminHttpHandler {
     @Inject AdaptiveTimeout adaptive;
     @Inject AdminCatalogHandler catalog;
     @Inject AdminPlaneHandler planes;
+    @Inject AdminCampaignHandler campaigns;
     @Inject SmppApplyService smppApply;
     @Inject Ss7ApplyService ss7Apply;
     @Inject SmppConfigSupport smppConfig;
     @Inject Ss7ConfigSupport ss7Config;
     @Inject SmppEndpointRegistry smppRegistry;
+    @Inject AdminAuthService adminAuth;
+    @Inject BridgeGateScheduler bridgeGate;
+    @Inject AsPullClient asPull;
+    @Inject UssdSagaCoordinator saga;
 
     private volatile MonitorHandler monitorHub;
 
@@ -134,10 +142,7 @@ public class AdminHttpHandler {
     }
 
     public boolean authorized(Map<String, String> headers, Map<String, String> query) {
-        String key = headers != null ? headers.getOrDefault("X-USSD-Admin-Key",
-                headers.getOrDefault("x-ussd-admin-key", null)) : null;
-        if (key == null && query != null) key = query.get("key");
-        return config.adminKeyOk(key);
+        return adminAuth.authenticate(headers, query).isPresent();
     }
 
     public Optional<HttpReply> tryHandle(String method, String path,
@@ -152,8 +157,10 @@ public class AdminHttpHandler {
                     "ss7.live", linkStatus.isM3uaRouteReady())));
         }
 
+        Optional<AdminAuthService.Principal> principal = adminAuth.authenticate(headers, query);
+
         if (isMonitorHubPath(p)) {
-            if (!isPublicMonitorStatic(method, p) && !authorized(headers, query)) {
+            if (!isPublicMonitorStatic(method, p) && principal.isEmpty()) {
                 return Optional.of(HttpReply.text(401, "unauthorized"));
             }
             Optional<RaAdminHttpResponse> hit = monitor().handle(method, p, query, body);
@@ -164,17 +171,19 @@ public class AdminHttpHandler {
             return Optional.empty();
         }
         if (p.equals("/") || p.equals("/admin") || p.equals("/admin/")) {
-            if (!authorized(headers, query)) {
+            if (principal.isEmpty()) {
                 return Optional.of(HttpReply.text(401, "unauthorized"));
             }
             return Optional.of(serveFile("admin.html"));
         }
-        if (!authorized(headers, query) && !isPublicAsset(p)) {
+        if (principal.isEmpty() && !isPublicAsset(p)) {
             return Optional.of(HttpReply.text(401, "unauthorized"));
         }
 
+        AdminAuthService.Principal who = principal.orElse(null);
+
         if ("POST".equalsIgnoreCase(method)) {
-            Optional<HttpReply> post = handlePost(p, body);
+            Optional<HttpReply> post = handlePost(p, body, who);
             if (post.isPresent()) return post;
         }
 
@@ -183,7 +192,7 @@ public class AdminHttpHandler {
         return switch (p) {
             case "/admin/status" -> Optional.of(statusHtml());
             case "/admin/status.json" -> Optional.of(statusJson());
-            case "/admin/cdr" -> Optional.of(cdrHtml(query));
+            case "/admin/cdr" -> Optional.of(cdrHtml(query, who));
             case "/admin/bridge" -> Optional.of(planes.bridgeGet());
             case "/admin/ss7" -> Optional.of(hubRedirect("ss7", keyQ));
             case "/admin/smpp" -> Optional.of(hubRedirect("smpp", keyQ));
@@ -192,9 +201,10 @@ public class AdminHttpHandler {
             case "/admin/smpp/config" -> Optional.of(planes.smppGet());
             case "/admin/http/config" -> Optional.of(planes.httpGet());
             case "/admin/grpc" -> Optional.of(planes.grpcGet());
-            case "/admin/routing", "/admin/rules" -> Optional.of(catalog.routingGet());
-            case "/admin/tenants" -> Optional.of(catalog.tenantsGet());
-            case "/admin/users" -> Optional.of(catalog.usersGet());
+            case "/admin/routing", "/admin/rules" -> Optional.of(catalog.routingGet(who));
+            case "/admin/tenants" -> Optional.of(catalog.tenantsGet(who));
+            case "/admin/users" -> Optional.of(catalog.usersGet(who));
+            case "/admin/campaigns" -> Optional.of(campaigns.get(who));
             case "/admin/hub", "/admin/links", "/admin/links/ss7", "/admin/links/smpp",
                  "/admin/links/http", "/telemetry/partial" -> Optional.of(
                     HttpReply.html(linkStatus.htmlPartial(resolveLinkTab(p, tab))));
@@ -267,8 +277,23 @@ public class AdminHttpHandler {
                 r.bodyAsString().getBytes(StandardCharsets.UTF_8), headers);
     }
 
-    private Optional<HttpReply> handlePost(String p, String body) {
+    private Optional<HttpReply> handlePost(String p, String body, AdminAuthService.Principal who) {
         try {
+            if (who != null && who.isTenantScoped()) {
+                // TENANT may mutate own routing + campaigns; no plane/users/tenants CRUD
+                return switch (p) {
+                    case "/admin/routing", "/admin/rules" -> Optional.of(catalog.routingPost(body, who));
+                    case "/admin/campaigns" -> Optional.of(campaigns.post(body, who));
+                    case "/admin/tenants", "/admin/users",
+                         "/admin/ss7", "/admin/ss7/config", "/admin/ss7/apply", "/admin/ss7/start", "/admin/ss7/stop",
+                         "/admin/smpp", "/admin/smpp/config", "/admin/smpp/apply", "/admin/smpp/start", "/admin/smpp/stop",
+                         "/admin/http", "/admin/http/config", "/admin/http/apply", "/admin/http/start", "/admin/http/stop",
+                         "/admin/grpc", "/admin/grpc/apply", "/admin/grpc/start", "/admin/grpc/stop",
+                         "/admin/bridge" ->
+                            Optional.of(HttpReply.text(403, "forbidden for TENANT role"));
+                    default -> Optional.empty();
+                };
+            }
             return switch (p) {
                 case "/admin/ss7", "/admin/ss7/config",
                      "/admin/ss7/apply", "/admin/ss7/start", "/admin/ss7/stop" ->
@@ -282,9 +307,10 @@ public class AdminHttpHandler {
                 case "/admin/grpc", "/admin/grpc/apply", "/admin/grpc/start", "/admin/grpc/stop" ->
                         Optional.of(delegatePlanePost("grpc", p, body));
                 case "/admin/bridge" -> Optional.of(planes.bridgePost(body));
-                case "/admin/routing", "/admin/rules" -> Optional.of(catalog.routingPost(body));
-                case "/admin/tenants" -> Optional.of(catalog.tenantsPost(body));
-                case "/admin/users" -> Optional.of(catalog.usersPost(body));
+                case "/admin/routing", "/admin/rules" -> Optional.of(catalog.routingPost(body, who));
+                case "/admin/tenants" -> Optional.of(catalog.tenantsPost(body, who));
+                case "/admin/users" -> Optional.of(catalog.usersPost(body, who));
+                case "/admin/campaigns" -> Optional.of(campaigns.post(body, who));
                 default -> Optional.empty();
             };
         } catch (RuntimeException ex) {
@@ -320,6 +346,17 @@ public class AdminHttpHandler {
         m.put("bridge.recover", bridge.recoverCount());
         m.put("bridge.zombieDrop", bridge.zombieDrop());
         m.put("bridge.enabled", config.bridgeEnabled());
+        if (bridgeGate != null) {
+            m.put("scheduler.gateExpired", bridgeGate.gateExpired());
+            m.put("scheduler.reclaimCount", bridgeGate.reclaimCount());
+        }
+        if (asPull != null) {
+            m.put("as.circuitOpenRejects", asPull.openRejects());
+        }
+        if (saga != null) {
+            m.put("saga.niFail", saga.niFailCount());
+            m.put("saga.pullFail", saga.pullFailCount());
+        }
         m.put("adaptive.gateCeilingMs", config.asyncGateTimeoutMs());
         m.put("adaptive.dialogTimeoutMs", config.dialogTimeoutMs());
         m.put("adaptive.floorMs", AdaptiveTimeout.FLOOR_MS);
@@ -357,16 +394,28 @@ public class AdminHttpHandler {
         m.put("bridge.count", bridge.bridgeCount());
         m.put("bridge.recover", bridge.recoverCount());
         m.put("bridge.zombieDrop", bridge.zombieDrop());
+        if (bridgeGate != null) {
+            m.put("scheduler.gateExpired", bridgeGate.gateExpired());
+            m.put("scheduler.reclaimCount", bridgeGate.reclaimCount());
+        }
+        if (asPull != null) {
+            m.put("as.circuitOpenRejects", asPull.openRejects());
+        }
+        if (saga != null) {
+            m.put("saga.niFail", saga.niFailCount());
+            m.put("saga.pullFail", saga.pullFailCount());
+        }
         return HttpReply.json(200, m);
     }
 
-    private HttpReply cdrHtml(Map<String, String> query) {
+    private HttpReply cdrHtml(Map<String, String> query, AdminAuthService.Principal who) {
         int limit = CdrService.DEFAULT_LIMIT;
         if (query != null && query.get("limit") != null) {
             try { limit = Integer.parseInt(query.get("limit")); } catch (NumberFormatException ignored) {}
         }
+        String scope = who != null && who.isTenantScoped() ? who.tenantId() : null;
         StringBuilder sb = new StringBuilder("<table><tr><th>When</th><th>Corr</th><th>Phase</th><th>MSISDN</th><th>Status</th></tr>");
-        for (CdrRecord r : cdr.listRecords(limit)) {
+        for (CdrRecord r : cdr.listRecords(limit, scope)) {
             sb.append("<tr><td>").append(r.createdAt).append("</td><td>")
                     .append(esc(r.correlationId)).append("</td><td>")
                     .append(esc(r.phase)).append("</td><td>")

@@ -196,6 +196,7 @@ public class VirtualSessionBridge {
         VirtualSessionState st = s.state();
         if (st == VirtualSessionState.COMPLETED
                 || st == VirtualSessionState.ABORTED
+                || st == VirtualSessionState.FAILED
                 || st == VirtualSessionState.ZOMBIE) {
             store.put(s); // final snapshot
             store.remove(s.correlationId());

@@ -58,6 +58,15 @@ public final class GrpcServerSbb implements Sbb, SleeEventHandler {
         }
         String json = new String(req.payload() == null ? new byte[0] : req.payload(), StandardCharsets.UTF_8);
         AsResponse resp = JSON.readValue(json.isBlank() ? "{}" : json, AsResponse.class);
+        var auth = svc().callbackAuth().authorizeCallback(resp.correlationId(), req.metadata());
+        if (auth != et.restlink.ussdgw.tenant.CallbackAuthService.Result.OK) {
+            RaCommandPort deny = grpcServer;
+            if (deny != null) {
+                byte[] err = JSON.writeValueAsBytes(Map.of("error", "unauthorized"));
+                deny.sendCommand(new SendGrpcResponse(req.callId(), err));
+            }
+            return "callback-401";
+        }
         svc().bridge().onAsResponse(resp, -1);
         RaCommandPort port = grpcServer;
         if (port != null) {

@@ -135,6 +135,35 @@ class BridgeGateBehaviourTest {
         assertThat(cmd.text()).isEqualTo("unavailable");
     }
 
+    @Test
+    void niFailMarksFailedAndRemovesProfile() {
+        VirtualSession s = new VirtualSession("vs", "c-ni", "r1", "2519", 0, "dlg-ni", "*123#");
+        s.setInvokeId(1);
+        s.setDialogAlive(true);
+        s.setState(VirtualSessionState.PUSH_PENDING);
+        store.put(s);
+
+        CapturingPort port = new CapturingPort();
+        UssdSagaCoordinator saga = new UssdSagaCoordinator();
+        set(saga, "store", store);
+        set(saga, "bridge", newBridge(store, true));
+        set(saga, "cdr", new CdrService() {
+            @Override
+            public void write(String correlationId, et.restlink.ussdgw.cdr.CdrPhase phase,
+                              String msisdn, String shortCode, String status, String detail,
+                              int networkId, String tenantId, String originationType) { }
+        });
+        UssdConfigService cfg = new UssdConfigService();
+        set(cfg, "asyncWaitMessageProp", "Please wait...");
+        set(saga, "config", cfg);
+        saga.bindSs7(() -> port);
+
+        saga.onNiFailed("c-ni", "NI_FAIL");
+        assertThat(store.get("c-ni")).isEmpty();
+        assertThat(port.cmds).isNotEmpty();
+        assertThat(saga.niFailCount()).isEqualTo(1);
+    }
+
     private static VirtualSessionBridge newBridge(VirtualSessionStore store, boolean bridgeEnabled) {
         VirtualSessionBridge bridge = new VirtualSessionBridge();
         set(bridge, "store", store);

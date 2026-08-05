@@ -15,17 +15,28 @@ import java.util.Optional;
 public class TenantService {
     private static final SecureRandom RNG = new SecureRandom();
 
+    @Transactional
     public List<TenantEntity> list() {
         return TenantEntity.listAll();
     }
 
+    @Transactional
     public Optional<TenantEntity> byId(String tenantId) {
         if (tenantId == null || tenantId.isBlank()) return Optional.empty();
         return TenantEntity.findByIdOptional(tenantId.trim());
     }
 
+    @Transactional
     public Optional<TenantEntity> byNetworkId(int networkId) {
         return TenantEntity.find("networkId = ?1 and enabled = true", networkId).firstResultOptional();
+    }
+
+    /** Lookup by HTTP callback/admin API key (transactional — safe from SLEE threads). */
+    @Transactional
+    public Optional<TenantEntity> byHttpApiKey(String key) {
+        if (key == null || key.isBlank()) return Optional.empty();
+        String k = key.trim();
+        return TenantEntity.find("httpApiKey = ?1 and enabled = true", k).firstResultOptional();
     }
 
     @Transactional

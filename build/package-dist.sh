@@ -25,33 +25,24 @@ if [[ ! -d "$QA" ]]; then
 fi
 
 mkdir -p "$DIST_ROOT"/{configs/ss7-persist,app/html,data,logs}
-rm -rf "$DIST_ROOT/lib" "$DIST_ROOT/quarkus"
+rm -rf "$DIST_ROOT/lib" "$DIST_ROOT/quarkus" "$DIST_ROOT/app" "$DIST_ROOT/ussdgw-app.jar"
 cp -a "$QA/lib" "$DIST_ROOT/"
 cp -a "$QA/quarkus" "$DIST_ROOT/"
 cp -f "$QA/quarkus-run.jar" "$DIST_ROOT/"
 
+# Keep Quarkus fast-jar layout: quarkus-application.dat references app/ussdgw-app.jar
+# (never rewrite .dat with a shorter path — length-prefixed binary).
+mkdir -p "$DIST_ROOT/app"
 if [[ -f "$QA/app/ussdgw-app.jar" ]]; then
-  cp -f "$QA/app/ussdgw-app.jar" "$DIST_ROOT/ussdgw-app.jar"
+  cp -f "$QA/app/ussdgw-app.jar" "$DIST_ROOT/app/ussdgw-app.jar"
 elif ls "$QA/app"/*.jar >/dev/null 2>&1; then
-  cp -f "$QA/app"/*.jar "$DIST_ROOT/ussdgw-app.jar"
-fi
-
-DAT="$DIST_ROOT/quarkus/quarkus-application.dat"
-if [[ -f "$DAT" ]] && command -v python3 >/dev/null; then
-  python3 - "$DAT" <<'PY'
-import pathlib, sys
-p = pathlib.Path(sys.argv[1])
-data = p.read_bytes()
-old, new = b"app/ussdgw-app.jar", b"ussdgw-app.jar"
-if old in data:
-    p.write_bytes(data.replace(old, new))
-    print("rewrote quarkus-application.dat jar path")
-PY
+  cp -f "$QA/app"/*.jar "$DIST_ROOT/app/ussdgw-app.jar"
 fi
 
 cp -f "$APP_DIR/build/application.properties" "$DIST_ROOT/configs/application.properties"
 cp -f "$APP_DIR/build/run-dist.sh" "$DIST_ROOT/run.sh"
 chmod +x "$DIST_ROOT/run.sh"
+# HTML under app/html (alongside ussdgw-app.jar) — admin UI
 cp -a "$APP_DIR/app/html/." "$DIST_ROOT/app/html/"
 cp -f "$APP_DIR/build/dist-README.md" "$DIST_ROOT/README.md"
 echo "SS7 persist XML lives here." > "$DIST_ROOT/configs/ss7-persist/README.md"

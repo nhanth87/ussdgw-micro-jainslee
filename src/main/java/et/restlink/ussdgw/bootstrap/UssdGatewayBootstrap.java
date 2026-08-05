@@ -2,6 +2,7 @@ package et.restlink.ussdgw.bootstrap;
 
 import et.restlink.ussdgw.admin.AdminHttpHandler;
 import et.restlink.ussdgw.admin.LinkStatusService;
+import et.restlink.ussdgw.bridge.UssdSagaCoordinator;
 import et.restlink.ussdgw.bridge.VirtualSessionBridge;
 import et.restlink.ussdgw.bridge.VirtualSessionStore;
 import et.restlink.ussdgw.service.GrpcApplyService;
@@ -38,6 +39,7 @@ public class UssdGatewayBootstrap {
     @Inject GrpcApplyService grpcApply;
     @Inject AdminHttpHandler adminHttp;
     @Inject VirtualSessionBridge bridge;
+    @Inject UssdSagaCoordinator saga;
     @Inject VirtualSessionStore sessionStore;
 
     @ConfigProperty(name = "ussd.map.auto-apply-on-boot", defaultValue = "true")
@@ -58,6 +60,7 @@ public class UssdGatewayBootstrap {
         linkStatus.clearGrpc();
         linkStatus.clearSmpp();
         bridge.bindSs7(() -> null);
+        saga.bindSs7(() -> null);
 
         sbbRegistration.registerAll();
         httpApply.wire();
@@ -80,11 +83,13 @@ public class UssdGatewayBootstrap {
             String detail = ss7Apply.wireIfConfigured();
             if (ss7Apply.endpoint() != null) {
                 bridge.bindSs7(ss7Apply::endpoint);
+                saga.bindSs7(ss7Apply::endpoint);
             }
             LOG.info("SS7 boot: {}", detail);
         } catch (RuntimeException ex) {
             LOG.warn("SS7 boot wire failed (lab may run without MAP): {}", ex.getMessage());
             bridge.bindSs7(() -> null);
+            saga.bindSs7(() -> null);
         }
     }
 
@@ -106,6 +111,7 @@ public class UssdGatewayBootstrap {
         appTelemetry.close();
         teardownPlanes();
         bridge.bindSs7(() -> null);
+        saga.bindSs7(() -> null);
     }
 
     private void teardownPlanes() {

@@ -12,6 +12,7 @@ import et.restlink.ussdgw.routing.ShortCodeRule;
 import et.restlink.ussdgw.routing.ShortCodeRoutingService;
 import et.restlink.ussdgw.service.MapDialogHelper;
 import et.restlink.ussdgw.service.SbbServices;
+import et.restlink.ussdgw.tenant.TenantGuard;
 
 import com.microjainslee.api.ActivityContextInterface;
 import com.microjainslee.api.RaCommandPort;
@@ -104,9 +105,20 @@ public final class MapUssdParentSbb implements Sbb, SleeEventHandler {
             return "no-route sc=" + shortCode;
         }
         ShortCodeRule r = rule.get();
+        TenantGuard.Decision admit = svc().tenantGuard().admit(r.tenantId());
+        if (!admit.allowed()) {
+            String msg = admit.reason() == TenantGuard.Reason.RATE_LIMITED
+                    ? "Service busy. Please try again."
+                    : "Service temporarily unavailable.";
+            MapDialogHelper.replyAndEnd(ss7, dialogId, invokeId, msg);
+            return "tenant-reject sc=" + shortCode + " reason=" + admit.reason();
+        }
         String corr = UUID.randomUUID().toString();
         String reqId = UUID.randomUUID().toString();
         int networkId = r.networkId();
+        if (admit.tenant() != null && networkId == 0) {
+            networkId = admit.tenant().networkId;
+        }
         VirtualSession session = new VirtualSession(
                 UUID.randomUUID().toString(), corr, reqId, msisdn, networkId, dialogId, shortCode);
         session.setInvokeId(invokeId);
@@ -144,6 +156,14 @@ public final class MapUssdParentSbb implements Sbb, SleeEventHandler {
             return "no-rule";
         }
         ShortCodeRule r = rule.get();
+        TenantGuard.Decision admit = svc().tenantGuard().admit(s.tenantId() != null ? s.tenantId() : r.tenantId());
+        if (!admit.allowed()) {
+            MapDialogHelper.replyAndEnd(ss7, dialogId, resp.getInvokeId(),
+                    admit.reason() == TenantGuard.Reason.RATE_LIMITED
+                            ? "Service busy. Please try again."
+                            : "Service temporarily unavailable.");
+            return "tenant-reject continue reason=" + admit.reason();
+        }
         s.nextGeneration();
         s.setAdaptiveBridgeArm(r.ruleType() == RuleType.HTTP
                 ? svc().config().httpClientBridgeEnabled()
@@ -179,6 +199,10 @@ public final class MapUssdParentSbb implements Sbb, SleeEventHandler {
             return "sri-ok";
         }
         svc().cdr().write(ni.correlationId(), CdrPhase.FAILED, ni.msisdn(), null, "SRI_FAIL", null);
+        svc().saga().onNiFailed(ni.correlationId(), "SRI_FAIL");
+        try {
+            svc().campaigns().onNiDone(ni.correlationId(), false, "SRI_FAIL");
+        } catch (Throwable ignored) { }
         return "sri-fail";
     }
 }

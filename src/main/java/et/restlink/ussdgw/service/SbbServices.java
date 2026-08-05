@@ -3,11 +3,15 @@ package et.restlink.ussdgw.service;
 import et.restlink.ussdgw.admin.AdminHttpHandler;
 import et.restlink.ussdgw.admin.LinkStatusService;
 import et.restlink.ussdgw.bridge.AdaptiveTimeout;
+import et.restlink.ussdgw.bridge.UssdSagaCoordinator;
 import et.restlink.ussdgw.bridge.VirtualSessionBridge;
 import et.restlink.ussdgw.bridge.VirtualSessionStore;
 import et.restlink.ussdgw.cdr.CdrService;
 import et.restlink.ussdgw.config.UssdConfigService;
 import et.restlink.ussdgw.routing.ShortCodeRoutingService;
+import et.restlink.ussdgw.tenant.CallbackAuthService;
+import et.restlink.ussdgw.tenant.TenantGuard;
+import et.restlink.ussdgw.campaign.CampaignService;
 
 import com.microjainslee.core.MicroSleeContainer;
 
@@ -30,6 +34,11 @@ public class SbbServices {
     @Inject AdminHttpHandler adminHttp;
     @Inject PendingSriRegistry pendingSri;
     @Inject et.restlink.ussdgw.ra.smpp.SmppEndpointRegistry smppRegistry;
+    @Inject TenantGuard tenantGuard;
+    @Inject AsPullClient asPull;
+    @Inject UssdSagaCoordinator saga;
+    @Inject CallbackAuthService callbackAuth;
+    @Inject CampaignService campaigns;
 
     @PostConstruct
     void install() { INSTANCE = this; }
@@ -51,4 +60,9 @@ public class SbbServices {
     public AdminHttpHandler adminHttp() { return adminHttp; }
     public PendingSriRegistry pendingSri() { return pendingSri; }
     public et.restlink.ussdgw.ra.smpp.SmppEndpointRegistry smppRegistry() { return smppRegistry; }
+    public TenantGuard tenantGuard() { return tenantGuard; }
+    public AsPullClient asPull() { return asPull; }
+    public UssdSagaCoordinator saga() { return saga; }
+    public CallbackAuthService callbackAuth() { return callbackAuth; }
+    public CampaignService campaigns() { return campaigns; }
 }

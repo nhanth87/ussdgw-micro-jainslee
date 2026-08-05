@@ -17,10 +17,12 @@ import java.util.Optional;
 public class AdminUserService {
     private static final SecureRandom RNG = new SecureRandom();
 
+    @Transactional
     public List<AdminUserEntity> list() {
         return AdminUserEntity.listAll();
     }
 
+    @Transactional
     public Optional<AdminUserEntity> byUsername(String username) {
         if (username == null || username.isBlank()) return Optional.empty();
         return AdminUserEntity.findByIdOptional(username.trim());

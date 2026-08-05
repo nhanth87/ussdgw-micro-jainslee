@@ -1,6 +1,7 @@
 package et.restlink.ussdgw.service;
 
 import et.restlink.ussdgw.admin.LinkStatusService;
+import et.restlink.ussdgw.bridge.UssdSagaCoordinator;
 import et.restlink.ussdgw.bridge.VirtualSessionBridge;
 import et.restlink.ussdgw.config.RuntimeConfigStore;
 import et.restlink.ussdgw.config.Ss7PersistDirs;
@@ -31,6 +32,7 @@ public class Ss7ApplyService {
     @Inject MicroSleeContainer container;
     @Inject LinkStatusService linkStatus;
     @Inject VirtualSessionBridge bridge;
+    @Inject UssdSagaCoordinator saga;
     @Inject RuntimeConfigStore store;
 
     @ConfigProperty(name = "ussd.map.enabled", defaultValue = "false")
@@ -74,6 +76,7 @@ public class Ss7ApplyService {
     public String tearDown() {
         linkStatus.clearSs7();
         bridge.bindSs7(() -> null);
+        saga.bindSs7(() -> null);
         if (ss7Endpoint == null) return "ss7-drained=noop";
         try {
             ss7Endpoint.deactivate();
@@ -160,6 +163,7 @@ public class Ss7ApplyService {
         }
         linkStatus.bindSs7(ra);
         bridge.bindSs7(this::endpoint);
+        saga.bindSs7(this::endpoint);
         Ss7AdminBindings.bind(ss7Endpoint);
     }
 

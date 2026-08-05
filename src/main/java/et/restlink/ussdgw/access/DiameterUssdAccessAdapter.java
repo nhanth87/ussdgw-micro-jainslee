@@ -5,6 +5,7 @@ import et.restlink.ussdgw.bridge.VirtualSessionBridge;
 import et.restlink.ussdgw.bridge.VirtualSessionStore;
 import et.restlink.ussdgw.cdr.CdrService;
 import et.restlink.ussdgw.config.UssdConfigService;
+import et.restlink.ussdgw.tenant.TenantGuard;
 
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
@@ -23,6 +24,7 @@ public class DiameterUssdAccessAdapter implements UssdAccessPort {
     @Inject VirtualSessionBridge bridge;
     @Inject CdrService cdr;
     @Inject UssdConfigService config;
+    @Inject TenantGuard tenantGuard;
 
     private final AtomicLong moCount = new AtomicLong();
     private final AtomicLong niCount = new AtomicLong();
@@ -45,7 +47,7 @@ public class DiameterUssdAccessAdapter implements UssdAccessPort {
             LOG.warn("Diameter MO rejected — ussd.diameter.enabled=false");
             return null;
         }
-        return StubAccessSupport.acceptMoPull(access, store, bridge, moCount);
+        return StubAccessSupport.acceptMoPull(access, store, bridge, moCount, tenantGuard);
     }
 
     public long moCount() { return moCount.get(); }

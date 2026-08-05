@@ -92,6 +92,7 @@ Config overlay: [`RuntimeConfigStore`](src/main/java/et/restlink/ussdgw/config/R
 | `GET/POST /admin/grpc` | Pull client + callback server + bridge flag | `ussd_config` + gRPC RAs |
 | `GET/POST /admin/bridge` | Adaptive gate / dialog / wait messages / per-leg flags | `ussd_config` |
 | `GET/POST /admin/routing` | Short-code → HTTP/gRPC AS URL; tenantId + networkId | `ussd_short_code` |
+| `GET/POST /admin/campaigns` | NI push campaigns (MSISDN list + text) | `ussd_campaign` / target |
 | `GET/POST /admin/tenants` | tenantId ↔ networkId, HTTP key, SMPP systemId/password | `ussd_tenant` |
 | `GET/POST /admin/users` | ADMIN\|OPS\|TENANT (+ update) | `ussd_admin_user` |
 | `/telemetry/` · `/api/ra/*` | **jainslee-monitor** hub (SS7/SMPP/HTTP packs; Save&Apply) | plane hooks |
@@ -107,10 +108,37 @@ Wired into `SriSbb` / `MapDialogHelper.niPush` / session `localGt`.
 - **tenantId** = logical customer id (not RestLink brand).
 - **networkId** = MAP/CDR integer (`setNetworkId`). Rule inherits from tenant when `networkId=0`.
 - **TENANT users:** login **username must equal tenantId** (enforced in `AdminUserService`).
+- **Hot path:** [`TenantGuard`](src/main/java/et/restlink/ussdgw/tenant/TenantGuard.java) enforces
+  `enabled` + `maxTps` (1s token window) on MAP MO and stub MO before `startAwaitingAs`.
+  Blank `tenantId` on a rule = lab admit (no TPS). Bound tenant missing/disabled → MAP END reject.
+- **AS callback:** `X-USSD-Api-Key` / `X-API-Key` must match tenant `httpApiKey` (or global
+  `ussd.admin.api-key`) — [`CallbackAuthService`](src/main/java/et/restlink/ussdgw/tenant/CallbackAuthService.java).
+- **Admin TENANT scope:** tenant HTTP key or Basic TENANT user → CDR + routing filtered to that
+  tenantId; tenants/users/plane CRUD forbidden ([`AdminAuthService`](src/main/java/et/restlink/ussdgw/admin/AdminAuthService.java)).
+
+### Saga / resilience
+- In-flight states include `FAILED` (terminal, profile removed).
+- [`UssdSagaCoordinator`](src/main/java/et/restlink/ussdgw/bridge/UssdSagaCoordinator.java):
+  NI fail / AS pull fail → compensate (MAP abort or wait-END) + CDR `FAILED` + `store.remove`.
+- [`BridgeGateScheduler`](src/main/java/et/restlink/ussdgw/service/BridgeGateScheduler.java):
+  gate tick 0.2s + reclaim 30s; counters `gateExpired` / `reclaimCount` on `/admin/status`.
+- [`AsPullClient`](src/main/java/et/restlink/ussdgw/service/AsPullClient.java): per-AS-URL circuit
+  (open after N fails) + 1 retry on transport/5xx only; circuit open → early saga compensate
+  (no hang until gate). Props: `ussd.as.pull.{fail-threshold,open-ms,max-retries}`.
+
+### NI push campaigns
+Tables `ussd_campaign` + `ussd_campaign_target` (V1). Admin: `/admin/campaigns` HTMX.
+[`CampaignService`](src/main/java/et/restlink/ussdgw/campaign/CampaignService.java) create/start/pause/cancel;
+[`CampaignScheduler`](src/main/java/et/restlink/ussdgw/campaign/CampaignScheduler.java) every **1s** claims
+PENDING→SENDING (≤`ussd.campaign.claim-limit`, per-campaign `maxTps`) and routes
+`NiPushRequestEvent` → SriSbb → MapNiPushSbb. Fail-closed if SS7 not live.
+Busy-UE: skip MSISDN already `SENDING`. `correlationId` = target UUID; `onNiDone` from
+MapNiPushSbb / SRI fail. Props: `ussd.campaign.{enabled,claim-limit,max-targets}`.
+TENANT role may manage own tenant campaigns.
 
 ### Flyway
 - Single `V1__ussdgw_baseline.sql` — short_code (+tenant/network), tenant (+smpp_password),
-  admin_user, `ussd_cdr` (UUID PK / OTA-shaped), config.
+  admin_user, `ussd_cdr`, **campaign + campaign_target**, config.
 - Wipe lab H2 / reset `flyway_schema_history` if an older V2–V4 history exists.
 
 ### CDR (OTA pattern)
@@ -123,4 +151,6 @@ Admin: `GET /admin/cdr` lists newest (`listRecords`, default 50 / max 100).
 ### In-flight saga (Profile)
 Table `ussdTx` via micro-jainslee `ProfileFacility` — PK = correlationId.
 Indexes: `requestId`, `dialogId`, `state`, `msisdn`. CAS via `compareAndSetField` on gate expiry.
-Terminal states remove the profile; `ussd.tx.profile-ttl-ms` + 30s reaper reclaim orphans.
+Terminal states (`COMPLETED` / `ABORTED` / `FAILED` / `ZOMBIE`) remove the profile;
+`ussd.tx.profile-ttl-ms` + 30s reaper reclaim orphans.
+Generation bump **only** on MS input (`MapUssdParentSbb.onUserContinue`) — never on AS CONTINUE.

@@ -5,6 +5,7 @@ import et.restlink.ussdgw.bridge.VirtualSessionBridge;
 import et.restlink.ussdgw.bridge.VirtualSessionStore;
 import et.restlink.ussdgw.cdr.CdrPhase;
 import et.restlink.ussdgw.cdr.CdrService;
+import et.restlink.ussdgw.tenant.TenantGuard;
 
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicLong;
@@ -20,15 +21,31 @@ final class StubAccessSupport {
             VirtualSessionStore store,
             VirtualSessionBridge bridge,
             AtomicLong moCount) {
+        return acceptMoPull(access, store, bridge, moCount, null);
+    }
+
+    static VirtualSession acceptMoPull(
+            UssdAccessSession access,
+            VirtualSessionStore store,
+            VirtualSessionBridge bridge,
+            AtomicLong moCount,
+            TenantGuard tenantGuard) {
         if (access == null || store == null || bridge == null) return null;
+        if (tenantGuard != null) {
+            TenantGuard.Decision d = tenantGuard.admit(access.tenantId());
+            if (!d.allowed()) {
+                return null;
+            }
+        }
         String corr = access.correlationId().isBlank()
                 ? UUID.randomUUID().toString() : access.correlationId();
         String dialog = access.dialogHandle().isBlank()
                 ? access.originationType().name().toLowerCase() + "-" + corr
                 : access.dialogHandle();
+        int networkId = access.networkId();
         VirtualSession session = new VirtualSession(
                 UUID.randomUUID().toString(), corr, UUID.randomUUID().toString(),
-                access.msisdn(), access.networkId(), dialog, access.shortCode());
+                access.msisdn(), networkId, dialog, access.shortCode());
         session.setTenantId(access.tenantId());
         session.setOriginationType(access.originationType());
         session.setDialogAlive(false); // no live MAP dialog on stub bearers

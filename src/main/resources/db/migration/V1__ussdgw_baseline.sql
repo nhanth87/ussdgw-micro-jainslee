@@ -71,6 +71,42 @@ CREATE INDEX IF NOT EXISTS idx_ussd_cdr_tenant ON ussd_cdr (tenant_id);
 CREATE INDEX IF NOT EXISTS idx_ussd_cdr_tenant_recorded ON ussd_cdr (tenant_id, recorded_at DESC);
 CREATE INDEX IF NOT EXISTS idx_ussd_cdr_msisdn_recorded ON ussd_cdr (msisdn, recorded_at DESC);
 
+-- ── NI push campaigns (lightweight OTA-shaped) ───────────────────────────────
+
+CREATE TABLE IF NOT EXISTS ussd_campaign (
+  id           UUID PRIMARY KEY,
+  tenant_id    VARCHAR(128),
+  name         VARCHAR(256) NOT NULL,
+  ussd_text    VARCHAR(182) NOT NULL,
+  alphabet     VARCHAR(16)  NOT NULL DEFAULT 'AUTO',
+  network_id   INT NOT NULL DEFAULT 0,
+  status       VARCHAR(16)  NOT NULL DEFAULT 'DRAFT',
+  max_tps      INT NOT NULL DEFAULT 5,
+  sent_count   INT NOT NULL DEFAULT 0,
+  fail_count   INT NOT NULL DEFAULT 0,
+  created_at   TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at   TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_ussd_camp_status ON ussd_campaign(status);
+CREATE INDEX IF NOT EXISTS idx_ussd_camp_tenant ON ussd_campaign(tenant_id);
+
+CREATE TABLE IF NOT EXISTS ussd_campaign_target (
+  id              UUID PRIMARY KEY,
+  campaign_id     UUID NOT NULL,
+  msisdn          VARCHAR(32) NOT NULL,
+  status          VARCHAR(16) NOT NULL DEFAULT 'PENDING',
+  correlation_id  VARCHAR(128),
+  error           VARCHAR(512),
+  updated_at      TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  CONSTRAINT uk_ussd_camp_msisdn UNIQUE (campaign_id, msisdn)
+);
+
+CREATE INDEX IF NOT EXISTS idx_ussd_camp_tgt_camp ON ussd_campaign_target(campaign_id);
+CREATE INDEX IF NOT EXISTS idx_ussd_camp_tgt_status ON ussd_campaign_target(campaign_id, status);
+CREATE INDEX IF NOT EXISTS idx_ussd_camp_tgt_msisdn_sending ON ussd_campaign_target(msisdn, status);
+CREATE INDEX IF NOT EXISTS idx_ussd_camp_tgt_corr ON ussd_campaign_target(correlation_id);
+
 -- ── KV config ────────────────────────────────────────────────────────────────
 
 CREATE TABLE IF NOT EXISTS ussd_config (

@@ -37,8 +37,17 @@ public final class MapNiPushSbb implements Sbb, SleeEventHandler {
         String detail;
         try {
             detail = push(ni);
+            try {
+                svc().campaigns().onNiDone(ni.correlationId(), true, null);
+            } catch (Throwable ignored) { }
         } catch (Throwable t) {
             detail = "error=" + t.getClass().getSimpleName();
+            try {
+                svc().saga().onNiFailed(ni.correlationId(), "NI_PUSH_ERROR");
+            } catch (Throwable ignored) { }
+            try {
+                svc().campaigns().onNiDone(ni.correlationId(), false, detail);
+            } catch (Throwable ignored) { }
         }
         SleeEventTrace.outSbb("MapNiPushSbb", event, detail);
     }

@@ -192,6 +192,7 @@ public class VirtualSessionStore {
             String st = p.getState();
             boolean terminal = VirtualSessionState.COMPLETED.name().equals(st)
                     || VirtualSessionState.ABORTED.name().equals(st)
+                    || VirtualSessionState.FAILED.name().equals(st)
                     || VirtualSessionState.ZOMBIE.name().equals(st);
             boolean expired = exp != null && exp > 0 && exp <= nowMs;
             if (terminal || expired) {

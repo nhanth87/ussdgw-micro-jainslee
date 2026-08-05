@@ -26,24 +26,54 @@ public class AdminCatalogHandler {
     @Inject AdminUserService users;
 
     public AdminHttpHandler.HttpReply routingGet() {
-        return AdminHttpHandler.HttpReply.html(routingHtml(null));
+        return routingGet(null);
+    }
+
+    public AdminHttpHandler.HttpReply routingGet(AdminAuthService.Principal who) {
+        return AdminHttpHandler.HttpReply.html(routingHtml(null, who));
     }
 
     public AdminHttpHandler.HttpReply tenantsGet() {
+        return tenantsGet(null);
+    }
+
+    public AdminHttpHandler.HttpReply tenantsGet(AdminAuthService.Principal who) {
+        if (who != null && who.isTenantScoped()) {
+            return AdminHttpHandler.HttpReply.text(403, "forbidden for TENANT role");
+        }
         return AdminHttpHandler.HttpReply.html(tenantsHtml(null));
     }
 
     public AdminHttpHandler.HttpReply usersGet() {
+        return usersGet(null);
+    }
+
+    public AdminHttpHandler.HttpReply usersGet(AdminAuthService.Principal who) {
+        if (who != null && who.isTenantScoped()) {
+            return AdminHttpHandler.HttpReply.text(403, "forbidden for TENANT role");
+        }
         return AdminHttpHandler.HttpReply.html(usersHtml(null));
     }
 
     public AdminHttpHandler.HttpReply routingPost(String body) {
+        return routingPost(body, null);
+    }
+
+    public AdminHttpHandler.HttpReply routingPost(String body, AdminAuthService.Principal who) {
         Map<String, String> f = parseForm(body);
         String action = f.getOrDefault("action", "save");
         try {
             if ("delete".equalsIgnoreCase(action)) {
-                routing.delete(f.getOrDefault("shortCode", ""));
-                return AdminHttpHandler.HttpReply.html(routingHtml("deleted"));
+                String sc = f.getOrDefault("shortCode", "");
+                if (who != null && who.isTenantScoped()) {
+                    boolean owned = routing.listForTenant(who.tenantId()).stream()
+                            .anyMatch(r -> sc.equals(r.shortCode()));
+                    if (!owned) {
+                        return AdminHttpHandler.HttpReply.html(routingHtml("forbidden", who));
+                    }
+                }
+                routing.delete(sc);
+                return AdminHttpHandler.HttpReply.html(routingHtml("deleted", who));
             }
             String code = f.getOrDefault("shortCode", "").trim();
             String type = f.getOrDefault("ruleType", "HTTP").trim();
@@ -52,7 +82,10 @@ public class AdminCatalogHandler {
             int networkId = parseInt(f.get("networkId"), 0);
             boolean enabled = !"false".equalsIgnoreCase(f.getOrDefault("enabled", "true"));
             if (code.isEmpty() || url.isEmpty()) {
-                return AdminHttpHandler.HttpReply.html(routingHtml("shortCode and asUrl required"));
+                return AdminHttpHandler.HttpReply.html(routingHtml("shortCode and asUrl required", who));
+            }
+            if (who != null && who.isTenantScoped()) {
+                tenantId = who.tenantId();
             }
             // Inherit networkId from tenant when set and network left at 0
             if (!tenantId.isEmpty() && networkId == 0) {
@@ -61,13 +94,20 @@ public class AdminCatalogHandler {
             routing.putAndPersist(new ShortCodeRule(
                     code, RuleType.valueOf(type.toUpperCase()), url, enabled,
                     tenantId.isEmpty() ? null : tenantId, networkId));
-            return AdminHttpHandler.HttpReply.html(routingHtml("saved " + esc(code)));
+            return AdminHttpHandler.HttpReply.html(routingHtml("saved " + esc(code), who));
         } catch (RuntimeException ex) {
-            return AdminHttpHandler.HttpReply.html(routingHtml("error: " + esc(ex.getMessage())));
+            return AdminHttpHandler.HttpReply.html(routingHtml("error: " + esc(ex.getMessage()), who));
         }
     }
 
     public AdminHttpHandler.HttpReply tenantsPost(String body) {
+        return tenantsPost(body, null);
+    }
+
+    public AdminHttpHandler.HttpReply tenantsPost(String body, AdminAuthService.Principal who) {
+        if (who != null && who.isTenantScoped()) {
+            return AdminHttpHandler.HttpReply.text(403, "forbidden for TENANT role");
+        }
         Map<String, String> f = parseForm(body);
         String action = f.getOrDefault("action", "save");
         try {
@@ -98,6 +138,13 @@ public class AdminCatalogHandler {
     }
 
     public AdminHttpHandler.HttpReply usersPost(String body) {
+        return usersPost(body, null);
+    }
+
+    public AdminHttpHandler.HttpReply usersPost(String body, AdminAuthService.Principal who) {
+        if (who != null && who.isTenantScoped()) {
+            return AdminHttpHandler.HttpReply.text(403, "forbidden for TENANT role");
+        }
         Map<String, String> f = parseForm(body);
         String action = f.getOrDefault("action", "create");
         try {
@@ -128,7 +175,7 @@ public class AdminCatalogHandler {
         }
     }
 
-    private String routingHtml(String notice) {
+    private String routingHtml(String notice, AdminAuthService.Principal who) {
         StringBuilder sb = new StringBuilder();
         sb.append("<div class=\"catalog\">");
         if (notice != null) sb.append("<p class=\"notice\">").append(esc(notice)).append("</p>");
@@ -140,14 +187,22 @@ public class AdminCatalogHandler {
         sb.append("<label>Code <input name=\"shortCode\" placeholder=\"*123#\" required/></label>");
         sb.append("<label>Type <select name=\"ruleType\"><option>HTTP</option><option>GRPC</option></select></label>");
         sb.append("<label>AS URL <input name=\"asUrl\" size=\"40\" required/></label>");
-        sb.append("<label>tenantId <input name=\"tenantId\" list=\"tenant-ids\"/></label>");
+        if (who != null && who.isTenantScoped()) {
+            sb.append("<input type=\"hidden\" name=\"tenantId\" value=\"").append(esc(who.tenantId())).append("\"/>");
+        } else {
+            sb.append("<label>tenantId <input name=\"tenantId\" list=\"tenant-ids\"/></label>");
+        }
         sb.append("<label>networkId <input name=\"networkId\" type=\"number\" value=\"0\" min=\"0\"/></label>");
         sb.append("<label>enabled <select name=\"enabled\"><option>true</option><option>false</option></select></label>");
         sb.append("<input type=\"hidden\" name=\"action\" value=\"save\"/>");
         sb.append("<button type=\"submit\">Save rule</button></form>");
-        tenantDatalist(sb);
+        if (who == null || !who.isTenantScoped()) {
+            tenantDatalist(sb);
+        }
         sb.append("<table><tr><th>Code</th><th>Type</th><th>URL</th><th>tenant</th><th>net</th><th>on</th><th></th></tr>");
-        for (ShortCodeRule r : routing.list()) {
+        var rules = who != null && who.isTenantScoped()
+                ? routing.listForTenant(who.tenantId()) : routing.list();
+        for (ShortCodeRule r : rules) {
             sb.append("<tr><td>").append(esc(r.shortCode())).append("</td><td>")
                     .append(r.ruleType()).append("</td><td>").append(esc(r.asUrl())).append("</td><td>")
                     .append(esc(r.tenantId())).append("</td><td>").append(r.networkId()).append("</td><td>")

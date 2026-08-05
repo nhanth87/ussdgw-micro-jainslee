@@ -105,6 +105,14 @@ public class ShortCodeRoutingService {
 
     public Collection<ShortCodeRule> list() { return rules.values(); }
 
+    public Collection<ShortCodeRule> listForTenant(String tenantId) {
+        if (tenantId == null || tenantId.isBlank()) return list();
+        String tid = tenantId.trim();
+        return rules.values().stream()
+                .filter(r -> tid.equals(r.tenantId()))
+                .toList();
+    }
+
     public static String extractShortCode(String ussd) {
         if (ussd == null) return "";
         String s = ussd.trim();

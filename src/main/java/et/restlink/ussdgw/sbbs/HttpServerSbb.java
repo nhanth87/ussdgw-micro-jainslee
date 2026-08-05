@@ -60,6 +60,11 @@ public final class HttpServerSbb implements Sbb, SleeEventHandler {
                 return "as-callback-disabled";
             }
             AsResponse resp = JSON.readValue(req.getBody() == null ? "{}" : req.getBody(), AsResponse.class);
+            var auth = svc().callbackAuth().authorizeCallback(resp.correlationId(), req.getHeaders());
+            if (auth != et.restlink.ussdgw.tenant.CallbackAuthService.Result.OK) {
+                replyJson(req.getSessionId(), 401, Map.of("error", "unauthorized"));
+                return "as-callback-401";
+            }
             svc().bridge().onAsResponse(resp, -1);
             replyJson(req.getSessionId(), 202, Map.of("accepted", true));
             return "as-callback";
