@@ -1,11 +1,13 @@
 package et.restlink.ussdgw.service;
 
+import et.restlink.ussdgw.events.InboundSriSmEvent;
 import et.restlink.ussdgw.events.NiPushReadyEvent;
 import et.restlink.ussdgw.events.NiPushRequestEvent;
 import et.restlink.ussdgw.events.PullGrpcEvent;
 import et.restlink.ussdgw.events.PullHttpEvent;
 import et.restlink.ussdgw.sbbs.GrpcClientSbb;
 import et.restlink.ussdgw.sbbs.GrpcServerSbb;
+import et.restlink.ussdgw.sbbs.HlrResponderSbb;
 import et.restlink.ussdgw.sbbs.HttpClientSbb;
 import et.restlink.ussdgw.sbbs.HttpServerSbb;
 import et.restlink.ussdgw.sbbs.MapNiPushSbb;
@@ -35,7 +37,7 @@ public class SbbRegistrationSupport {
         for (String n : new String[]{
                 "MapUssdParentSbb", "HttpClientSbb", "HttpServerSbb",
                 "GrpcClientSbb", "GrpcServerSbb", "SriSbb", "MapNiPushSbb",
-                "SmppAsIngressSbb"}) {
+                "SmppAsIngressSbb", "HlrResponderSbb"}) {
             container.getSbbTypeRegistry().unregisterByName(n);
         }
     }
@@ -48,6 +50,7 @@ public class SbbRegistrationSupport {
         container.registerSbbType(GrpcServerSbb.class, () -> new GrpcServerSbb(sbbServices));
         container.registerSbbType(SriSbb.class, () -> new SriSbb(sbbServices));
         container.registerSbbType(MapNiPushSbb.class, () -> new MapNiPushSbb(sbbServices));
+        container.registerSbbType(HlrResponderSbb.class, () -> new HlrResponderSbb(sbbServices));
         container.registerSbbType(SmppAsIngressSbb.class,
                 () -> new SmppAsIngressSbb(sbbServices, smppRegistry));
     }
@@ -63,6 +66,7 @@ public class SbbRegistrationSupport {
         container.mapEventToSbb(GrpcRequestEvent.class, "GrpcServerSbb");
         container.mapEventToSbb(NiPushRequestEvent.class, "SriSbb");
         container.mapEventToSbb(NiPushReadyEvent.class, "MapNiPushSbb");
+        container.mapEventToSbb(InboundSriSmEvent.class, "HlrResponderSbb");
         container.mapEventToSbb(SmppSubmitSmEvent.class, "SmppAsIngressSbb");
     }
 }

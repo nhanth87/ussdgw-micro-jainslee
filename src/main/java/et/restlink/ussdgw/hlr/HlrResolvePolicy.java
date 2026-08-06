@@ -1,0 +1,65 @@
+package et.restlink.ussdgw.hlr;
+
+import et.restlink.ussdgw.config.RuntimeConfigStore;
+import et.restlink.ussdgw.config.UssdConfigService;
+
+import jakarta.enterprise.context.ApplicationScoped;
+import jakarta.inject.Inject;
+
+/**
+ * Resolves HLR face mode + fake/upper addresses from config.
+ * Default mode {@link HlrResolveMode#PROXY_MAP} — FAKE only when ops explicitly set.
+ */
+@ApplicationScoped
+public class HlrResolvePolicy {
+    @Inject UssdConfigService config;
+
+    public HlrResolveMode mode() {
+        return config.hlrMode();
+    }
+
+    public HlrResolveMode modeFor(int networkId, String msisdn) {
+        // Per-network override: ussd.hlr.network.<id>.mode
+        String key = RuntimeConfigStore.Keys.HLR_MODE_NETWORK_PREFIX + networkId;
+        return config.store().get(key).map(HlrResolveMode::parse).orElseGet(this::mode);
+    }
+
+    public String fakeImsi() {
+        return config.hlrFakeImsi();
+    }
+
+    public String fakeMscGt() {
+        return config.hlrFakeMscGt();
+    }
+
+    public String upperHlrGt() {
+        return config.hlrUpperGt();
+    }
+
+    /** True when upper GT is blank or equals our own USSD/HLR GTs (loop risk). */
+    public boolean upperWouldLoop(String upperGt) {
+        if (upperGt == null || upperGt.isBlank()) {
+            return true;
+        }
+        String u = digits(upperGt);
+        String local = digits(config.ussdGt());
+        String fakeMsc = digits(fakeMscGt());
+        return u.equals(local) || (!fakeMsc.isEmpty() && u.equals(fakeMsc));
+    }
+
+    public boolean canFake() {
+        String imsi = fakeImsi();
+        String msc = fakeMscGt();
+        return imsi != null && !imsi.isBlank() && msc != null && !msc.isBlank();
+    }
+
+    private static String digits(String s) {
+        if (s == null) return "";
+        StringBuilder b = new StringBuilder(s.length());
+        for (int i = 0; i < s.length(); i++) {
+            char c = s.charAt(i);
+            if (c >= '0' && c <= '9') b.append(c);
+        }
+        return b.toString();
+    }
+}

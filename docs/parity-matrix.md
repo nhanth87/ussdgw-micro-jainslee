@@ -12,6 +12,7 @@
 | gRPC pull | GrpcClientSbb (50ms poll) | GrpcClientSbb callback-only |
 | gRPC server | GrpcServerSbb | GrpcServerSbb |
 | SRI for NI | SriSbb | SriSbb + MapSendRoutingInfoForSm |
+| HLR face (inbound SRI-SM) | — | HlrResponderSbb + FAKE/PROXY_MAP/PROXY_DIAMETER/FAKE_THEN_RESOLVE |
 | Adaptive EWMA gate | AdaptiveTimeout | AdaptiveTimeout CDI |
 | Virtual Session Bridge | session-bridge + ChildSbb | VirtualSessionBridge |
 | CDR dual S1/S2 | USSDCDRState | CdrService + CdrDbFlusher (PG/H2) |

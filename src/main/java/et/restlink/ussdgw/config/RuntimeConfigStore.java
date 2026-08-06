@@ -150,5 +150,14 @@ public class RuntimeConfigStore {
         /** Feature flags only — peer/listen config belongs to micro-jainslee RAs. */
         public static final String DIAMETER_ENABLED = "ussd.diameter.enabled";
         public static final String SIP_ENABLED = "ussd.sip.enabled";
+
+        /** HLR face (inbound SRI-SM): FAKE | PROXY_MAP | PROXY_DIAMETER | FAKE_THEN_RESOLVE */
+        public static final String HLR_MODE = "ussd.hlr.mode";
+        public static final String HLR_MODE_NETWORK_PREFIX = "ussd.hlr.network.";
+        public static final String HLR_FAKE_IMSI = "ussd.hlr.fake.imsi";
+        public static final String HLR_FAKE_MSC_GT = "ussd.hlr.fake.msc-gt";
+        public static final String HLR_UPPER_GT = "ussd.hlr.upper-gt";
+        public static final String HLR_DIAM_DEST_HOST = "ussd.hlr.diameter.destination-host";
+        public static final String HLR_DIAM_DEST_REALM = "ussd.hlr.diameter.destination-realm";
     }
 }

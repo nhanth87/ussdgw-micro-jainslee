@@ -68,11 +68,21 @@
     <button hx-get="/admin/smpp/config" hx-target="#panel" hx-swap="innerHTML"
             hx-headers='{"X-USSD-Admin-Key":"ussd-admin"}'>SMPP form</button>
     <button hx-get="/admin/http/config" hx-target="#panel" hx-swap="innerHTML"
-            hx-headers='{"X-USSD-Admin-Key":"ussd-admin"}'>HTTP form</button>
+            hx-headers='{"X-USSD-Admin-Key":"ussd-admin"}'>HTTP listen</button>
+    <button hx-get="/admin/http/sync" hx-target="#panel" hx-swap="innerHTML"
+            hx-headers='{"X-USSD-Admin-Key":"ussd-admin"}'>Sync</button>
+    <button hx-get="/admin/http/async" hx-target="#panel" hx-swap="innerHTML"
+            hx-headers='{"X-USSD-Admin-Key":"ussd-admin"}'>Async</button>
+    <button hx-get="/admin/http/callback" hx-target="#panel" hx-swap="innerHTML"
+            hx-headers='{"X-USSD-Admin-Key":"ussd-admin"}'>Callback</button>
     <button hx-get="/admin/grpc" hx-target="#panel" hx-swap="innerHTML"
             hx-headers='{"X-USSD-Admin-Key":"ussd-admin"}'>gRPC</button>
     <button hx-get="/admin/routing" hx-target="#panel" hx-swap="innerHTML"
             hx-headers='{"X-USSD-Admin-Key":"ussd-admin"}'>Routing</button>
+    <button hx-get="/admin/campaigns" hx-target="#panel" hx-swap="innerHTML"
+            hx-headers='{"X-USSD-Admin-Key":"ussd-admin"}'>Campaigns</button>
+    <button hx-get="/admin/lab/mo" hx-target="#panel" hx-swap="innerHTML"
+            hx-headers='{"X-USSD-Admin-Key":"ussd-admin"}'>Lab MO</button>
     <button hx-get="/admin/tenants" hx-target="#panel" hx-swap="innerHTML"
             hx-headers='{"X-USSD-Admin-Key":"ussd-admin"}'>Tenants</button>
     <button hx-get="/admin/users" hx-target="#panel" hx-swap="innerHTML"

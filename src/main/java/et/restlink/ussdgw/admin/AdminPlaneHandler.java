@@ -72,6 +72,12 @@ public class AdminPlaneHandler {
                 put(kv, RuntimeConfigStore.Keys.HLR_SSN, f.get("hlrSsn"));
                 put(kv, RuntimeConfigStore.Keys.MSC_SSN, f.get("mscSsn"));
                 put(kv, RuntimeConfigStore.Keys.MAX_MAP_V, f.get("maxMapVersion"));
+                put(kv, RuntimeConfigStore.Keys.HLR_MODE, f.get("hlrMode"));
+                put(kv, RuntimeConfigStore.Keys.HLR_FAKE_IMSI, f.get("hlrFakeImsi"));
+                put(kv, RuntimeConfigStore.Keys.HLR_FAKE_MSC_GT, f.get("hlrFakeMscGt"));
+                put(kv, RuntimeConfigStore.Keys.HLR_UPPER_GT, f.get("hlrUpperGt"));
+                put(kv, RuntimeConfigStore.Keys.HLR_DIAM_DEST_HOST, f.get("hlrDiamHost"));
+                put(kv, RuntimeConfigStore.Keys.HLR_DIAM_DEST_REALM, f.get("hlrDiamRealm"));
                 ss7Config.saveFromForm(kv);
             }
             String notice = "saved";
@@ -232,6 +238,15 @@ public class AdminPlaneHandler {
         sb.append(field("hlrSsn", "hlrSsn", String.valueOf(config.hlrSsn()), null));
         sb.append(field("mscSsn", "mscSsn", String.valueOf(config.mscSsn()), null));
         sb.append(field("maxMapVersion", "maxMapV", String.valueOf(config.maxMapVersion()), null));
+        sb.append("<h3>HLR face (inbound SRI-SM)</h3>");
+        sb.append("<p class=\"hint\">Modes: FAKE | PROXY_MAP (default, fail-closed) | PROXY_DIAMETER | FAKE_THEN_RESOLVE. ")
+                .append("FAKE requires fake IMSI + MSC GT. Upper GT must not equal local ussdGt.</p>");
+        sb.append(field("hlrMode", "hlrMode", String.valueOf(config.hlrMode()), "PROXY_MAP"));
+        sb.append(field("hlrFakeImsi", "fakeImsi", config.hlrFakeImsi(), null));
+        sb.append(field("hlrFakeMscGt", "fakeMscGt", config.hlrFakeMscGt(), null));
+        sb.append(field("hlrUpperGt", "upperHlrGt", config.hlrUpperGt(), "classic hrHlrGt"));
+        sb.append(field("hlrDiamHost", "diamHost", config.hlrDiamDestinationHost(), null));
+        sb.append(field("hlrDiamRealm", "diamRealm", config.hlrDiamDestinationRealm(), null));
         sb.append(planeButtons("ss7"));
         sb.append("</form></div>");
         return sb.toString();

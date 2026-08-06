@@ -3,6 +3,9 @@ dist/lib/
 dist/*.jar
 dist/quarkus/
 dist/quarkus-run.jar
+dist/app/**/*.jar
+dist/data/
+dist/logs/
 data/
 logs/
 .idea/

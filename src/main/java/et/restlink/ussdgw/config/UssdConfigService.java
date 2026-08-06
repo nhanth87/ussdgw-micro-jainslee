@@ -74,7 +74,21 @@ public class UssdConfigService {
     @ConfigProperty(name = "ussd.smpp.ussd.enabled", defaultValue = "false")
     boolean smppUssdEnabledProp;
 
-    private RuntimeConfigStore store() {
+    @ConfigProperty(name = "ussd.hlr.mode", defaultValue = "PROXY_MAP")
+    String hlrModeProp;
+    @ConfigProperty(name = "ussd.hlr.fake.imsi", defaultValue = "")
+    String hlrFakeImsiProp;
+    @ConfigProperty(name = "ussd.hlr.fake.msc-gt", defaultValue = "")
+    String hlrFakeMscGtProp;
+    @ConfigProperty(name = "ussd.hlr.upper-gt", defaultValue = "")
+    String hlrUpperGtProp;
+    @ConfigProperty(name = "ussd.hlr.diameter.destination-host", defaultValue = "")
+    String hlrDiamHostProp;
+    @ConfigProperty(name = "ussd.hlr.diameter.destination-realm", defaultValue = "")
+    String hlrDiamRealmProp;
+
+    /** Exposed for per-network HLR overrides. */
+    public RuntimeConfigStore store() {
         return store;
     }
 
@@ -170,6 +184,31 @@ public class UssdConfigService {
 
     public boolean smppUssdEnabled() {
         return bool(RuntimeConfigStore.Keys.SMPP_USSD_ENABLED, smppUssdEnabledProp);
+    }
+
+    public et.restlink.ussdgw.hlr.HlrResolveMode hlrMode() {
+        return et.restlink.ussdgw.hlr.HlrResolveMode.parse(
+                str(RuntimeConfigStore.Keys.HLR_MODE, hlrModeProp));
+    }
+
+    public String hlrFakeImsi() {
+        return str(RuntimeConfigStore.Keys.HLR_FAKE_IMSI, hlrFakeImsiProp);
+    }
+
+    public String hlrFakeMscGt() {
+        return str(RuntimeConfigStore.Keys.HLR_FAKE_MSC_GT, hlrFakeMscGtProp);
+    }
+
+    public String hlrUpperGt() {
+        return str(RuntimeConfigStore.Keys.HLR_UPPER_GT, hlrUpperGtProp);
+    }
+
+    public String hlrDiamDestinationHost() {
+        return str(RuntimeConfigStore.Keys.HLR_DIAM_DEST_HOST, hlrDiamHostProp);
+    }
+
+    public String hlrDiamDestinationRealm() {
+        return str(RuntimeConfigStore.Keys.HLR_DIAM_DEST_REALM, hlrDiamRealmProp);
     }
 
     public UssdAlphabet defaultAlphabet() {

@@ -12,6 +12,9 @@ import et.restlink.ussdgw.routing.ShortCodeRoutingService;
 import et.restlink.ussdgw.tenant.CallbackAuthService;
 import et.restlink.ussdgw.tenant.TenantGuard;
 import et.restlink.ussdgw.campaign.CampaignService;
+import et.restlink.ussdgw.hlr.DiameterLocationClient;
+import et.restlink.ussdgw.hlr.HlrFaceService;
+import et.restlink.ussdgw.hlr.PendingHlrProxyRegistry;
 
 import com.microjainslee.core.MicroSleeContainer;
 
@@ -33,6 +36,9 @@ public class SbbServices {
     @Inject LinkStatusService linkStatus;
     @Inject AdminHttpHandler adminHttp;
     @Inject PendingSriRegistry pendingSri;
+    @Inject PendingHlrProxyRegistry pendingHlrProxy;
+    @Inject HlrFaceService hlrFace;
+    @Inject DiameterLocationClient diameterLocation;
     @Inject et.restlink.ussdgw.ra.smpp.SmppEndpointRegistry smppRegistry;
     @Inject TenantGuard tenantGuard;
     @Inject AsPullClient asPull;
@@ -60,6 +66,9 @@ public class SbbServices {
     public LinkStatusService linkStatus() { return linkStatus; }
     public AdminHttpHandler adminHttp() { return adminHttp; }
     public PendingSriRegistry pendingSri() { return pendingSri; }
+    public PendingHlrProxyRegistry pendingHlrProxy() { return pendingHlrProxy; }
+    public HlrFaceService hlrFace() { return hlrFace; }
+    public DiameterLocationClient diameterLocation() { return diameterLocation; }
     public et.restlink.ussdgw.ra.smpp.SmppEndpointRegistry smppRegistry() { return smppRegistry; }
     public TenantGuard tenantGuard() { return tenantGuard; }
     public AsPullClient asPull() { return asPull; }

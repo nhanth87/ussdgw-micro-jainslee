@@ -1,7 +1,37 @@
 #!/usr/bin/env bash
+# Digicom-ET / RestLink USSD GW — dist starter (Quarkus fast-jar layout).
+# Never java -jar ussdgw-app.jar alone; never ship uber-jar.
 set -euo pipefail
 APP_HOME="$(cd "$(dirname "$0")" && pwd)"
 cd "$APP_HOME"
+
+if [[ -f "${APP_HOME}/ussdgw.jar" && ! -f "${APP_HOME}/quarkus-run.jar" ]]; then
+  echo "error: found legacy uber-jar layout but missing quarkus-run.jar" >&2
+  echo "  Re-run ./build/package-dist.sh (fast-jar). Single uber-jar is not supported." >&2
+  exit 1
+fi
+if [[ ! -f "${APP_HOME}/quarkus-run.jar" ]]; then
+  echo "error: missing ${APP_HOME}/quarkus-run.jar" >&2
+  exit 1
+fi
+if [[ ! -f "${APP_HOME}/ussdgw-app.jar" ]]; then
+  echo "error: missing ${APP_HOME}/ussdgw-app.jar (app classes at APP_HOME root)" >&2
+  echo "  Re-run ./build/package-dist.sh — do not leave the jar under app/." >&2
+  exit 1
+fi
+if [[ ! -d "${APP_HOME}/lib/main" ]]; then
+  echo "error: missing ${APP_HOME}/lib/main (incomplete fast-jar dist)" >&2
+  exit 1
+fi
+if find "${APP_HOME}/app" -type f -name '*.jar' 2>/dev/null | grep -q .; then
+  echo "error: jars must not live under app/ (UI only)." >&2
+  find "${APP_HOME}/app" -type f -name '*.jar' >&2 || true
+  exit 1
+fi
+if [[ ! -f "${APP_HOME}/configs/application.properties" ]]; then
+  echo "error: missing configs/application.properties" >&2
+  exit 1
+fi
 
 resolve_java25() {
   if command -v mise >/dev/null 2>&1; then
@@ -37,6 +67,7 @@ case "$USSD_LOG_DIR" in
     ;;
 esac
 
+echo "Starting RestLink USSD GW (fast-jar: quarkus-run.jar + ussdgw-app.jar + lib/)"
 exec java \
   -Dussd.log.dir="$USSD_LOG_DIR" \
   -Dquarkus.config.locations="file:$APP_HOME/configs/application.properties" \

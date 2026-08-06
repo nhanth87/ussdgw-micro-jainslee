@@ -4,6 +4,7 @@ import et.restlink.ussdgw.access.OriginationType;
 import et.restlink.ussdgw.api.AsRequest;
 import et.restlink.ussdgw.bridge.VirtualSession;
 import et.restlink.ussdgw.cdr.CdrPhase;
+import et.restlink.ussdgw.events.InboundSriSmEvent;
 import et.restlink.ussdgw.logging.SleeEventTrace;
 import et.restlink.ussdgw.routing.RuleType;
 import et.restlink.ussdgw.routing.ShortCodeRule;
@@ -24,6 +25,9 @@ import java.util.Optional;
 import java.util.UUID;
 
 import org.restcomm.protocols.ss7.map.api.MAPMessageType;
+import org.restcomm.protocols.ss7.map.api.primitives.IMSI;
+import org.restcomm.protocols.ss7.map.api.service.sms.LocationInfoWithLMSI;
+import org.restcomm.protocols.ss7.map.api.service.sms.SendRoutingInfoForSMRequest;
 import org.restcomm.protocols.ss7.map.api.service.sms.SendRoutingInfoForSMResponse;
 import org.restcomm.protocols.ss7.map.api.service.supplementary.ProcessUnstructuredSSRequest;
 import org.restcomm.protocols.ss7.map.api.service.supplementary.UnstructuredSSResponse;
@@ -86,10 +90,36 @@ public final class MapUssdParentSbb implements Sbb, SleeEventHandler {
                 && svc.message() instanceof UnstructuredSSResponse resp) {
             return onUserContinue(svc.dialogId(), resp);
         }
+        if (type == MAPMessageType.sendRoutingInfoForSM_Request
+                && svc.message() instanceof SendRoutingInfoForSMRequest sriReq) {
+            return onInboundSriRequest(svc, sriReq);
+        }
         if (type == MAPMessageType.sendRoutingInfoForSM_Response) {
             return onSriResponse(svc);
         }
         return "ignored type=" + type;
+    }
+
+    private String onInboundSriRequest(Ss7MapEvent.Service svc, SendRoutingInfoForSMRequest req) {
+        String msisdn = "";
+        if (req.getMsisdn() != null && req.getMsisdn().getAddress() != null) {
+            msisdn = req.getMsisdn().getAddress();
+        }
+        String sc = "";
+        if (req.getServiceCentreAddress() != null && req.getServiceCentreAddress().getAddress() != null) {
+            sc = req.getServiceCentreAddress().getAddress();
+        }
+        int networkId = 0;
+        try {
+            if (req.getMAPDialog() != null) {
+                networkId = req.getMAPDialog().getNetworkId();
+            }
+        } catch (Throwable ignored) { }
+        InboundSriSmEvent ev = new InboundSriSmEvent(
+                svc.dialogId(), req.getInvokeId(), msisdn, sc, networkId);
+        svc().container().routeEvent(ev,
+                svc().container().createActivityContext("hlr-sri-" + svc.dialogId()));
+        return "hlr-face-routed";
     }
 
     private String onProcessUnstructured(String dialogId, ProcessUnstructuredSSRequest req) {
@@ -174,18 +204,48 @@ public final class MapUssdParentSbb implements Sbb, SleeEventHandler {
     }
 
     private String onSriResponse(Ss7MapEvent.Service svc) {
-        var niOpt = svc().pendingSri().take(svc.dialogId());
-        if (niOpt.isEmpty()) return "sri-no-pending";
-        var ni = niOpt.get();
-        if (svc.message() instanceof SendRoutingInfoForSMResponse) {
-            SriSbb.handoff(svc(), ni);
-            return "sri-ok";
+        var proxyExact = svc().pendingHlrProxy().take(svc.dialogId());
+        if (proxyExact.isPresent()) {
+            svc().pendingHlrProxy().put(svc.dialogId(), proxyExact.get());
+            return relayHlrProxy(svc, svc.dialogId());
         }
-        svc().cdr().write(ni.correlationId(), CdrPhase.FAILED, ni.msisdn(), null, "SRI_FAIL", null);
-        svc().saga().onNiFailed(ni.correlationId(), "SRI_FAIL");
-        try {
-            svc().campaigns().onNiDone(ni.correlationId(), false, "SRI_FAIL");
-        } catch (Throwable ignored) { }
-        return "sri-fail";
+
+        var niOpt = svc().pendingSri().take(svc.dialogId());
+        if (niOpt.isPresent()) {
+            var ni = niOpt.get();
+            if (svc.message() instanceof SendRoutingInfoForSMResponse) {
+                SriSbb.handoff(svc(), ni);
+                return "sri-ok";
+            }
+            svc().cdr().write(ni.correlationId(), CdrPhase.FAILED, ni.msisdn(), null, "SRI_FAIL", null);
+            svc().saga().onNiFailed(ni.correlationId(), "SRI_FAIL");
+            try {
+                svc().campaigns().onNiDone(ni.correlationId(), false, "SRI_FAIL");
+            } catch (Throwable ignored) { }
+            return "sri-fail";
+        }
+
+        if (svc().pendingHlrProxy().size() > 0) {
+            return relayHlrProxy(svc, svc.dialogId());
+        }
+        return "sri-no-pending";
+    }
+
+    private String relayHlrProxy(Ss7MapEvent.Service svc, String corr) {
+        String imsi = null;
+        String msc = null;
+        byte[] lmsi = null;
+        if (svc.message() instanceof SendRoutingInfoForSMResponse rsp) {
+            IMSI i = rsp.getIMSI();
+            if (i != null) imsi = i.getData();
+            LocationInfoWithLMSI loc = rsp.getLocationInfoWithLMSI();
+            if (loc != null && loc.getNetworkNodeNumber() != null) {
+                msc = loc.getNetworkNodeNumber().getAddress();
+            }
+            if (loc != null && loc.getLMSI() != null) {
+                lmsi = loc.getLMSI().getData();
+            }
+        }
+        return svc().hlrFace().relayUpperResponse(corr, imsi, msc, lmsi, ss7);
     }
 }
