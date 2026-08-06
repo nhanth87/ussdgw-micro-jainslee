@@ -1,6 +1,17 @@
 # ussdgw-jainslee
 
-RestLink greenfield USSD gateway (Quarkus + micro-jainslee + ra-jss7). Java 25.
+RestLink greenfield USSD gateway (Quarkus + micro-jainslee + ra-jss7). **Java 25.**
+
+## At a glance
+
+| | |
+|--|--|
+| **LOC in `src/`** | **~16.1k** Java (12.8k main + 3.3k test) across **152** `.java` files |
+| Stack | Quarkus 3.37 · micro-jainslee · ra-jss7 / HTTP / gRPC / Diameter / SIP · Flyway |
+| Ship | Fast-jar `dist/` — H2 lab or PostgreSQL prod (OTA parity) |
+| Product | 3GPP USSD MO/NI — MAP + Diameter + SIP/USSI + SMPP lab; not SIM OTA |
+
+One greenfield Quarkus tree replacing classic WildFly `ussdgateway` behavior — admin HTMX shell, AdaptiveTimeout bridge, campaigns, CDR, tenant RBAC — without the WF10 DU circus.
 
 ## Build
 
