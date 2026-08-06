@@ -10,18 +10,25 @@ import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 
 import java.nio.charset.StandardCharsets;
+import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.Base64;
 import java.util.Map;
 import java.util.Optional;
 
+import org.eclipse.microprofile.config.inject.ConfigProperty;
+
 /**
  * Resolves admin principal for data scoping.
  * Global {@code ussd.admin.api-key} → full access.
- * Tenant {@code httpApiKey} or Basic auth TENANT user → scoped to tenantId.
+ * Session cookie (login) / Basic auth / tenant {@code httpApiKey}.
  */
 @ApplicationScoped
 public class AdminAuthService {
-    public record Principal(String role, String tenantId) {
+    public record Principal(String role, String tenantId, String username, boolean fromSession) {
+        public Principal(String role, String tenantId) {
+            this(role, tenantId, null, false);
+        }
         public boolean isTenantScoped() {
             return "TENANT".equals(role) && tenantId != null && !tenantId.isBlank();
         }
@@ -30,6 +37,10 @@ public class AdminAuthService {
     @Inject UssdConfigService config;
     @Inject TenantGuard tenantGuard;
     @Inject AdminUserService users;
+
+    @ConfigProperty(name = "ussd.admin.session-hmac-secret",
+            defaultValue = "ussd-dev-session-hmac-change-me")
+    String sessionHmacSecret;
 
     public Optional<Principal> authenticate(Map<String, String> headers, Map<String, String> query) {
         try {
@@ -40,7 +51,36 @@ public class AdminAuthService {
         }
     }
 
+    /** Issue a signed session cookie after successful password login. */
+    public Optional<String> login(String username, String password) {
+        if (username == null || password == null || !users.authenticate(username, password)) {
+            return Optional.empty();
+        }
+        Optional<AdminUserEntity> u = users.byUsername(username);
+        if (u.isEmpty() || !u.get().enabled) {
+            return Optional.empty();
+        }
+        String role = u.get().role == null ? "OPS" : u.get().role;
+        String tid = "TENANT".equals(role) ? u.get().tenantId : null;
+        Instant exp = Instant.now().plus(1, ChronoUnit.DAYS);
+        return Optional.of(SignedSessionCookie.issue(sessionHmacSecret, username, role, tid, exp));
+    }
+
+    public String sessionHmacSecret() {
+        return sessionHmacSecret;
+    }
+
     private Optional<Principal> authenticate0(Map<String, String> headers, Map<String, String> query) {
+        Optional<String> cookieTok = SignedSessionCookie.extractFromCookieHeader(
+                header(headers, "Cookie"));
+        if (cookieTok.isPresent()) {
+            Optional<SignedSessionCookie.Claims> claims =
+                    SignedSessionCookie.verify(sessionHmacSecret, cookieTok.get());
+            if (claims.isPresent()) {
+                SignedSessionCookie.Claims c = claims.get();
+                return Optional.of(new Principal(c.role(), c.tenantId(), c.username(), true));
+            }
+        }
         String key = header(headers, "X-USSD-Admin-Key");
         if (key == null && query != null) key = query.get("key");
         if (key != null && config.adminKeyOk(key)) {
@@ -66,7 +106,7 @@ public class AdminAuthService {
                         if (u.isPresent() && u.get().enabled) {
                             String role = u.get().role == null ? "OPS" : u.get().role;
                             String tid = "TENANT".equals(role) ? u.get().tenantId : null;
-                            return Optional.of(new Principal(role, tid));
+                            return Optional.of(new Principal(role, tid, user, false));
                         }
                     }
                 }

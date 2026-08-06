@@ -3,7 +3,9 @@ package et.restlink.ussdgw.admin;
 import et.restlink.ussdgw.admin.smpp.SmppAdminController;
 import et.restlink.ussdgw.ra.smpp.SmppEndpointRegistry;
 
+import com.microjainslee.ra.diameter.DiameterRaEndpoint;
 import com.microjainslee.ra.jss7.Ss7ResourceAdaptor;
+import com.microjainslee.ra.sipservlet.SipServletRaEndpoint;
 
 import jakarta.enterprise.context.ApplicationScoped;
 
@@ -21,6 +23,10 @@ public class LinkStatusService {
     private volatile String grpcDetail = "down";
     private volatile SmppEndpointRegistry smppRegistry;
     private volatile String smppDetail = "down";
+    private volatile DiameterRaEndpoint diameterEp;
+    private volatile String diameterDetail = "down";
+    private volatile SipServletRaEndpoint sipEp;
+    private volatile String sipDetail = "down";
 
     public void bindSs7(Ss7ResourceAdaptor ra) {
         this.ss7Ra = ra;
@@ -75,6 +81,42 @@ public class LinkStatusService {
         smppDetail = "down";
     }
 
+    public void bindDiameter(DiameterRaEndpoint ep) {
+        this.diameterEp = ep;
+    }
+
+    public void clearDiameter() {
+        diameterEp = null;
+        diameterDetail = "down";
+    }
+
+    public void setDiameterDetail(String detail) {
+        diameterDetail = detail == null ? "" : detail;
+    }
+
+    public void bindSip(SipServletRaEndpoint ep) {
+        this.sipEp = ep;
+    }
+
+    public void clearSip() {
+        sipEp = null;
+        sipDetail = "down";
+    }
+
+    public void setSipDetail(String detail) {
+        sipDetail = detail == null ? "" : detail;
+    }
+
+    public boolean diameterLive() {
+        DiameterRaEndpoint ep = diameterEp;
+        return ep != null && ep.isPeerReady();
+    }
+
+    public boolean sipLive() {
+        SipServletRaEndpoint ep = sipEp;
+        return ep != null && ep.delegate() != null && ep.delegate().isActive();
+    }
+
     public boolean smppServerUp() {
         return smppRegistry != null && smppRegistry.server() != null;
     }
@@ -103,6 +145,17 @@ public class LinkStatusService {
         m.put("smpp.boundSessions", smppBoundSessions());
         m.put("smpp.clients", smppRegistry == null ? 0 : smppRegistry.clients().size());
         m.put("smpp.detail", smppDetail);
+        boolean diamLive = diameterLive();
+        m.put("diameter.live", diamLive);
+        m.put("diameter.peerConnected", diameterEp != null && diameterEp.isPeerConnected());
+        m.put("diameter.detail", diamLive
+                ? (diameterDetail == null || diameterDetail.isBlank() ? "diameter=peer-ready" : diameterDetail)
+                : (diameterEp == null ? "diameter=down" : "diameter=peer-down;" + diameterDetail));
+        boolean sipUp = sipLive();
+        m.put("sip.live", sipUp);
+        m.put("sip.detail", sipUp
+                ? (sipDetail == null || sipDetail.isBlank() ? "sip=active" : sipDetail)
+                : (sipEp == null ? "sip=down" : "sip=inactive;" + sipDetail));
         return m;
     }
 
@@ -113,7 +166,9 @@ public class LinkStatusService {
         boolean wantSmpp = tab == null || tab.isBlank() || "all".equals(tab) || "smpp".equals(tab);
         boolean wantHttp = tab == null || tab.isBlank() || "all".equals(tab) || "http".equals(tab);
         boolean wantGrpc = tab == null || tab.isBlank() || "all".equals(tab) || "grpc".equals(tab);
-        if (wantSs7 || wantHttp || wantGrpc) {
+        boolean wantDiam = tab == null || tab.isBlank() || "all".equals(tab) || "diameter".equals(tab);
+        boolean wantSip = tab == null || tab.isBlank() || "all".equals(tab) || "sip".equals(tab);
+        if (wantSs7 || wantHttp || wantGrpc || wantDiam || wantSip) {
             sb.append("<pre>");
             if (wantSs7) {
                 sb.append("=== SS7 ===\n");
@@ -130,6 +185,16 @@ public class LinkStatusService {
                 sb.append("=== gRPC ===\n");
                 sb.append("listen=").append(s.get("grpc.listen")).append('\n');
                 sb.append("detail=").append(s.get("grpc.detail")).append('\n');
+            }
+            if (wantDiam) {
+                sb.append("=== Diameter ===\n");
+                sb.append("live=").append(s.get("diameter.live")).append('\n');
+                sb.append("detail=").append(s.get("diameter.detail")).append('\n');
+            }
+            if (wantSip) {
+                sb.append("=== SIP ===\n");
+                sb.append("live=").append(s.get("sip.live")).append('\n');
+                sb.append("detail=").append(s.get("sip.detail")).append('\n');
             }
             sb.append("</pre>");
         }

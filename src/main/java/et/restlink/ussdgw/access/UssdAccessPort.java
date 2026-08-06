@@ -3,8 +3,8 @@ package et.restlink.ussdgw.access;
 import et.restlink.ussdgw.bridge.VirtualSession;
 
 /**
- * Per-bearer adapter: MO pull ingress (lab/stub) and NI push egress.
- * MAP is live; Diameter / SMPP / SIP are skeletons until RA paths mature.
+ * Per-bearer adapter: MO pull ingress and NI push egress.
+ * MAP / Diameter / SIP / SMPP — Diameter & SIP NI live when RA peer/RA ready; else STUB_QUEUED.
  */
 public interface UssdAccessPort {
     OriginationType type();

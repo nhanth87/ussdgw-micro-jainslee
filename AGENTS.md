@@ -4,7 +4,16 @@
 
 Thin index for agents. Durable detail → [`docs/agents/`](docs/agents/) — start at [`docs/agents/README.md`](docs/agents/README.md). **Before admin/UI/packaging edits:** [`lessons.md`](docs/agents/lessons.md) + [`skills.md`](docs/agents/skills.md).
 
-Greenfield RestLink USSD gateway that **replaces** classic WildFly [`ussdgateway`](../../../ussdgateway). Behavior oracle = classic; wire contracts = **new** (JSON + proto). Pattern peer: OTA [`ota-sim-push/AGENTS.md`](../../ota-service/ota-sim-push/AGENTS.md).
+Greenfield RestLink **USSD** gateway (3GPP **pull/MO** + **push/NI**) that **replaces** classic WildFly [`ussdgateway`](../../../ussdgateway) / [`nhanth87/ussdgw`](https://github.com/nhanth87/ussdgw) `core/`. Wire contracts = **new** JSON/proto. **Not** SIM OTA / CAP / fleet / `/sendota`.
+
+### Migration law (non-negotiable)
+
+| Layer | Oracle / source | Never |
+|-------|-----------------|-------|
+| **Behavior** | Classic `ussdgw/core` (Parent/Child/Http/Grpc/Sip/Sri + session-bridge) + 3GPP USSD | Conflate with ota-sim-push product semantics |
+| **Admin UX shell** | OTA [`app/html/admin/`](../../ota-service/ota-sim-push/app/html/admin/) + `AdminPageRenderer` **layout only** | Fleet / CAP / portal OTA campaigns / Ki |
+| **AS wire** | [`docs/as-contract/`](docs/as-contract/) greenfield | Drop-in XmlMAPDialog |
+| **Access planes** | MAP + Diameter + SIP/USSI + SMPP live (stubs only when peer down) | Leave Diameter/SIP as permanent STUB_QUEUED |
 
 ## Topic index
 
@@ -14,6 +23,7 @@ Greenfield RestLink USSD gateway that **replaces** classic WildFly [`ussdgateway
 | Agent compress | [`skills.md`](docs/agents/skills.md) |
 | Lessons / footguns | [`lessons.md`](docs/agents/lessons.md) |
 | Log4j2 ONLY | [`logging.md`](docs/agents/logging.md) |
+| Admin UX (OTA shell → USSD) | [`skills.md`](docs/agents/skills.md) § Admin · `app/html/admin/` |
 | Fast-jar dist (OTA peer) | OTA [`packaging.md`](../../ota-service/ota-sim-push/docs/agents/packaging.md) · [`skills.md` § Dist](docs/agents/skills.md) |
 | SS7 lab + HLR face | [`ss7-lab-pair.md`](docs/agents/ss7-lab-pair.md) |
 | Parity vs classic | [`docs/parity-matrix.md`](docs/parity-matrix.md) |
@@ -62,8 +72,9 @@ Detail: [logging.md](docs/agents/logging.md).
 - App = CDI `@ApplicationScoped` + `@Inject MicroSleeContainer` + startup observer.
 - **Persistence** — Quarkus JDBC + Panache + Flyway; **no** Postgres-RA.
 - **MAP** — `ra-jss7` + access adapters; HLR face = inbound SRI-SM (`HlrResponderSbb`).
-- **Diameter / SIP RAs** — live in micro-jainslee; app = thin adapters + flags only.
+- **Diameter / SIP** — `ra-diameter` / `ra-sip-servlet` (micro-jainslee); app adapters MO/NI **live** when peer ready.
 - **SMPP** — **in-tree** local RA (intentional); optional `ussd.smpp.ussd.enabled`.
+- **Admin UI** — disk templates `app/html/admin/` via `AdminPageRenderer` (`ussd.admin.ui-dir`); Monitor Hub for RA planes.
 - **Telemetry** — Monitor Hub `/telemetry/`; scrape metrics on HTTP RA port (default **8088**).
 
 ## Do not
@@ -76,6 +87,8 @@ Detail: [logging.md](docs/agents/logging.md).
 - Treat repo-root `app/` / `build/` as runtime — runtime is **`dist/`** only.
 - Use `CallbackRequest` for AS **pull**; poll HTTP/gRPC with timers.
 - Silent FAKE HLR when mode is PROXY_*; point `upper-gt` at self.
+- Port OTA fleet/CAP/`/sendota` into this USSD GW.
+- Leave raw `{{TOKEN}}` in browser HTML — always seed vars (OTA admin lesson).
 - Bloat this file — put detail in `docs/agents/*`.
 
 ## Dist / run
@@ -91,7 +104,7 @@ Lab AS sims: `tools/as-http-sim.py`, `tools/as-grpc-json-sim.py`.
 
 ## Scope (short)
 
-- Access PULL/PUSH: MAP live; Diameter/SIP lab MO + stub NI; SMPP lab MO + optional `submit_sm` NI.
+- Access PULL/PUSH: MAP + Diameter + SIP/USSI live when peer ready (stub only when down); SMPP lab MO + optional `submit_sm` NI.
 - AS modes: **SYNC** / **ASYNC_ACK** / **BRIDGE** (adaptive EWMA gate).
 - Admin HTMX + Monitor Hub (`/admin/ss7|smpp|http` → hub tabs); HTTP Sync/Async/Callback panels.
 - HLR face: `FAKE|PROXY_MAP|PROXY_DIAMETER|FAKE_THEN_RESOLVE` (default PROXY_MAP fail-closed).
