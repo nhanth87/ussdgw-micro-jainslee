@@ -12,6 +12,7 @@ What to load before packaging, admin UI, or AS plane work. Prefer these over re-
 | If you touch… | Read first |
 |---------------|------------|
 | Dist / `package-dist` / `run.sh` / ship layout | **this file § Dist** + [AGENTS.md](../../AGENTS.md) + [lessons.md](lessons.md) |
+| H2 / PostgreSQL / Flyway | [schema.md](schema.md) |
 | Logging | [logging.md](logging.md) |
 | `app/html/*` admin shell | [AGENTS.md](../../AGENTS.md) — UI files only under `app/html/` |
 | HTTP Sync/Async/Callback / Monitor Hub HTTP | [AGENTS.md](../../AGENTS.md) + `AdminHttpAsModeHandler` |
@@ -23,27 +24,38 @@ What to load before packaging, admin UI, or AS plane work. Prefer these over re-
 
 Same Digicom-ET / OTA push standard. **Never** ship a single uber-jar.
 
+### Footgun — “dist chỉ có app + configs”
+
+| In **git** (scaffold) | **Not** in git (`.gitignore`) — must build |
+|-----------------------|--------------------------------------------|
+| `dist/app/html/`, `dist/configs/`, `dist/run.sh`, README | `dist/lib/`, `dist/*.jar`, `dist/quarkus/`, `dist/data/`, `dist/logs/` |
+
+Fresh clone / new worktree **looks empty of libs** — that is intentional. **Copy-and-run** needs the full fast-jar tree (same idea as OTA `ota-sim-push/dist/` with `lib/`). Agents must **not** treat scaffold-only `dist/` as shippable or “package broken”.
+
 ```bash
-./build/package-dist.sh   # → ./dist/
-./dist/run.sh             # start (JDK 25)
+./build/package-dist.sh   # REQUIRED → fills lib/ + jars + quarkus/
+./dist/run.sh             # start (JDK 25); refuses incomplete layout
 ```
+
+Prove before scp: `test -d dist/lib/main && test -f dist/quarkus-run.jar && test -f dist/ussdgw-app.jar` and `find dist/app -name '*.jar'` empty.
 
 | Path | Role |
 |------|------|
 | `quarkus-run.jar` | Thin launcher — **only** start via `./run.sh` / `java -jar quarkus-run.jar` |
 | `ussdgw-app.jar` | Application classes at APP_HOME **root** (moved out of Quarkus `app/`) |
-| `lib/boot/` · `lib/main/` | Dependencies — replaceable jars (not fat-jar) |
+| `lib/boot/` · `lib/main/` | Dependencies — replaceable jars (not fat-jar); **gitignored** |
 | `quarkus/` | Generated model; `quarkus-application.dat` must reference **root** `ussdgw-app.jar` |
 | `app/html/` | Admin UI (`*.html` …) — **never jars under `app/`** |
-| `configs/` · `data/` · `logs/` | Config + runtime |
+| `configs/` · `data/` · `logs/` | Config + runtime (`data/`/`logs/` gitignored) |
 
 ### Hard rules
 
 1. **No uber-jar.** `quarkus.package.jar.type=fast-jar` only. Refuse `java -jar ussdgw-app.jar` alone.
 2. **`app/` = UI only.** After package, `find dist/app -name '*.jar'` must be empty. Fail the package script if not.
 3. **App jar at APP_HOME root.** Quarkus builds `target/quarkus-app/app/ussdgw-app.jar` → `package-dist.sh` copies to `dist/ussdgw-app.jar` and rewrites `quarkus/quarkus-application.dat` (`app/ussdgw-app.jar` → `ussdgw-app.jar`).
-4. **Ship `dist/` only.** Ops get `lib/` + html + configs + run.sh — not a mystery single jar.
+4. **Ship `dist/` only** — but only **after** `package-dist.sh`. Ops get `lib/` + html + configs + run.sh — not a mystery single jar. **Never commit** built jars/`lib/` into git.
 5. **JDK 25** (bytecode major **69**) for `ussdgw-app.jar`.
+6. **Incomplete dist = stop.** Missing `lib/main` or root jars → fix by re-running package, not by inventing uber-jar or copying `target/` by hand.
 
 Peer: OTA [`docs/agents/packaging.md`](../../../../ota-service/ota-sim-push/docs/agents/packaging.md) · micro-jainslee [AGENTS § DIST](../../../../jain-slee/jain-slee/AGENTS.md).
 
@@ -57,6 +69,8 @@ Peer: OTA [`docs/agents/packaging.md`](../../../../ota-service/ota-sim-push/docs
 ## Compress — remember these
 
 - **Product = 3GPP USSD pull/push** — oracle `nhanth87/ussdgw` core; not SIM OTA.
+- **Dist:** git scaffold ≠ runnable — `package-dist.sh` before copy-and-run (`lib/` gitignored). → § Dist
+- **DB:** file H2 lab or PostgreSQL prod — never `h2:mem` for ship. → [schema.md](schema.md)
 - **`AGENTS.md` stays thin** — durable rules live here / linked docs.
 - **HTTP AS modes:** Sync / Async / Callback = admin HTMX + Monitor Hub hooks; TENANT lab only.
 - **HLR face:** inbound SRI-SM → `HlrResponderSbb`. Default PROXY_MAP fail-closed. → [ss7-lab-pair.md](ss7-lab-pair.md)

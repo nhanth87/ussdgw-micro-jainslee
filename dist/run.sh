@@ -68,6 +68,7 @@ case "$USSD_LOG_DIR" in
 esac
 
 echo "Starting RestLink USSD GW (fast-jar: quarkus-run.jar + ussdgw-app.jar + lib/)"
+echo "Data: ${APP_HOME}/data (H2 file DB by default — switch configs to postgresql for prod)"
 exec java \
   -Dussd.log.dir="$USSD_LOG_DIR" \
   -Dquarkus.config.locations="file:$APP_HOME/configs/application.properties" \

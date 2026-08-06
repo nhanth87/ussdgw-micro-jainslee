@@ -28,9 +28,10 @@ public class AdminNavRenderer {
         return """
                 <a class="hover:text-signal" href="/admin">Dashboard</a>
                 <a class="hover:text-signal" href="/telemetry/">Monitor Hub</a>
-                <a class="hover:text-signal" href="/telemetry/?tab=ss7">SS7</a>
-                <a class="hover:text-signal" href="/telemetry/?tab=smpp">SMPP</a>
-                <a class="hover:text-signal" href="/telemetry/?tab=http">HTTP</a>
+                <a class="hover:text-signal" href="/admin/ss7/config">SS7</a>
+                <a class="hover:text-signal" href="/admin/smpp/config">SMPP</a>
+                <a class="hover:text-signal" href="/admin/http/config">HTTP</a>
+                <a class="hover:text-signal" href="/admin/grpc">gRPC</a>
                 <a class="hover:text-signal" href="/admin/routing">Routing</a>
                 <a class="hover:text-signal" href="/admin/bridge">Bridge</a>
                 <a class="hover:text-signal" href="/admin/campaigns">Campaigns</a>

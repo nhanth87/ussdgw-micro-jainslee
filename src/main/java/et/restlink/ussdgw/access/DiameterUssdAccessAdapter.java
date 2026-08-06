@@ -39,8 +39,8 @@ public class DiameterUssdAccessAdapter implements UssdAccessPort {
     @Inject TenantGuard tenantGuard;
     @Inject DiameterApplyService diameterApply;
 
-    @ConfigProperty(name = "ussd.diameter.destination-host", defaultValue = "")
-    String destHost;
+    @ConfigProperty(name = "ussd.diameter.destination-host")
+    java.util.Optional<String> destHost;
     @ConfigProperty(name = "ussd.diameter.destination-realm", defaultValue = "restlink.local")
     String destRealm;
 
@@ -84,7 +84,7 @@ public class DiameterUssdAccessAdapter implements UssdAccessPort {
             avps.put(DiameterUssdCodes.AVP_USSD_STRING, text == null ? "" : text);
             avps.put(DiameterUssdCodes.AVP_SERVICE_CODE, session.shortCode());
             avps.put(DiameterUssdCodes.AVP_CORRELATION, session.correlationId());
-            String host = destHost == null || destHost.isBlank() ? "" : destHost;
+            String host = destHost == null ? "" : destHost.filter(s -> !s.isBlank()).orElse("");
             sendDiameter(port, new SendDiameterRequest(
                     sessionId,
                     DiameterUssdCodes.USSD_APP_ID,

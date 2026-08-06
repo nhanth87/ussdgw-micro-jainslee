@@ -63,6 +63,11 @@ public class AdminCatalogHandler {
         Map<String, String> f = parseForm(body);
         String action = f.getOrDefault("action", "save");
         try {
+            if ("reload".equalsIgnoreCase(action)) {
+                routing.reloadFromDb();
+                int n = routing.list().size();
+                return AdminHttpHandler.HttpReply.html(routingHtml("reloaded " + n + " rules — live", who));
+            }
             if ("delete".equalsIgnoreCase(action)) {
                 String sc = f.getOrDefault("shortCode", "");
                 if (who != null && who.isTenantScoped()) {
@@ -73,7 +78,7 @@ public class AdminCatalogHandler {
                     }
                 }
                 routing.delete(sc);
-                return AdminHttpHandler.HttpReply.html(routingHtml("deleted", who));
+                return AdminHttpHandler.HttpReply.html(routingHtml("deleted — live", who));
             }
             String code = f.getOrDefault("shortCode", "").trim();
             String type = f.getOrDefault("ruleType", "HTTP").trim();
@@ -94,7 +99,7 @@ public class AdminCatalogHandler {
             routing.putAndPersist(new ShortCodeRule(
                     code, RuleType.valueOf(type.toUpperCase()), url, enabled,
                     tenantId.isEmpty() ? null : tenantId, networkId));
-            return AdminHttpHandler.HttpReply.html(routingHtml("saved " + esc(code), who));
+            return AdminHttpHandler.HttpReply.html(routingHtml("saved " + esc(code) + " — live", who));
         } catch (RuntimeException ex) {
             return AdminHttpHandler.HttpReply.html(routingHtml("error: " + esc(ex.getMessage()), who));
         }
@@ -181,7 +186,12 @@ public class AdminCatalogHandler {
         if (notice != null) sb.append("<p class=\"notice\">").append(esc(notice)).append("</p>");
         sb.append("<h2>Short-code routing</h2>");
         sb.append("<p class=\"hint\">Bind short code → HTTP/gRPC AS URL. Optional tenantId / networkId ")
-                .append("(inherits networkId from tenant when left 0).</p>");
+                .append("(inherits networkId from tenant when left 0). Save updates the live map immediately ")
+                .append("(no restart). Use Reload from DB if rules were edited outside this UI.</p>");
+        sb.append("<form hx-post=\"/admin/routing\" hx-target=\"#panel\" hx-swap=\"innerHTML\" ")
+                .append("hx-headers='{\"X-USSD-Admin-Key\":\"ussd-admin\"}' class=\"inline reload-form\">")
+                .append("<input type=\"hidden\" name=\"action\" value=\"reload\"/>")
+                .append("<button type=\"submit\">Reload from DB</button></form>");
         sb.append("<form hx-post=\"/admin/routing\" hx-target=\"#panel\" hx-swap=\"innerHTML\" ")
                 .append("hx-headers='{\"X-USSD-Admin-Key\":\"ussd-admin\"}' class=\"grid-form\">");
         sb.append("<label>Code <input name=\"shortCode\" placeholder=\"*123#\" required/></label>");

@@ -76,16 +76,17 @@ public class UssdConfigService {
 
     @ConfigProperty(name = "ussd.hlr.mode", defaultValue = "PROXY_MAP")
     String hlrModeProp;
-    @ConfigProperty(name = "ussd.hlr.fake.imsi", defaultValue = "")
-    String hlrFakeImsiProp;
-    @ConfigProperty(name = "ussd.hlr.fake.msc-gt", defaultValue = "")
-    String hlrFakeMscGtProp;
-    @ConfigProperty(name = "ussd.hlr.upper-gt", defaultValue = "")
-    String hlrUpperGtProp;
-    @ConfigProperty(name = "ussd.hlr.diameter.destination-host", defaultValue = "")
-    String hlrDiamHostProp;
-    @ConfigProperty(name = "ussd.hlr.diameter.destination-realm", defaultValue = "")
-    String hlrDiamRealmProp;
+    /** Optional blanks via Optional — empty defaultValue="" breaks SmallRye String load. */
+    @ConfigProperty(name = "ussd.hlr.fake.imsi")
+    java.util.Optional<String> hlrFakeImsiProp;
+    @ConfigProperty(name = "ussd.hlr.fake.msc-gt")
+    java.util.Optional<String> hlrFakeMscGtProp;
+    @ConfigProperty(name = "ussd.hlr.upper-gt")
+    java.util.Optional<String> hlrUpperGtProp;
+    @ConfigProperty(name = "ussd.hlr.diameter.destination-host")
+    java.util.Optional<String> hlrDiamHostProp;
+    @ConfigProperty(name = "ussd.hlr.diameter.destination-realm")
+    java.util.Optional<String> hlrDiamRealmProp;
 
     /** Exposed for per-network HLR overrides. */
     public RuntimeConfigStore store() {
@@ -192,23 +193,27 @@ public class UssdConfigService {
     }
 
     public String hlrFakeImsi() {
-        return str(RuntimeConfigStore.Keys.HLR_FAKE_IMSI, hlrFakeImsiProp);
+        return str(RuntimeConfigStore.Keys.HLR_FAKE_IMSI, opt(hlrFakeImsiProp));
     }
 
     public String hlrFakeMscGt() {
-        return str(RuntimeConfigStore.Keys.HLR_FAKE_MSC_GT, hlrFakeMscGtProp);
+        return str(RuntimeConfigStore.Keys.HLR_FAKE_MSC_GT, opt(hlrFakeMscGtProp));
     }
 
     public String hlrUpperGt() {
-        return str(RuntimeConfigStore.Keys.HLR_UPPER_GT, hlrUpperGtProp);
+        return str(RuntimeConfigStore.Keys.HLR_UPPER_GT, opt(hlrUpperGtProp));
     }
 
     public String hlrDiamDestinationHost() {
-        return str(RuntimeConfigStore.Keys.HLR_DIAM_DEST_HOST, hlrDiamHostProp);
+        return str(RuntimeConfigStore.Keys.HLR_DIAM_DEST_HOST, opt(hlrDiamHostProp));
     }
 
     public String hlrDiamDestinationRealm() {
-        return str(RuntimeConfigStore.Keys.HLR_DIAM_DEST_REALM, hlrDiamRealmProp);
+        return str(RuntimeConfigStore.Keys.HLR_DIAM_DEST_REALM, opt(hlrDiamRealmProp));
+    }
+
+    private static String opt(java.util.Optional<String> o) {
+        return o == null ? "" : o.filter(s -> !s.isBlank()).orElse("");
     }
 
     public UssdAlphabet defaultAlphabet() {

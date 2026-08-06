@@ -11,7 +11,9 @@ Short memory for Digicom footguns. Prefer this + OTA peer [`lessons.md`](../../.
 | Seeing **`bcprov-jdk18on`** / APT **`RELEASE_8`** → switch to JDK 8 | Product-line name / upstream metadata — keep release=25. | OTA packaging |
 | Shipping an **uber-jar** or `java -jar ussdgw-app.jar` alone | Fast-jar: `quarkus-run.jar` + root `ussdgw-app.jar` + `lib/`. Start via `./run.sh`. | [skills.md](skills.md) |
 | Putting **jars under `app/`** | `app/html/` = UI only. Package script must fail if jars remain. | [skills.md](skills.md) |
-| Deploying the **whole worktree** | Ship **`dist/` only**. | root [AGENTS.md](../../AGENTS.md) |
+| Seeing **`dist/` only `app/` + `configs/`** after clone → “thiếu lib / package hỏng” | **Gitignored by design** (`dist/lib/`, `*.jar`, `quarkus/`). Run **`./build/package-dist.sh`** then ship — OTA same. Never commit jars. | [skills.md](skills.md) § Dist · root AGENTS |
+| Copying scaffold `dist/` to server **without** package | Incomplete → `run.sh` must error. Package first; verify `lib/main` + both jars. | [skills.md](skills.md) |
+| Deploying the **whole worktree** | Ship **`dist/` only** (complete tree after package). | root [AGENTS.md](../../AGENTS.md) |
 | Debugging against a **stale** dist / old PID | After package: one `quarkus-run.jar` PID; `jar tf` the class; wait for bootstrap. | OTA lessons |
 | Trusting **`mvn -q test`** exit 0 alone | Read `Tests run:` — zero tests can look green. | OTA lessons |
 | Landing a test **never seen red** | Temporarily break the fix, confirm fail, restore. | OTA lessons |
@@ -34,7 +36,8 @@ Short memory for Digicom footguns. Prefer this + OTA peer [`lessons.md`](../../.
 | Leaving raw **`{{TOKEN}}`** in admin HTML | Seed vars in `AdminPageRenderer` / nav helpers; strip leftovers. | OTA admin-ui lesson |
 | Permanent **STUB_QUEUED** Diameter/SIP | Live when `ra-diameter` / `ra-sip-servlet` peer ready. | parity-matrix |
 | Cursor JDT **autobuild** deleting `target/classes` mid-testCompile | Prefer `java.autobuild.enabled=false`; one Maven at a time. | OTA lessons |
-| Squashing Flyway **without** wiping history | Greenfield: wipe H2 / reset `flyway_schema_history`. | root AGENTS |
+| Squashing Flyway **without** wiping history | Greenfield: wipe H2 / reset `flyway_schema_history`. | [schema.md](schema.md) |
+| Shipping **`jdbc:h2:mem:`** as lab/prod | File H2 under `dist/data/` or PostgreSQL. Both drivers in fast-jar. | [schema.md](schema.md) |
 
 ## Remember
 

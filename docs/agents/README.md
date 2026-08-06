@@ -11,7 +11,7 @@ Pattern peer: OTA [`docs/agents/`](../../../../ota-service/ota-sim-push/docs/age
 | Logging | [logging.md](logging.md) — Log4j2 ONLY |
 | Admin UX | `app/html/admin/` + `AdminPageRenderer` (shell from ota-sim-push; USSD pages only) |
 | SS7 lab / HLR face | [ss7-lab-pair.md](ss7-lab-pair.md) |
-| Packaging | `build/package-dist.sh` → `dist/` · OTA [packaging.md](../../../../ota-service/ota-sim-push/docs/agents/packaging.md) |
+| Schema / H2+Postgres | [schema.md](schema.md) — Flyway V1 + `UssdSchemaInitializer` |
 | Bridge | Adaptive EWMA + Virtual Session Bridge |
 | AS contract | [../as-contract/](../as-contract/) greenfield JSON/proto |
 | Parity | [../parity-matrix.md](../parity-matrix.md) |
