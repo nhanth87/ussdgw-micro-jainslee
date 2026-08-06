@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="en" class="h-full">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>Login — RestLink USSD</title>
+  <script>
+    (function () {
+      try {
+        var t = localStorage.getItem('ussd-theme');
+        if (t === 'light' || t === 'dark') document.documentElement.setAttribute('data-theme', t);
+      } catch (e) { /* ignore */ }
+    })();
+  </script>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            ink: { DEFAULT: '#0c1220', panel: '#141c2b', line: '#243044', mute: '#7a8ba3' },
+            signal: { DEFAULT: '#0b6e4f', dim: '#085a41' }
+          },
+          fontFamily: {
+            display: ['"DM Sans"', 'system-ui', 'sans-serif'],
+            mono: ['"JetBrains Mono"', 'ui-monospace', 'monospace']
+          }
+        }
+      }
+    };
+  </script>
+  <link rel="preconnect" href="https://fonts.googleapis.com"/>
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin/>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600;9..40,700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet"/>
+  <script src="/admin/static/htmx.min.js"></script>
+  <link rel="stylesheet" href="/admin/static/admin.css"/>
+  <script defer src="/admin/static/ussd-shell.js"></script>
+  <script defer src="/admin/static/alpine.min.js"></script>
+</head>
+<body x-data class="grid min-h-full place-items-center bg-ink px-4 font-display text-slate-200 antialiased"
+      style="background-image:radial-gradient(ellipse 70% 50% at 50% 0%,rgba(11,110,79,0.12),transparent)">
+  <form method="post" action="/admin/login"
+        class="w-full max-w-sm rounded-lg border border-ink-line bg-ink-panel p-8 shadow-xl shadow-black/40">
+    <div class="mb-6 flex items-center gap-3">
+      <span class="h-8 w-1 rounded-full bg-signal" aria-hidden="true"></span>
+      <div>
+        <h1 class="text-xl font-semibold text-slate-50">RestLink USSD</h1>
+        <p class="text-xs text-ink-mute">Admin sign-in · TENANT username === tenantId</p>
+      </div>
+    </div>
+    <p class="mb-3 min-h-[1.25rem] text-sm text-rose-400">{{ERROR}}</p>
+    <label class="block text-xs uppercase tracking-wider text-ink-mute">Username</label>
+    <input name="username" autocomplete="username" required
+           class="mt-1 mb-4 w-full rounded-md border border-ink-line bg-ink px-3 py-2 text-sm text-slate-100 focus:border-signal focus:outline-none focus:ring-1 focus:ring-signal/40"/>
+    <label class="block text-xs uppercase tracking-wider text-ink-mute">Password</label>
+    <input name="password" type="password" autocomplete="current-password" required
+           class="mt-1 mb-6 w-full rounded-md border border-ink-line bg-ink px-3 py-2 text-sm text-slate-100 focus:border-signal focus:outline-none focus:ring-1 focus:ring-signal/40"/>
+    <button type="submit"
+            class="w-full rounded-md bg-signal py-2.5 text-sm font-semibold text-ink hover:bg-signal-dim focus:outline-none focus:ring-2 focus:ring-signal/40">
+      Login
+    </button>
+  </form>
+</body>
+</html>

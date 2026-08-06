@@ -25,6 +25,7 @@ Greenfield RestLink **USSD** gateway (3GPP **pull/MO** + **push/NI**) that **rep
 | Log4j2 ONLY | [`logging.md`](docs/agents/logging.md) |
 | Admin UX (OTA shell → USSD) | [`skills.md`](docs/agents/skills.md) § Admin · `app/html/admin/` |
 | Fast-jar dist (OTA peer) | OTA [`packaging.md`](../../ota-service/ota-sim-push/docs/agents/packaging.md) · [`skills.md` § Dist](docs/agents/skills.md) |
+| Schema H2 / PostgreSQL | [`schema.md`](docs/agents/schema.md) |
 | SS7 lab + HLR face | [`ss7-lab-pair.md`](docs/agents/ss7-lab-pair.md) |
 | Parity vs classic | [`docs/parity-matrix.md`](docs/parity-matrix.md) |
 | AS contract | [`docs/as-contract/`](docs/as-contract/) |
@@ -33,6 +34,7 @@ Greenfield RestLink **USSD** gateway (3GPP **pull/MO** + **push/NI**) that **rep
 
 - **Java 25 only** — mise `zulu-25`; never downgrade. False alarms: `bcprov-jdk18on` ≠ Java 8; APT `RELEASE_8` is upstream metadata. → OTA [packaging](../../ota-service/ota-sim-push/docs/agents/packaging.md)
 - **Ship only `dist/`** — after `./build/package-dist.sh`, copy **`dist/` alone** → `dist/run.sh`. Do **not** scp the worktree, `build/`, `src/`, or repo-root `app/`. UI = `app/html/` files — **never WAR / uber-jar**. → [skills § Dist](docs/agents/skills.md)
+- **Git ≠ runnable dist** — clone/worktree may show only `dist/app/` + `dist/configs/` (+ `run.sh` scaffold). **`lib/` · `*.jar` · `quarkus/` are gitignored** (OTA parity). That is **not** a complete ship tree. Always `./build/package-dist.sh` before copy-and-run; `run.sh` must refuse incomplete layout. Never commit jars into `dist/`. → [skills § Dist](docs/agents/skills.md) · [lessons](docs/agents/lessons.md)
 - **Dist layout** — `quarkus-run.jar` + **`ussdgw-app.jar` at APP_HOME root** + `lib/{boot,main}/` + `quarkus/` + `app/html/` (UI only) + `configs/` + `data/` + `logs/`. Never `java -jar ussdgw-app.jar` alone. Never jars under `app/`. Rewrite `quarkus-application.dat` when moving the app jar.
 - **Prove the artifact, not the source** — before debugging runtime: artifact mtime vs source, `jar tf ussdgw-app.jar | grep <NewClass>`, classpath of the *running* PID. Green `mvn test` ≠ deployed. Never trust `mvn -q test` alone (`Tests run: 0` looks green). → [lessons](docs/agents/lessons.md)
 - **Log4j2 ONLY** — `log4j-core` + `log4j2.xml` → `dist/logs/` (`ussd.log.dir`); never `/tmp`; never dual `SleeEventTrace`+`LOG.info`; never `log4j2-jboss-logmanager` / `quarkus.log.file*`. → [logging](docs/agents/logging.md)
@@ -43,7 +45,7 @@ Greenfield RestLink **USSD** gateway (3GPP **pull/MO** + **push/NI**) that **rep
 - **HTTP/gRPC** — RA **callbacks** only — never 50ms timer poll. Pull body = `JsonPostRequest` raw JSON — **not** `CallbackRequest` envelope.
 - **HLR face** — inbound SRI-SM: `ussd.hlr.mode` default **PROXY_MAP fail-closed**; no silent FAKE; upper GT must not loop to local. → [ss7-lab-pair](docs/agents/ss7-lab-pair.md)
 - **TENANT login** — **username === tenantId**. RestLink = dist brand only.
-- **Flyway** — single `V1__ussdgw_baseline.sql`; wipe lab H2 / reset `flyway_schema_history` after squash. New table/column → entity + migration + tests.
+- **Flyway / DB** — lab **file H2** (`./data/ussdgw`, PG-mode) or **PostgreSQL** via `configs` / `QUARKUS_DATASOURCE_*`. Single `V1__ussdgw_baseline.sql`; wipe lab H2 / reset `flyway_schema_history` after squash. Boot guard `UssdSchemaInitializer`. Never `h2:mem` for ship. → [schema](docs/agents/schema.md)
 - **Commits** — **nhanth87 / Tran Nhan** only. No AI `Co-authored-by:` / trailers. Hooks reject; never `--no-verify`.
 
 ## Link status truth (non-negotiable)
@@ -85,6 +87,7 @@ Detail: [logging.md](docs/agents/logging.md).
 - Dual-log SLEE boundaries (`SleeEventTrace` **and** `LOG.info`).
 - Leave corrupt jSS7 sim persist XML or hand-edit illegal tags.
 - Treat repo-root `app/` / `build/` as runtime — runtime is **`dist/`** only.
+- Assume git `dist/app`+`configs` alone is copy-and-run — **missing `lib/`** until `./build/package-dist.sh`.
 - Use `CallbackRequest` for AS **pull**; poll HTTP/gRPC with timers.
 - Silent FAKE HLR when mode is PROXY_*; point `upper-gt` at self.
 - Port OTA fleet/CAP/`/sendota` into this USSD GW.
@@ -93,11 +96,13 @@ Detail: [logging.md](docs/agents/logging.md).
 
 ## Dist / run
 
+**In git:** scaffold only (`app/html/`, `configs/`, `run.sh`, README). **Not in git:** `lib/`, `quarkus/`, `*.jar`, `data/`, `logs/` (see `.gitignore`).
+
 | Command | Does |
 |---------|------|
-| `./build/package-dist.sh` | Maven fast-jar → **self-contained `./dist/`** (JDK 25) |
-| `./run.sh` / `dist/run.sh` | Start packaged app |
-| **Server** | Copy **`dist/`** only → `./run.sh` (host JDK 25) |
+| `./build/package-dist.sh` | Maven fast-jar → **self-contained `./dist/`** with `lib/{boot,main}/` (JDK 25) — **required** before ship |
+| `./run.sh` / `dist/run.sh` | Start packaged app (errors if jars/`lib` missing) |
+| **Server** | Copy **complete `dist/`** (after package) → `./run.sh` (host JDK 25) |
 | Bare bootstrap | [`dist-package-script.sh`](dist-package-script.sh) (sctp → jss7 → jain-slee → package) |
 
 Lab AS sims: `tools/as-http-sim.py`, `tools/as-grpc-json-sim.py`.

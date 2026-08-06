@@ -374,6 +374,7 @@ public class AdminHttpHandler {
             case "/admin/sip" -> "sip.html";
             case "/admin/ss7/config" -> "ss7.html";
             case "/admin/smpp/config" -> "smpp.html";
+            case "/admin/http/config" -> "http.html";
             default -> null;
         };
     }
