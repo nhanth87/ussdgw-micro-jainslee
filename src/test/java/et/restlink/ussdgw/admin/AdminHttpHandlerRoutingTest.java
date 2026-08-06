@@ -154,7 +154,7 @@ class AdminHttpHandlerRoutingTest {
     void httpConfigPanelHasModes() {
         Optional<AdminHttpHandler.HttpReply> r = handler.tryHandle(
                 "GET", "/admin/http/config",
-                Map.of("X-USSD-Admin-Key", "ussd-admin"), Map.of(), null);
+                authHx(), Map.of(), null);
         assertThat(r).isPresent();
         assertThat(new String(r.get().body())).contains("SYNC").contains("BRIDGE");
     }
@@ -182,7 +182,7 @@ class AdminHttpHandlerRoutingTest {
     void routingPanel() {
         Optional<AdminHttpHandler.HttpReply> r = handler.tryHandle(
                 "GET", "/admin/routing",
-                Map.of("X-USSD-Admin-Key", "ussd-admin"), Map.of(), null);
+                authHx(), Map.of(), null);
         assertThat(r).isPresent();
         assertThat(new String(r.get().body())).contains("routing-ok");
     }
@@ -191,7 +191,7 @@ class AdminHttpHandlerRoutingTest {
     void campaignsPanel() {
         Optional<AdminHttpHandler.HttpReply> r = handler.tryHandle(
                 "GET", "/admin/campaigns",
-                Map.of("X-USSD-Admin-Key", "ussd-admin"), Map.of(), null);
+                authHx(), Map.of(), null);
         assertThat(r).isPresent();
         assertThat(new String(r.get().body())).contains("campaigns-ok");
     }
@@ -200,7 +200,7 @@ class AdminHttpHandlerRoutingTest {
     void labMoPanel() {
         Optional<AdminHttpHandler.HttpReply> r = handler.tryHandle(
                 "GET", "/admin/lab/mo",
-                Map.of("X-USSD-Admin-Key", "ussd-admin"), Map.of(), null);
+                authHx(), Map.of(), null);
         assertThat(r).isPresent();
         assertThat(new String(r.get().body())).contains("lab-mo-ok");
     }
@@ -210,7 +210,7 @@ class AdminHttpHandlerRoutingTest {
         for (String path : new String[]{"/admin/http/sync", "/admin/http/async", "/admin/http/callback"}) {
             Optional<AdminHttpHandler.HttpReply> r = handler.tryHandle(
                     "GET", path,
-                    Map.of("X-USSD-Admin-Key", "ussd-admin"), Map.of(), null);
+                    authHx(), Map.of(), null);
             assertThat(r).as(path).isPresent();
             assertThat(new String(r.get().body())).contains("-ok");
         }
@@ -220,7 +220,7 @@ class AdminHttpHandlerRoutingTest {
     void tenantsPanel() {
         Optional<AdminHttpHandler.HttpReply> r = handler.tryHandle(
                 "GET", "/admin/tenants",
-                Map.of("X-USSD-Admin-Key", "ussd-admin"), Map.of(), null);
+                authHx(), Map.of(), null);
         assertThat(r).isPresent();
         assertThat(new String(r.get().body())).contains("tenants-ok");
     }
@@ -229,7 +229,7 @@ class AdminHttpHandlerRoutingTest {
     void hubPartialSs7() {
         Optional<AdminHttpHandler.HttpReply> r = handler.tryHandle(
                 "GET", "/admin/hub",
-                Map.of("X-USSD-Admin-Key", "ussd-admin"),
+                authHx(),
                 Map.of("tab", "ss7"), null);
         assertThat(r).isPresent();
         assertThat(new String(r.get().body())).contains("SS7");
@@ -240,6 +240,10 @@ class AdminHttpHandlerRoutingTest {
         assertThat(AdminHttpHandler.isMonitorHubPath("/telemetry/")).isTrue();
         assertThat(AdminHttpHandler.isMonitorHubPath("/api/ra/smpp-ra/status")).isTrue();
         assertThat(AdminHttpHandler.isPublicMonitorStatic("GET", "/telemetry/")).isTrue();
+    }
+
+    private static Map<String, String> authHx() {
+        return Map.of("X-USSD-Admin-Key", "ussd-admin", "HX-Request", "true");
     }
 
     private static void set(Object target, String field, Object value) {

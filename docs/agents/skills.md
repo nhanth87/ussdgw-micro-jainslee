@@ -47,11 +47,20 @@ Same Digicom-ET / OTA push standard. **Never** ship a single uber-jar.
 
 Peer: OTA [`docs/agents/packaging.md`](../../../../ota-service/ota-sim-push/docs/agents/packaging.md) · micro-jainslee [AGENTS § DIST](../../../../jain-slee/jain-slee/AGENTS.md).
 
+## Admin UX (OTA shell → USSD)
+
+- Disk templates under `app/html/admin/` + `partials/` + `static/` via `AdminPageRenderer` (`ussd.admin.ui-dir`).
+- Copy **shell** from ota-sim-push (Alpine theme, login, nav, mustache `{{TOKEN}}`) — rebrand RestLink USSD.
+- **USSD pages only:** routing, bridge, campaigns, CDR, tenants, users, lab-mo, http sync/async/callback, grpc, diameter, sip — **no** fleet/CAP/sendota.
+- Always seed `{{NAV_LINKS}}`, `{{NOTICE}}`, banners; never leave raw mustache. → [lessons.md](lessons.md)
+
 ## Compress — remember these
 
+- **Product = 3GPP USSD pull/push** — oracle `nhanth87/ussdgw` core; not SIM OTA.
 - **`AGENTS.md` stays thin** — durable rules live here / linked docs.
-- **HTTP AS modes:** Sync / Async / Callback = admin HTMX + Monitor Hub hooks (`HttpServerAdminBindings.bindAppPanels`); TENANT lab only, no plane config mutate.
-- **HLR face:** inbound SRI-SM → `InboundSriSmEvent` → `HlrResponderSbb`. Modes FAKE / PROXY_MAP (default fail-closed) / PROXY_DIAMETER / FAKE_THEN_RESOLVE. Never silent FAKE. Upper GT must not loop to local. → [ss7-lab-pair.md](ss7-lab-pair.md)
+- **HTTP AS modes:** Sync / Async / Callback = admin HTMX + Monitor Hub hooks; TENANT lab only.
+- **HLR face:** inbound SRI-SM → `HlrResponderSbb`. Default PROXY_MAP fail-closed. → [ss7-lab-pair.md](ss7-lab-pair.md)
+- **Diameter / SIP:** live MO/NI when RA peer ready; stub only when down.
 - **AS pull:** `JsonPostRequest` raw body — never `CallbackRequest` envelope for pull.
 - **Logging:** Log4j2 → `ussd.log.dir` / `dist/logs/`; SLEE boundary = `SleeEventTrace` only.
 - **Commits:** nhanth87 / Tran Nhan only — no AI co-author trailers.

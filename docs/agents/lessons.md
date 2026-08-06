@@ -30,6 +30,9 @@ Short memory for Digicom footguns. Prefer this + OTA peer [`lessons.md`](../../.
 | Generation bump on **AS CONTINUE** | Bump **only** on MS input (`onUserContinue`). | AGENTS saga notes / code |
 | TENANT login username ≠ **tenantId** | Enforced in `AdminUserService`. | root AGENTS |
 | AI **`Co-authored-by:`** / `--no-verify` | nhanth87 / Tran Nhan only; hooks reject. | workspace AGENTS.md |
+| Treating this repo as **SIM OTA** / copying fleet/CAP/`/sendota` | Product is **3GPP USSD** pull/push; OTA admin is **shell UX only**. | root AGENTS migration law |
+| Leaving raw **`{{TOKEN}}`** in admin HTML | Seed vars in `AdminPageRenderer` / nav helpers; strip leftovers. | OTA admin-ui lesson |
+| Permanent **STUB_QUEUED** Diameter/SIP | Live when `ra-diameter` / `ra-sip-servlet` peer ready. | parity-matrix |
 | Cursor JDT **autobuild** deleting `target/classes` mid-testCompile | Prefer `java.autobuild.enabled=false`; one Maven at a time. | OTA lessons |
 | Squashing Flyway **without** wiping history | Greenfield: wipe H2 / reset `flyway_schema_history`. | root AGENTS |
 

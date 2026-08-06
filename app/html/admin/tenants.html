@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="en" class="h-full">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>Tenants — RestLink USSD</title>
+  <script>
+    (function () {
+      try {
+        var t = localStorage.getItem('ussd-theme');
+        if (t === 'light' || t === 'dark') document.documentElement.setAttribute('data-theme', t);
+      } catch (e) { /* ignore */ }
+    })();
+  </script>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            ink: { DEFAULT: '#0c1220', panel: '#141c2b', line: '#243044', mute: '#7a8ba3' },
+            signal: { DEFAULT: '#0b6e4f', dim: '#085a41' }
+          },
+          fontFamily: {
+            display: ['"DM Sans"', 'system-ui', 'sans-serif'],
+            mono: ['"JetBrains Mono"', 'ui-monospace', 'monospace']
+          }
+        }
+      }
+    };
+  </script>
+  <link rel="preconnect" href="https://fonts.googleapis.com"/>
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin/>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600;9..40,700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet"/>
+  <script src="/admin/static/htmx.min.js"></script>
+  <link rel="stylesheet" href="/admin/static/admin.css"/>
+  <script defer src="/admin/static/ussd-shell.js"></script>
+  <script defer src="/admin/static/alpine.min.js"></script>
+</head>
+<body x-data class="min-h-full bg-ink font-display text-slate-200 antialiased"
+      style="background-image:radial-gradient(ellipse 80% 50% at 10% -10%,rgba(11,110,79,0.10),transparent),radial-gradient(ellipse 60% 40% at 100% 0%,rgba(56,100,160,0.12),transparent)">
+  <header class="sticky top-0 z-40 border-b border-ink-line/80 bg-ink/90 backdrop-blur">
+    <div class="mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-3 px-4 py-3">
+      <div class="flex items-center gap-3">
+        <span class="h-8 w-1 rounded-full bg-signal" aria-hidden="true"></span>
+        <a href="/admin" class="text-lg font-semibold tracking-wide text-slate-100">RestLink USSD</a>
+        <span class="hidden text-xs uppercase tracking-[0.2em] text-ink-mute sm:inline">gw</span>
+      </div>
+      <nav class="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-ink-mute">
+        {{NAV_LINKS}}
+      </nav>
+    </div>
+  </header>
+  <main class="mx-auto max-w-6xl px-4 py-8">
+    {{NOTICE}}
+    <p class="text-xs uppercase tracking-[0.25em] text-signal">Tenancy</p>
+    <h1 class="mt-1 text-2xl font-semibold text-slate-50">Tenants</h1>
+    <p class="mt-1 text-sm text-ink-mute">Tenant registry and HTTP API keys.</p>
+    <div id="panel" class="mt-6 min-h-[12rem] rounded-lg border border-ink-line/60 bg-ink-panel/40 p-4"
+         hx-get="/admin/tenants"
+         hx-trigger="load"
+         hx-swap="innerHTML">
+      <p class="text-sm text-ink-mute">loading…</p>
+    </div>
+  </main>
+</body>
+</html>

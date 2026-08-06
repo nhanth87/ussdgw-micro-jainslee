@@ -9,6 +9,8 @@ import et.restlink.ussdgw.service.GrpcApplyService;
 import et.restlink.ussdgw.service.HttpApplyService;
 import et.restlink.ussdgw.service.SbbRegistrationSupport;
 import et.restlink.ussdgw.service.SmppApplyService;
+import et.restlink.ussdgw.service.DiameterApplyService;
+import et.restlink.ussdgw.service.SipApplyService;
 import et.restlink.ussdgw.service.Ss7ApplyService;
 import et.restlink.ussdgw.telemetry.AppTelemetry;
 
@@ -37,6 +39,8 @@ public class UssdGatewayBootstrap {
     @Inject SmppApplyService smppApply;
     @Inject HttpApplyService httpApply;
     @Inject GrpcApplyService grpcApply;
+    @Inject DiameterApplyService diameterApply;
+    @Inject SipApplyService sipApply;
     @Inject AdminHttpHandler adminHttp;
     @Inject VirtualSessionBridge bridge;
     @Inject UssdSagaCoordinator saga;
@@ -59,6 +63,8 @@ public class UssdGatewayBootstrap {
         linkStatus.clearHttp();
         linkStatus.clearGrpc();
         linkStatus.clearSmpp();
+        linkStatus.clearDiameter();
+        linkStatus.clearSip();
         bridge.bindSs7(() -> null);
         saga.bindSs7(() -> null);
 
@@ -67,6 +73,8 @@ public class UssdGatewayBootstrap {
         grpcApply.wire();
         wireSs7OnBoot();
         wireSmppOnBoot();
+        wireDiameterOnBoot();
+        wireSipOnBoot();
         adminHttp.wireRaAdminHub();
         container.createIesDispatcher();
         sbbRegistration.bindEventMappings();
@@ -90,6 +98,30 @@ public class UssdGatewayBootstrap {
             LOG.warn("SS7 boot wire failed (lab may run without MAP): {}", ex.getMessage());
             bridge.bindSs7(() -> null);
             saga.bindSs7(() -> null);
+        }
+    }
+
+    private void wireDiameterOnBoot() {
+        if (!diameterApply.autoApplyOnBoot()) {
+            LOG.info("Diameter auto-apply on boot disabled");
+            return;
+        }
+        try {
+            LOG.info("Diameter boot: {}", diameterApply.wireIfEnabled());
+        } catch (RuntimeException ex) {
+            LOG.warn("Diameter boot wire failed: {}", ex.getMessage());
+        }
+    }
+
+    private void wireSipOnBoot() {
+        if (!sipApply.autoApplyOnBoot()) {
+            LOG.info("SIP auto-apply on boot disabled");
+            return;
+        }
+        try {
+            LOG.info("SIP boot: {}", sipApply.wireIfEnabled());
+        } catch (RuntimeException ex) {
+            LOG.warn("SIP boot wire failed: {}", ex.getMessage());
         }
     }
 
@@ -119,5 +151,7 @@ public class UssdGatewayBootstrap {
         grpcApply.tearDown();
         smppApply.teardown();
         ss7Apply.tearDown();
+        diameterApply.tearDown();
+        sipApply.tearDown();
     }
 }

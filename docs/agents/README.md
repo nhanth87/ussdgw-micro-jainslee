@@ -6,9 +6,10 @@ Pattern peer: OTA [`docs/agents/`](../../../../ota-service/ota-sim-push/docs/age
 
 | Topic | Notes |
 |-------|--------|
-| Skills (compress) | [skills.md](skills.md) — dist fast-jar / no uber-jar / `app/html` / HLR |
+| Skills (compress) | [skills.md](skills.md) — dist fast-jar / admin OTA-shell / HLR / Diameter+SIP |
 | Lessons / footguns | [lessons.md](lessons.md) — do not repeat (OTA + USSD) |
 | Logging | [logging.md](logging.md) — Log4j2 ONLY |
+| Admin UX | `app/html/admin/` + `AdminPageRenderer` (shell from ota-sim-push; USSD pages only) |
 | SS7 lab / HLR face | [ss7-lab-pair.md](ss7-lab-pair.md) |
 | Packaging | `build/package-dist.sh` → `dist/` · OTA [packaging.md](../../../../ota-service/ota-sim-push/docs/agents/packaging.md) |
 | Bridge | Adaptive EWMA + Virtual Session Bridge |

@@ -1,10 +1,13 @@
 package et.restlink.ussdgw.service;
 
+import et.restlink.ussdgw.access.DiameterUssdAccessAdapter;
+import et.restlink.ussdgw.access.SipUssiAccessAdapter;
 import et.restlink.ussdgw.events.InboundSriSmEvent;
 import et.restlink.ussdgw.events.NiPushReadyEvent;
 import et.restlink.ussdgw.events.NiPushRequestEvent;
 import et.restlink.ussdgw.events.PullGrpcEvent;
 import et.restlink.ussdgw.events.PullHttpEvent;
+import et.restlink.ussdgw.sbbs.DiameterUssdSbb;
 import et.restlink.ussdgw.sbbs.GrpcClientSbb;
 import et.restlink.ussdgw.sbbs.GrpcServerSbb;
 import et.restlink.ussdgw.sbbs.HlrResponderSbb;
@@ -12,17 +15,20 @@ import et.restlink.ussdgw.sbbs.HttpClientSbb;
 import et.restlink.ussdgw.sbbs.HttpServerSbb;
 import et.restlink.ussdgw.sbbs.MapNiPushSbb;
 import et.restlink.ussdgw.sbbs.MapUssdParentSbb;
+import et.restlink.ussdgw.sbbs.SipUssiSbb;
 import et.restlink.ussdgw.sbbs.SmppAsIngressSbb;
 import et.restlink.ussdgw.sbbs.SriSbb;
 import et.restlink.ussdgw.ra.smpp.SmppEndpointRegistry;
 import et.restlink.ussdgw.ra.smpp.events.SmppSubmitSmEvent;
 
 import com.microjainslee.core.MicroSleeContainer;
+import com.microjainslee.ra.diameter.events.DiameterRequestEvent;
 import com.microjainslee.ra.grpc.events.GrpcInvokeResponseEvent;
 import com.microjainslee.ra.grpcserver.events.GrpcRequestEvent;
 import com.microjainslee.ra.httpclient.events.HttpCallbackCompletedEvent;
 import com.microjainslee.ra.httpserver.events.HttpWebRequestEvent;
 import com.microjainslee.ra.jss7.event.Ss7MapEvent;
+import com.microjainslee.ra.sipservlet.events.SipMessageEvent;
 
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
@@ -32,12 +38,15 @@ public class SbbRegistrationSupport {
     @Inject MicroSleeContainer container;
     @Inject SbbServices sbbServices;
     @Inject SmppEndpointRegistry smppRegistry;
+    @Inject DiameterUssdAccessAdapter diameterAccess;
+    @Inject SipUssiAccessAdapter sipAccess;
 
     public void unregisterAll() {
         for (String n : new String[]{
                 "MapUssdParentSbb", "HttpClientSbb", "HttpServerSbb",
                 "GrpcClientSbb", "GrpcServerSbb", "SriSbb", "MapNiPushSbb",
-                "SmppAsIngressSbb", "HlrResponderSbb"}) {
+                "SmppAsIngressSbb", "HlrResponderSbb",
+                "DiameterUssdSbb", "SipUssiSbb"}) {
             container.getSbbTypeRegistry().unregisterByName(n);
         }
     }
@@ -53,6 +62,10 @@ public class SbbRegistrationSupport {
         container.registerSbbType(HlrResponderSbb.class, () -> new HlrResponderSbb(sbbServices));
         container.registerSbbType(SmppAsIngressSbb.class,
                 () -> new SmppAsIngressSbb(sbbServices, smppRegistry));
+        container.registerSbbType(DiameterUssdSbb.class,
+                () -> new DiameterUssdSbb(sbbServices, diameterAccess));
+        container.registerSbbType(SipUssiSbb.class,
+                () -> new SipUssiSbb(sbbServices, sipAccess));
     }
 
     public void bindEventMappings() {
@@ -68,5 +81,7 @@ public class SbbRegistrationSupport {
         container.mapEventToSbb(NiPushReadyEvent.class, "MapNiPushSbb");
         container.mapEventToSbb(InboundSriSmEvent.class, "HlrResponderSbb");
         container.mapEventToSbb(SmppSubmitSmEvent.class, "SmppAsIngressSbb");
+        container.mapEventToSbb(DiameterRequestEvent.class, "DiameterUssdSbb");
+        container.mapEventToSbb(SipMessageEvent.class, "SipUssiSbb");
     }
 }

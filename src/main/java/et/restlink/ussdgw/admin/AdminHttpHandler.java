@@ -64,6 +64,8 @@ public class AdminHttpHandler {
     @Inject Ss7ConfigSupport ss7Config;
     @Inject SmppEndpointRegistry smppRegistry;
     @Inject AdminAuthService adminAuth;
+    @Inject AdminPageRenderer pages;
+    @Inject AdminNavRenderer nav;
     @Inject BridgeGateScheduler bridgeGate;
     @Inject AsPullClient asPull;
     @Inject UssdSagaCoordinator saga;
@@ -88,10 +90,22 @@ public class AdminHttpHandler {
             return new HttpReply(status, "text/plain; charset=utf-8",
                     body.getBytes(StandardCharsets.UTF_8), Map.of());
         }
+        public static HttpReply bytes(String contentType, byte[] body) {
+            return new HttpReply(200, contentType, body == null ? new byte[0] : body, Map.of());
+        }
+        public static HttpReply notFound() {
+            return text(404, "not found");
+        }
         public static HttpReply redirect(String location) {
             return new HttpReply(302, "text/plain; charset=utf-8",
                     ("Redirect: " + location).getBytes(StandardCharsets.UTF_8),
                     Map.of("Location", location));
+        }
+        public HttpReply withHeader(String name, String value) {
+            Map<String, String> h = new LinkedHashMap<>(
+                    headers == null ? Map.of() : headers);
+            h.put(name, value);
+            return new HttpReply(status, contentType, body, Map.copyOf(h));
         }
     }
 
@@ -180,13 +194,44 @@ public class AdminHttpHandler {
         if (!(p.startsWith("/admin") || p.equals("/"))) {
             return Optional.empty();
         }
-        if (p.equals("/") || p.equals("/admin") || p.equals("/admin/")) {
-            if (principal.isEmpty()) {
-                return Optional.of(HttpReply.text(401, "unauthorized"));
+
+        // Public landing + static + login
+        if (p.equals("/")) {
+            try {
+                return Optional.of(pages.landingPage());
+            } catch (Exception e) {
+                return Optional.of(HttpReply.html(AdminPageRenderer.fallbackLandingHtml()));
             }
-            return Optional.of(serveFile("admin.html"));
         }
+        if (p.startsWith("/admin/static/")) {
+            try {
+                return Optional.of(pages.staticResource(p.substring("/admin/static/".length())));
+            } catch (Exception e) {
+                return Optional.of(HttpReply.notFound());
+            }
+        }
+        if (p.equals("/admin/login")) {
+            if ("POST".equalsIgnoreCase(method)) {
+                return Optional.of(handleLoginPost(body));
+            }
+            try {
+                return Optional.of(pages.pageWith("login.html",
+                        nav.adminPageVars(false, Map.of("{{ERROR}}", ""))));
+            } catch (Exception e) {
+                return Optional.of(HttpReply.html("<form method=post action=/admin/login>"
+                        + "user<input name=username> pass<input name=password type=password>"
+                        + "<button>Login</button></form>"));
+            }
+        }
+        if (p.equals("/admin/logout")) {
+            return Optional.of(HttpReply.redirect("/admin/login")
+                    .withHeader("Set-Cookie", SignedSessionCookie.clearCookieHeader()));
+        }
+
         if (principal.isEmpty() && !isPublicAsset(p)) {
+            if (wantsShellPage(method, headers, p)) {
+                return Optional.of(HttpReply.redirect("/admin/login"));
+            }
             return Optional.of(HttpReply.text(401, "unauthorized"));
         }
 
@@ -195,6 +240,12 @@ public class AdminHttpHandler {
         if ("POST".equalsIgnoreCase(method)) {
             Optional<HttpReply> post = handlePost(p, body, who);
             if (post.isPresent()) return post;
+        }
+
+        // Full shell pages (browser navigation) vs HTMX fragments
+        if (wantsShellPage(method, headers, p)) {
+            Optional<HttpReply> shell = serveShellPage(p, who);
+            if (shell.isPresent()) return shell;
         }
 
         String tab = query == null ? null : query.get("tab");
@@ -218,7 +269,8 @@ public class AdminHttpHandler {
             case "/admin/tenants" -> Optional.of(catalog.tenantsGet(who));
             case "/admin/users" -> Optional.of(catalog.usersGet(who));
             case "/admin/campaigns" -> Optional.of(campaigns.get(who));
-            case "/admin/lab/mo" -> Optional.of(labMo.get(who));
+            case "/admin/lab/mo", "/admin/lab-mo" -> Optional.of(labMo.get(who));
+            case "/admin", "/admin/" -> Optional.of(statusHtml());
             case "/admin/hub", "/admin/links", "/admin/links/ss7", "/admin/links/smpp",
                  "/admin/links/http", "/telemetry/partial" -> Optional.of(
                     HttpReply.html(linkStatus.htmlPartial(resolveLinkTab(p, tab))));
@@ -231,6 +283,98 @@ public class AdminHttpHandler {
                 }
                 yield Optional.empty();
             }
+        };
+    }
+
+    private HttpReply handleLoginPost(String body) {
+        Map<String, String> form = parseForm(body);
+        Optional<String> token = adminAuth.login(form.get("username"), form.get("password"));
+        if (token.isEmpty()) {
+            try {
+                return pages.pageWith("login.html", nav.adminPageVars(false,
+                        Map.of("{{ERROR}}", "Invalid username or password")));
+            } catch (Exception e) {
+                return HttpReply.text(401, "invalid credentials");
+            }
+        }
+        return HttpReply.redirect("/admin")
+                .withHeader("Set-Cookie", SignedSessionCookie.setCookieHeader(token.get()));
+    }
+
+    private static Map<String, String> parseForm(String body) {
+        Map<String, String> m = new LinkedHashMap<>();
+        if (body == null || body.isBlank()) return m;
+        for (String part : body.split("&")) {
+            int eq = part.indexOf('=');
+            if (eq <= 0) continue;
+            String k = urlDecode(part.substring(0, eq));
+            String v = urlDecode(part.substring(eq + 1));
+            m.put(k, v);
+        }
+        return m;
+    }
+
+    private static String urlDecode(String s) {
+        try {
+            return java.net.URLDecoder.decode(s, StandardCharsets.UTF_8);
+        } catch (RuntimeException e) {
+            return s;
+        }
+    }
+
+    /**
+     * Browser navigation to a shell route (no HX-Request) → disk template.
+     * HTMX fragment loads keep returning Java panel HTML.
+     */
+    static boolean wantsShellPage(String method, Map<String, String> headers, String path) {
+        if (method == null || !"GET".equalsIgnoreCase(method)) return false;
+        if (headers != null) {
+            String hx = headers.get("HX-Request");
+            if (hx == null) {
+                for (var e : headers.entrySet()) {
+                    if (e.getKey() != null && e.getKey().equalsIgnoreCase("HX-Request")) {
+                        hx = e.getValue();
+                        break;
+                    }
+                }
+            }
+            if ("true".equalsIgnoreCase(hx)) return false;
+        }
+        return shellTemplateName(path) != null;
+    }
+
+    private Optional<HttpReply> serveShellPage(String path, AdminAuthService.Principal who) {
+        String name = shellTemplateName(path);
+        if (name == null || pages == null || nav == null) return Optional.empty();
+        boolean loggedIn = who != null && who.fromSession();
+        try {
+            return Optional.of(pages.pageWith(name, nav.adminPageVars(loggedIn, Map.of())));
+        } catch (Exception e) {
+            LOG.warn("[admin] shell page {}: {}", name, e.toString());
+            return Optional.empty();
+        }
+    }
+
+    static String shellTemplateName(String path) {
+        if (path == null) return null;
+        return switch (path) {
+            case "/admin", "/admin/" -> "index.html";
+            case "/admin/routing", "/admin/rules" -> "routing.html";
+            case "/admin/bridge" -> "bridge.html";
+            case "/admin/campaigns" -> "campaigns.html";
+            case "/admin/cdr" -> "cdr.html";
+            case "/admin/tenants" -> "tenants.html";
+            case "/admin/users" -> "users.html";
+            case "/admin/lab/mo", "/admin/lab-mo" -> "lab-mo.html";
+            case "/admin/http/sync" -> "http-sync.html";
+            case "/admin/http/async" -> "http-async.html";
+            case "/admin/http/callback" -> "http-callback.html";
+            case "/admin/grpc" -> "grpc.html";
+            case "/admin/diameter" -> "diameter.html";
+            case "/admin/sip" -> "sip.html";
+            case "/admin/ss7/config" -> "ss7.html";
+            case "/admin/smpp/config" -> "smpp.html";
+            default -> null;
         };
     }
 
@@ -389,23 +533,30 @@ public class AdminHttpHandler {
                 .append("<a href=\"/telemetry/?tab=smpp\">SMPP</a> · ")
                 .append("<a href=\"/telemetry/?tab=http\">HTTP</a>")
                 .append(" (Monitor Hub). Quick forms: ")
-                .append("<a href=\"#\" hx-get=\"/admin/ss7/config\" hx-target=\"#panel\" ")
-                .append("hx-headers='{\"X-USSD-Admin-Key\":\"ussd-admin\"}'>SS7 form</a> · ")
-                .append("<a href=\"#\" hx-get=\"/admin/smpp/config\" hx-target=\"#panel\" ")
-                .append("hx-headers='{\"X-USSD-Admin-Key\":\"ussd-admin\"}'>SMPP form</a> · ")
-                .append("<a href=\"#\" hx-get=\"/admin/http/config\" hx-target=\"#panel\" ")
-                .append("hx-headers='{\"X-USSD-Admin-Key\":\"ussd-admin\"}'>HTTP form</a>")
+                .append("<a href=\"/admin/ss7\">SS7</a> · ")
+                .append("<a href=\"/admin/smpp\">SMPP</a> · ")
+                .append("<a href=\"/admin/diameter\">Diameter</a> · ")
+                .append("<a href=\"/admin/sip\">SIP</a>")
                 .append("</p>");
         sb.append(linkStatus.htmlPartial("all"));
         sb.append("<pre>");
         m.forEach((k, v) -> {
             if (String.valueOf(k).startsWith("ss7.") || String.valueOf(k).startsWith("http.")
-                    || String.valueOf(k).startsWith("grpc.") || String.valueOf(k).startsWith("smpp.")) {
+                    || String.valueOf(k).startsWith("grpc.") || String.valueOf(k).startsWith("smpp.")
+                    || String.valueOf(k).startsWith("diameter.") || String.valueOf(k).startsWith("sip.")) {
                 return;
             }
             sb.append(esc(String.valueOf(k))).append(" = ")
                     .append(esc(String.valueOf(v))).append('\n');
         });
+        // Always surface link truth fields
+        for (String k : new String[]{
+                "ss7.live", "ss7.detail", "smpp.detail", "http.detail", "grpc.detail",
+                "diameter.live", "diameter.detail", "sip.live", "sip.detail"}) {
+            if (m.containsKey(k)) {
+                sb.append(esc(k)).append(" = ").append(esc(String.valueOf(m.get(k)))).append('\n');
+            }
+        }
         sb.append("</pre></div>");
         return HttpReply.html(sb.toString());
     }
