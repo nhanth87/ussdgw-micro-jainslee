@@ -21,7 +21,7 @@ final class StubAccessSupport {
             VirtualSessionStore store,
             VirtualSessionBridge bridge,
             AtomicLong moCount) {
-        return acceptMoPull(access, store, bridge, moCount, null);
+        return acceptMoPull(access, store, bridge, moCount, null, true);
     }
 
     static VirtualSession acceptMoPull(
@@ -30,6 +30,16 @@ final class StubAccessSupport {
             VirtualSessionBridge bridge,
             AtomicLong moCount,
             TenantGuard tenantGuard) {
+        return acceptMoPull(access, store, bridge, moCount, tenantGuard, true);
+    }
+
+    static VirtualSession acceptMoPull(
+            UssdAccessSession access,
+            VirtualSessionStore store,
+            VirtualSessionBridge bridge,
+            AtomicLong moCount,
+            TenantGuard tenantGuard,
+            boolean adaptiveBridgeArm) {
         if (access == null || store == null || bridge == null) return null;
         if (tenantGuard != null) {
             TenantGuard.Decision d = tenantGuard.admit(access.tenantId());
@@ -48,8 +58,8 @@ final class StubAccessSupport {
                 access.msisdn(), networkId, dialog, access.shortCode());
         session.setTenantId(access.tenantId());
         session.setOriginationType(access.originationType());
-        session.setDialogAlive(false); // no live MAP dialog on stub bearers
-        session.setAdaptiveBridgeArm(true);
+        session.setDialogAlive(false);
+        session.setAdaptiveBridgeArm(adaptiveBridgeArm);
         store.put(session);
         bridge.startAwaitingAs(session);
         if (moCount != null) moCount.incrementAndGet();

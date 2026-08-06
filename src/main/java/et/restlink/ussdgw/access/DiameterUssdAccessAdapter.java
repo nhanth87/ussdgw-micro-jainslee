@@ -47,9 +47,14 @@ public class DiameterUssdAccessAdapter implements UssdAccessPort {
             LOG.warn("Diameter MO rejected — ussd.diameter.enabled=false");
             return null;
         }
-        return StubAccessSupport.acceptMoPull(access, store, bridge, moCount, tenantGuard);
+        return StubAccessSupport.acceptMoPull(access, store, bridge, moCount, tenantGuard,
+                config.httpClientBridgeEnabled());
     }
 
     public long moCount() { return moCount.get(); }
     public long niCount() { return niCount.get(); }
+
+    /** Lab MO path increments without duplicating session create. */
+    public void recordMo() { moCount.incrementAndGet(); }
+    public void recordNi() { niCount.incrementAndGet(); }
 }

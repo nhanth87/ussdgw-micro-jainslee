@@ -4,8 +4,6 @@ import et.restlink.ussdgw.access.OriginationType;
 import et.restlink.ussdgw.api.AsRequest;
 import et.restlink.ussdgw.bridge.VirtualSession;
 import et.restlink.ussdgw.cdr.CdrPhase;
-import et.restlink.ussdgw.events.PullGrpcEvent;
-import et.restlink.ussdgw.events.PullHttpEvent;
 import et.restlink.ussdgw.logging.SleeEventTrace;
 import et.restlink.ussdgw.routing.RuleType;
 import et.restlink.ussdgw.routing.ShortCodeRule;
@@ -135,7 +133,7 @@ public final class MapUssdParentSbb implements Sbb, SleeEventHandler {
         AsRequest asReq = new AsRequest(
                 session.virtualSessionId(), corr, reqId, session.generation(),
                 msisdn, shortCode, ussd, networkId);
-        return routeToAs(r, asReq, corr);
+        return svc().asPullRouter().route(r, asReq, corr);
     }
 
     private String onUserContinue(String dialogId, UnstructuredSSResponse resp) {
@@ -172,22 +170,7 @@ public final class MapUssdParentSbb implements Sbb, SleeEventHandler {
         AsRequest asReq = new AsRequest(
                 s.virtualSessionId(), s.correlationId(), s.requestId(), s.generation(),
                 s.msisdn(), s.shortCode(), ussd, s.networkId());
-        return routeToAs(r, asReq, s.correlationId()) + " continue gen=" + s.generation();
-    }
-
-    private String routeToAs(ShortCodeRule r, AsRequest asReq, String corr) {
-        var container = svc().container();
-        if (r.ruleType() == RuleType.HTTP) {
-            container.routeEvent(new PullHttpEvent(r.asUrl(), asReq),
-                    container.createActivityContext("pull-http-" + corr));
-            return "routed HTTP sc=" + asReq.shortCode();
-        }
-        String[] parts = r.asUrl().split("\\|", 2);
-        String target = parts[0];
-        String method = parts.length > 1 ? parts[1] : "et.restlink.ussdgw.as.UssdAs/Pull";
-        container.routeEvent(new PullGrpcEvent(target, method, asReq),
-                container.createActivityContext("pull-grpc-" + corr));
-        return "routed GRPC sc=" + asReq.shortCode();
+        return svc().asPullRouter().route(r, asReq, s.correlationId()) + " continue gen=" + s.generation();
     }
 
     private String onSriResponse(Ss7MapEvent.Service svc) {

@@ -58,9 +58,9 @@ sequenceDiagram
 | Origination | PULL | PUSH (NI) | Where |
 |-------------|------|-----------|-------|
 | MAP | live | live (`NiPushRequestEvent`) | app + `ra-jss7` |
-| DIAMETER | stub MO | STUB_QUEUED | RA = micro-jainslee `ra-diameter`; app adapter only |
-| SMPP | stub MO | STUB_QUEUED | **local RA** in-tree + `ussd.smpp.ussd.enabled` |
-| SIP | stub MO | STUB_QUEUED | RA = micro-jainslee `ra-sip-servlet`; app adapter only |
+| DIAMETER | lab MO → AS pull | STUB_QUEUED | RA = micro-jainslee `ra-diameter`; app adapter only |
+| SMPP | lab MO → AS pull | `submit_sm` when enabled + SMSC client | **local RA** in-tree + `ussd.smpp.ussd.enabled` |
+| SIP | lab MO → AS pull | STUB_QUEUED | RA = micro-jainslee `ra-sip-servlet`; app adapter only |
 ## AS modes (HTTP / gRPC)
 
 | Mode | Pull | Ingress | MAP while waiting |
@@ -94,16 +94,23 @@ Config overlay: [`RuntimeConfigStore`](src/main/java/et/restlink/ussdgw/config/R
 | `GET/POST /admin/ss7/config` | Quick jSS7 + MAP GT/SSN form | `ussd_config` + `ss7.json` + ra-jss7 |
 | `GET/POST /admin/smpp/config` | Quick ESME/SMSC form | `ussd_config` + `smpp.json` + local SMPP RA |
 | `GET/POST /admin/http/config` | Pull client + callback server + bridge | `ussd_config` + HTTP RAs |
+| `GET/POST /admin/http/sync` | HTTP AS **Sync** config + lab inject / lab MO | `ussd_config` + bridge |
+| `GET/POST /admin/http/async` | HTTP AS **Async ACK** gate/wait + lab ACK inject | `ussd_config` |
+| `GET/POST /admin/http/callback` | HTTP AS **Callback** listen/path + lab content inject | `ussd_config` + `HttpApplyService` |
 | `GET/POST /admin/grpc` | Pull client + callback server + bridge flag | `ussd_config` + gRPC RAs |
 | `GET/POST /admin/bridge` | Adaptive gate / dialog / wait messages / per-leg flags | `ussd_config` |
 | `GET/POST /admin/routing` | Short-code → HTTP/gRPC AS URL; tenantId + networkId | `ussd_short_code` |
 | `GET/POST /admin/campaigns` | NI push campaigns (MSISDN list + text) | `ussd_campaign` / target |
+| `GET/POST /admin/lab/mo` | Lab MO inject (Diameter/SMPP/SIP → AS pull) | session + `AsPullRouter` |
 | `GET/POST /admin/tenants` | tenantId ↔ networkId, HTTP key, SMPP systemId/password | `ussd_tenant` |
 | `GET/POST /admin/users` | ADMIN\|OPS\|TENANT (+ update) | `ussd_admin_user` |
 | `/telemetry/` · `/api/ra/*` | **jainslee-monitor** hub (SS7/SMPP/HTTP packs; Save&Apply) | plane hooks |
 
 SMPP RA admin pack: [`admin/smpp`](src/main/java/et/restlink/ussdgw/admin/smpp/) (local SPI, status truth = `anyPeerUp`).
 SS7/HTTP packs come from micro-jainslee (`ra-jss7`, `http-server-ra`); hooks wired in `AdminHttpHandler.wireRaAdminHub()`.
+HTTP Monitor Hub tabs **Sync / Async / Callback** are app HTMX panels bound via
+`HttpServerAdminBindings.bindAppPanels` → [`AdminHttpAsModeHandler`](src/main/java/et/restlink/ussdgw/admin/AdminHttpAsModeHandler.java)
+(ADMIN/OPS config; TENANT lab scoped to own `tenantId`).
 
 ### MAP addressing (TS 29.002)
 Admin jSS7 form + props: `ussd.map.ussd-gt`, `ussd-ssn` (8), `hlr-ssn` (6), `msc-ssn` (8).
@@ -140,6 +147,13 @@ PENDING→SENDING (≤`ussd.campaign.claim-limit`, per-campaign `maxTps`) and ro
 Busy-UE: skip MSISDN already `SENDING`. `correlationId` = target UUID; `onNiDone` from
 MapNiPushSbb / SRI fail. Props: `ussd.campaign.{enabled,claim-limit,max-targets}`.
 TENANT role may manage own tenant campaigns.
+
+### Lab MO (non-MAP planes)
+Admin: `/admin/lab/mo` HTMX. [`LabMoService`](src/main/java/et/restlink/ussdgw/access/LabMoService.java)
+resolves short-code → builds session → `startAwaitingAs` → [`AsPullRouter`](src/main/java/et/restlink/ussdgw/service/AsPullRouter.java)
+(same PullHttp/PullGrpc path as MAP). Plane must be enabled. TENANT scoped like campaigns.
+SMPP NI: plain-text `submit_sm` via SMSC client when `ussd.smpp.ussd.enabled` and a client is bound
+(CDR `SUBMITTED` / `NO_SMPP_CLIENT`); Diameter/SIP NI remain `STUB_QUEUED`.
 
 ### Flyway
 - Single `V1__ussdgw_baseline.sql` — short_code (+tenant/network), tenant (+smpp_password),

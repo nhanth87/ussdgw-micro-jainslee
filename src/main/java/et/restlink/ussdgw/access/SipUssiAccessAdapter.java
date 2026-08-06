@@ -47,9 +47,13 @@ public class SipUssiAccessAdapter implements UssdAccessPort {
             LOG.warn("SIP USSI MO rejected — ussd.sip.enabled=false");
             return null;
         }
-        return StubAccessSupport.acceptMoPull(access, store, bridge, moCount, tenantGuard);
+        return StubAccessSupport.acceptMoPull(access, store, bridge, moCount, tenantGuard,
+                config.httpClientBridgeEnabled());
     }
 
     public long moCount() { return moCount.get(); }
     public long niCount() { return niCount.get(); }
+
+    public void recordMo() { moCount.incrementAndGet(); }
+    public void recordNi() { niCount.incrementAndGet(); }
 }

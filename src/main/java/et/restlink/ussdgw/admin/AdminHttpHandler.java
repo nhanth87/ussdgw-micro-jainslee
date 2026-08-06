@@ -20,6 +20,7 @@ import et.restlink.ussdgw.service.Ss7ApplyService;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.microjainslee.admin.RaAdminHttpResponse;
 import com.microjainslee.monitor.MonitorHandler;
+import com.microjainslee.ra.httpserver.admin.HttpServerAdminBindings;
 import com.microjainslee.ra.jss7.admin.Ss7AdminBindings;
 
 import jakarta.enterprise.context.ApplicationScoped;
@@ -55,6 +56,8 @@ public class AdminHttpHandler {
     @Inject AdminCatalogHandler catalog;
     @Inject AdminPlaneHandler planes;
     @Inject AdminCampaignHandler campaigns;
+    @Inject AdminLabMoHandler labMo;
+    @Inject AdminHttpAsModeHandler httpAsModes;
     @Inject SmppApplyService smppApply;
     @Inject Ss7ApplyService ss7Apply;
     @Inject SmppConfigSupport smppConfig;
@@ -117,13 +120,15 @@ public class AdminHttpHandler {
                     }
                     return r;
                 });
+        HttpServerAdminBindings.bindAppPanels(httpAsModes::hubGet, httpAsModes::hubPost);
         this.monitorHub = new MonitorHandler(null);
-        LOG.info("[admin] RA admin hub wired (jainslee-monitor + local smpp-ra pack)");
+        LOG.info("[admin] RA admin hub wired (jainslee-monitor + local smpp-ra + HTTP AS panels)");
     }
 
     public void clearRaAdminHub() {
         SmppAdminBindings.clear();
         Ss7AdminBindings.clearHooks();
+        HttpServerAdminBindings.clearAppPanels();
         monitorHub = null;
     }
 
@@ -163,8 +168,13 @@ public class AdminHttpHandler {
             if (!isPublicMonitorStatic(method, p) && principal.isEmpty()) {
                 return Optional.of(HttpReply.text(401, "unauthorized"));
             }
-            Optional<RaAdminHttpResponse> hit = monitor().handle(method, p, query, body);
-            return hit.map(AdminHttpHandler::toHttpReply);
+            AdminRequestContext.set(principal.orElse(null));
+            try {
+                Optional<RaAdminHttpResponse> hit = monitor().handle(method, p, query, body);
+                return hit.map(AdminHttpHandler::toHttpReply);
+            } finally {
+                AdminRequestContext.clear();
+            }
         }
 
         if (!(p.startsWith("/admin") || p.equals("/"))) {
@@ -200,11 +210,15 @@ public class AdminHttpHandler {
             case "/admin/ss7/config" -> Optional.of(planes.ss7Get());
             case "/admin/smpp/config" -> Optional.of(planes.smppGet());
             case "/admin/http/config" -> Optional.of(planes.httpGet());
+            case "/admin/http/sync" -> Optional.of(httpAsModes.get("sync", who));
+            case "/admin/http/async" -> Optional.of(httpAsModes.get("async", who));
+            case "/admin/http/callback" -> Optional.of(httpAsModes.get("callback", who));
             case "/admin/grpc" -> Optional.of(planes.grpcGet());
             case "/admin/routing", "/admin/rules" -> Optional.of(catalog.routingGet(who));
             case "/admin/tenants" -> Optional.of(catalog.tenantsGet(who));
             case "/admin/users" -> Optional.of(catalog.usersGet(who));
             case "/admin/campaigns" -> Optional.of(campaigns.get(who));
+            case "/admin/lab/mo" -> Optional.of(labMo.get(who));
             case "/admin/hub", "/admin/links", "/admin/links/ss7", "/admin/links/smpp",
                  "/admin/links/http", "/telemetry/partial" -> Optional.of(
                     HttpReply.html(linkStatus.htmlPartial(resolveLinkTab(p, tab))));
@@ -284,6 +298,10 @@ public class AdminHttpHandler {
                 return switch (p) {
                     case "/admin/routing", "/admin/rules" -> Optional.of(catalog.routingPost(body, who));
                     case "/admin/campaigns" -> Optional.of(campaigns.post(body, who));
+                    case "/admin/lab/mo" -> Optional.of(labMo.post(body, who));
+                    case "/admin/http/sync" -> Optional.of(httpAsModes.post("sync", body, who));
+                    case "/admin/http/async" -> Optional.of(httpAsModes.post("async", body, who));
+                    case "/admin/http/callback" -> Optional.of(httpAsModes.post("callback", body, who));
                     case "/admin/tenants", "/admin/users",
                          "/admin/ss7", "/admin/ss7/config", "/admin/ss7/apply", "/admin/ss7/start", "/admin/ss7/stop",
                          "/admin/smpp", "/admin/smpp/config", "/admin/smpp/apply", "/admin/smpp/start", "/admin/smpp/stop",
@@ -311,6 +329,10 @@ public class AdminHttpHandler {
                 case "/admin/tenants" -> Optional.of(catalog.tenantsPost(body, who));
                 case "/admin/users" -> Optional.of(catalog.usersPost(body, who));
                 case "/admin/campaigns" -> Optional.of(campaigns.post(body, who));
+                case "/admin/lab/mo" -> Optional.of(labMo.post(body, who));
+                case "/admin/http/sync" -> Optional.of(httpAsModes.post("sync", body, who));
+                case "/admin/http/async" -> Optional.of(httpAsModes.post("async", body, who));
+                case "/admin/http/callback" -> Optional.of(httpAsModes.post("callback", body, who));
                 default -> Optional.empty();
             };
         } catch (RuntimeException ex) {

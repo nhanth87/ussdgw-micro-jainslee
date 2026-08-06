@@ -4,9 +4,9 @@
 |---------|-----------------|----------------|
 | MAP MO ProcessUnstructuredSS | ParentSbb | MapUssdParentSbb (live) |
 | MAP NI UnstructuredSS-Request | Child / NI | MapNiPushSbb + AccessNiDispatcher |
-| Diameter USSD | — | App adapter stub; **RA = micro-jainslee `ra-diameter`** (not in this app) |
-| SMPP USSD TLV | — | **Skeleton** adapter + **local in-tree SMPP RA** (kept in app) |
-| SIP / USSI | SipClient/Server | App adapter stub; **RA = micro-jainslee `ra-sip-servlet`** |
+| Diameter USSD | — | Lab MO → AS pull; NI STUB_QUEUED; **RA = micro-jainslee `ra-diameter`** (not in this app) |
+| SMPP USSD TLV | — | Lab MO → AS pull; NI plain `submit_sm` when client bound; **local in-tree SMPP RA** |
+| SIP / USSI | SipClient/Server | Lab MO → AS pull; NI STUB_QUEUED; **RA = micro-jainslee `ra-sip-servlet`** |
 | HTTP pull AS | HttpClientSbb | HttpClientSbb + `JsonPostRequest` (raw body R/R) |
 | HTTP async callback / NI ingress | HttpServerSbb | HttpServerSbb + /as/callback |
 | gRPC pull | GrpcClientSbb (50ms poll) | GrpcClientSbb callback-only |

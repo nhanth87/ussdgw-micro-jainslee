@@ -259,8 +259,9 @@ public class AdminPlaneHandler {
         sb.append(field("password", "password", "", "write-only"));
         sb.append(field("sourceAddr", "sourceAddr", fb.sourceAddr(), null));
         sb.append("<h3>USSD over SMPP (skeleton)</h3>");
-        sb.append("<p class=\"hint\">When enabled, SUBMIT_SM with USSD service_op TLV maps to VirtualSessionBridge ")
-                .append("(origination=SMPP). NI push queues STUB_QUEUED until TLV emit is live.</p>");
+        sb.append("<p class=\"hint\">When enabled, MO SUBMIT_SM with USSD service_op TLV maps to VirtualSessionBridge ")
+                .append("(origination=SMPP). NI push sends plain-text submit_sm via SMSC client when bound; ")
+                .append("full service_op TLV dialog is not required for NI text.</p>");
         sb.append(field("ussdOverSmpp", "ussdOverSmpp", String.valueOf(config.smppUssdEnabled()), "true|false"));
         sb.append(planeButtons("smpp"));
         sb.append("</form></div>");

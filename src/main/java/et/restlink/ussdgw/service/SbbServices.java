@@ -39,6 +39,7 @@ public class SbbServices {
     @Inject UssdSagaCoordinator saga;
     @Inject CallbackAuthService callbackAuth;
     @Inject CampaignService campaigns;
+    @Inject AsPullRouter asPullRouter;
 
     @PostConstruct
     void install() { INSTANCE = this; }
@@ -65,4 +66,5 @@ public class SbbServices {
     public UssdSagaCoordinator saga() { return saga; }
     public CallbackAuthService callbackAuth() { return callbackAuth; }
     public CampaignService campaigns() { return campaigns; }
+    public AsPullRouter asPullRouter() { return asPullRouter; }
 }

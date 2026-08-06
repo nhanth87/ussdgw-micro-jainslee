@@ -101,6 +101,17 @@ class AdminHttpHandlerRoutingTest {
                 return AdminHttpHandler.HttpReply.html("<div>campaigns-ok</div>");
             }
         });
+        set(handler, "labMo", new AdminLabMoHandler() {
+            @Override public AdminHttpHandler.HttpReply get(AdminAuthService.Principal who) {
+                return AdminHttpHandler.HttpReply.html("<div class=\"lab-mo-panel\">lab-mo-ok</div>");
+            }
+        });
+        set(handler, "httpAsModes", new AdminHttpAsModeHandler() {
+            @Override public AdminHttpHandler.HttpReply get(String panel, AdminAuthService.Principal who) {
+                return AdminHttpHandler.HttpReply.html(
+                        "<div class=\"catalog http-as-" + panel + "-panel\">" + panel + "-ok</div>");
+            }
+        });
     }
 
     @Test
@@ -183,6 +194,26 @@ class AdminHttpHandlerRoutingTest {
                 Map.of("X-USSD-Admin-Key", "ussd-admin"), Map.of(), null);
         assertThat(r).isPresent();
         assertThat(new String(r.get().body())).contains("campaigns-ok");
+    }
+
+    @Test
+    void labMoPanel() {
+        Optional<AdminHttpHandler.HttpReply> r = handler.tryHandle(
+                "GET", "/admin/lab/mo",
+                Map.of("X-USSD-Admin-Key", "ussd-admin"), Map.of(), null);
+        assertThat(r).isPresent();
+        assertThat(new String(r.get().body())).contains("lab-mo-ok");
+    }
+
+    @Test
+    void httpSyncAsyncCallbackPanels() {
+        for (String path : new String[]{"/admin/http/sync", "/admin/http/async", "/admin/http/callback"}) {
+            Optional<AdminHttpHandler.HttpReply> r = handler.tryHandle(
+                    "GET", path,
+                    Map.of("X-USSD-Admin-Key", "ussd-admin"), Map.of(), null);
+            assertThat(r).as(path).isPresent();
+            assertThat(new String(r.get().body())).contains("-ok");
+        }
     }
 
     @Test
