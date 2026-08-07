@@ -13,6 +13,6 @@ Pattern peer: OTA [`docs/agents/`](../../../../ota-service/ota-sim-push/docs/age
 | SS7 lab / HLR face | [ss7-lab-pair.md](ss7-lab-pair.md) |
 | Schema / H2+Postgres | [schema.md](schema.md) — Flyway V1 + `UssdSchemaInitializer` |
 | Bridge | Adaptive EWMA + Virtual Session Bridge |
-| AS contract | [../as-contract/](../as-contract/) greenfield JSON/proto |
+| AS contract | [../as-contract/](../as-contract/) dual-mode XML default + JSON · [classic-xml.md](../as-contract/classic-xml.md) |
 | Parity | [../parity-matrix.md](../parity-matrix.md) |
 | Cutover | [../cutover.md](../cutover.md) |

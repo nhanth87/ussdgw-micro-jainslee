@@ -2,6 +2,9 @@ package et.restlink.ussdgw.service;
 
 import et.restlink.ussdgw.admin.AdminHttpHandler;
 import et.restlink.ussdgw.admin.LinkStatusService;
+import et.restlink.ussdgw.api.AsWireFacade;
+import et.restlink.ussdgw.api.WireFormatResolver;
+import et.restlink.ussdgw.api.classic.ClassicNiHttpPark;
 import et.restlink.ussdgw.bridge.AdaptiveTimeout;
 import et.restlink.ussdgw.bridge.UssdSagaCoordinator;
 import et.restlink.ussdgw.bridge.VirtualSessionBridge;
@@ -50,6 +53,9 @@ public class SbbServices {
     @Inject CallbackAuthService callbackAuth;
     @Inject CampaignService campaigns;
     @Inject AsPullRouter asPullRouter;
+    @Inject AsWireFacade wireFacade;
+    @Inject WireFormatResolver wireFormatResolver;
+    @Inject ClassicNiHttpPark niHttpPark;
 
     @PostConstruct
     void install() { INSTANCE = this; }
@@ -82,4 +88,7 @@ public class SbbServices {
     public CallbackAuthService callbackAuth() { return callbackAuth; }
     public CampaignService campaigns() { return campaigns; }
     public AsPullRouter asPullRouter() { return asPullRouter; }
+    public AsWireFacade wireFacade() { return wireFacade; }
+    public WireFormatResolver wireFormatResolver() { return wireFormatResolver; }
+    public ClassicNiHttpPark niHttpPark() { return niHttpPark; }
 }

@@ -4,6 +4,7 @@ import et.restlink.ussdgw.access.AccessNiDispatcher;
 import et.restlink.ussdgw.access.OriginationType;
 import et.restlink.ussdgw.api.AsAction;
 import et.restlink.ussdgw.api.AsResponse;
+import et.restlink.ussdgw.api.classic.ClassicNiHttpPark;
 import et.restlink.ussdgw.cdr.CdrPhase;
 import et.restlink.ussdgw.cdr.CdrService;
 import et.restlink.ussdgw.config.UssdConfigService;
@@ -30,6 +31,7 @@ public class VirtualSessionBridge {
     @Inject UssdConfigService config;
     @Inject CdrService cdr;
     @Inject AccessNiDispatcher accessNi;
+    @Inject ClassicNiHttpPark niHttpPark;
 
     private volatile Supplier<RaCommandPort> ss7Supplier = () -> null;
 
@@ -163,7 +165,10 @@ public class VirtualSessionBridge {
         AsAction action = response.action() == null ? AsAction.END : response.action();
         var alphabet = response.alphabet() == null
                 ? et.restlink.ussdgw.api.UssdAlphabet.AUTO : response.alphabet();
-        if (s.originationType() == OriginationType.MAP) {
+        // HTTP-NI continue from AS: HttpServerSbb re-routes NiPushRequestEvent — skip MAP
+        // reply on the synthetic/parked dialog (MapNiPush owns the next UnstructuredSS-Request).
+        boolean httpNi = niHttpPark != null && niHttpPark.isHttpNi(s.correlationId());
+        if (s.originationType() == OriginationType.MAP && !httpNi) {
             switch (action) {
                 case CONTINUE -> {
                     MapDialogHelper.replyContinue(port, s.dialogId(), s.invokeId(),
@@ -184,6 +189,16 @@ public class VirtualSessionBridge {
                     s.setState(VirtualSessionState.COMPLETED);
                 }
             }
+        } else if (httpNi) {
+            if (action == AsAction.ABORT) {
+                s.setDialogAlive(false);
+                s.setState(VirtualSessionState.ABORTED);
+            } else if (action == AsAction.END) {
+                s.setDialogAlive(false);
+                s.setState(VirtualSessionState.COMPLETED);
+            } else {
+                s.setState(VirtualSessionState.ACTIVE);
+            }
         } else {
             s.setDialogAlive(false);
             s.setState(action == AsAction.ABORT
@@ -195,7 +210,7 @@ public class VirtualSessionBridge {
             case ABORT -> CdrPhase.FAILED;
             case END -> CdrPhase.COMPLETED;
         };
-        cdrWrite(s, phase, action.name(), "sync");
+        cdrWrite(s, phase, action.name(), httpNi ? "http-ni" : "sync");
     }
 
     /** Write Profile row; remove when terminal (COMPLETED/ABORTED/ZOMBIE). */

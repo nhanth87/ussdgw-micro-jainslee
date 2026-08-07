@@ -15,7 +15,7 @@ What to load before packaging, admin UI, or AS plane work. Prefer these over re-
 | H2 / PostgreSQL / Flyway | [schema.md](schema.md) |
 | Logging | [logging.md](logging.md) |
 | `app/html/*` admin shell | [AGENTS.md](../../AGENTS.md) — UI files only under `app/html/` |
-| HTTP Sync/Async/Callback / Monitor Hub HTTP | [AGENTS.md](../../AGENTS.md) + `AdminHttpAsModeHandler` |
+| HTTP Sync/Async/Callback / Monitor Hub HTTP | [AGENTS.md](../../AGENTS.md) + `AdminHttpAsModeHandler` + [classic-xml.md](../as-contract/classic-xml.md) |
 | Lab MO / SMPP NI | [AGENTS.md](../../AGENTS.md) Access |
 | HLR face / SRI-SM inbound | [ss7-lab-pair.md](ss7-lab-pair.md) · `HlrFaceService` / `HlrResponderSbb` |
 | Parity vs classic | [../parity-matrix.md](../parity-matrix.md) |
@@ -73,8 +73,9 @@ Peer: OTA [`docs/agents/packaging.md`](../../../../ota-service/ota-sim-push/docs
 - **DB:** file H2 lab or PostgreSQL prod — never `h2:mem` for ship. → [schema.md](schema.md)
 - **`AGENTS.md` stays thin** — durable rules live here / linked docs.
 - **HTTP AS modes:** Sync / Async / Callback = admin HTMX + Monitor Hub hooks; TENANT lab only.
+- **AS HTTP wire (dual-mode):** default **XML** (`text/xml`, classic `<dialog>`) + opt-in **JSON**; per-tenant `http_as_wire_format` / `ussd.as.http.wire-format`. NI sync path `/ussd` + `JSESSIONID`; park with `AdaptiveTimeout`, never `Thread.sleep`. → [classic-xml.md](../as-contract/classic-xml.md)
 - **HLR face:** inbound SRI-SM → `HlrResponderSbb`. Default PROXY_MAP fail-closed. → [ss7-lab-pair.md](ss7-lab-pair.md)
 - **Diameter / SIP:** live MO/NI when RA peer ready; stub only when down.
-- **AS pull:** `JsonPostRequest` raw body — never `CallbackRequest` envelope for pull.
+- **AS pull:** raw body (XML or JSON) — never `CallbackRequest` envelope for pull.
 - **Logging:** Log4j2 → `ussd.log.dir` / `dist/logs/`; SLEE boundary = `SleeEventTrace` only.
 - **Commits:** nhanth87 / Tran Nhan only — no AI co-author trailers.

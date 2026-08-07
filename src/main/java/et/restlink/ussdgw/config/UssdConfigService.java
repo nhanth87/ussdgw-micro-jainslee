@@ -57,6 +57,10 @@ public class UssdConfigService {
     int httpRequestMsProp;
     @ConfigProperty(name = "ussd.http.callback-path", defaultValue = "/as/callback")
     String httpCallbackPathProp;
+    @ConfigProperty(name = "ussd.as.http.wire-format", defaultValue = "xml")
+    String asHttpWireFormatProp;
+    @ConfigProperty(name = "ussd.http.ni-path", defaultValue = "/ussd")
+    String httpNiPathProp;
 
     @ConfigProperty(name = "ussd.grpc.client.enabled", defaultValue = "true")
     boolean grpcClientEnabledProp;
@@ -161,6 +165,21 @@ public class UssdConfigService {
 
     public String httpCallbackPath() {
         return str(RuntimeConfigStore.Keys.HTTP_CALLBACK_PATH, httpCallbackPathProp);
+    }
+
+    /** Global AS HTTP wire format (xml|json); tenant may override via TenantEntity.httpAsWireFormat. */
+    public String asHttpWireFormat() {
+        return str(RuntimeConfigStore.Keys.AS_HTTP_WIRE_FORMAT, asHttpWireFormatProp);
+    }
+
+    /** HTTP NI push path on the AS (default {@code /ussd}). */
+    public String httpNiPath() {
+        return str(RuntimeConfigStore.Keys.HTTP_NI_PATH, httpNiPathProp);
+    }
+
+    /** MAP plane enabled (same key as SS7 apply {@code ussd.map.enabled}). */
+    public boolean mapEnabled() {
+        return bool(RuntimeConfigStore.Keys.MAP_ENABLED, false);
     }
 
     public boolean grpcClientEnabled() {

@@ -3,12 +3,18 @@ info:
   title: RestLink USSD GW — Application Server API
   version: 1.0.0
   description: |
-    Greenfield AS contract (not classic XmlMAPDialog).
+    Dual-mode HTTP AS contract: classic XmlMAPDialog-compatible **text/xml** (default)
+    plus greenfield **application/json**. Per-tenant `http_as_wire_format` /
+    global `ussd.as.http.wire-format` (blank → XML).
+
+    XML dialog elements, NI path `/ussd`, JSESSIONID, emptyDialogHandshake, and
+    AdaptiveTimeout parking: see classic-xml.md.
 
     Modes:
     - SYNC — pull returns AsResponse with async=false; GW applies CONTINUE/END on live MAP dialog.
     - ASYNC_ACK — pull returns async=true; AS later POSTs /as/callback (or gRPC Callback) while dialog may still be open.
     - BRIDGE — if AS is late past adaptive gate and bridge is armed, GW releases MAP with wait text then NI-pushes on late callback.
+    - CLASSIC_NI_SYNC — AS POSTs to /ussd (configurable); multi-turn with JSESSIONID; HTTP response parked until MAP progress (no Thread.sleep).
 paths:
   /ussd/pull:
     post:
@@ -19,6 +25,18 @@ paths:
           application/json:
             schema:
               $ref: '#/components/schemas/AsRequest'
+          text/xml:
+            schema:
+              type: string
+              description: Classic XmlMAPDialog-compatible root element dialog (see classic-xml.md)
+            example: |
+              <?xml version="1.0" encoding="UTF-8"?>
+              <dialog type="Begin" appCntx="networkUnstructuredSsContext_version2"
+                      networkId="0" localId="corr-1" mapMessagesSize="1">
+                <processUnstructuredSSRequest_Request dataCodingScheme="15" string="*100#">
+                  <msisdn nai="international_number" npi="ISDN" number="251911000001"/>
+                </processUnstructuredSSRequest_Request>
+              </dialog>
       responses:
         '200':
           description: Immediate menu
@@ -26,6 +44,10 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/AsResponse'
+            text/xml:
+              schema:
+                type: string
+                description: Classic dialog XML response (CONTINUE/END/ABORT mapped from MAP message children)
   /as/callback:
     post:
       summary: Async callback into gateway (unblock / bridge reconcile)
@@ -35,9 +57,48 @@ paths:
           application/json:
             schema:
               $ref: '#/components/schemas/AsResponse'
+          text/xml:
+            schema:
+              type: string
+              description: Classic dialog XML late response / ack (dual-mode)
       responses:
         '202':
           description: Accepted
+  /ussd:
+    post:
+      summary: Classic NI sync ingress (default ussd.http.ni-path)
+      description: |
+        Multi-turn NI dialog. First response may Set-Cookie JSESSIONID;
+        subsequent requests must send Cookie. emptyDialogHandshake on dialog
+        attributes triggers empty MAP open before payload. Parked responses
+        use AdaptiveTimeout — never Thread.sleep.
+      requestBody:
+        required: true
+        content:
+          text/xml:
+            schema:
+              type: string
+              description: Classic NI dialog (unstructuredSSRequest_Request / Notify + msisdn)
+            example: |
+              <?xml version="1.0" encoding="UTF-8"?>
+              <dialog mapMessagesSize="1" emptyDialogHandshake="false">
+                <unstructuredSSRequest_Request dataCodingScheme="15" string="Press 1 to confirm">
+                  <msisdn nai="international_number" npi="ISDN" number="251911000001"/>
+                </unstructuredSSRequest_Request>
+              </dialog>
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AsRequest'
+      responses:
+        '200':
+          description: NI turn response (may be delayed until MAP dialog advances)
+          content:
+            text/xml:
+              schema:
+                type: string
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AsResponse'
 components:
   schemas:
     AsRequest:

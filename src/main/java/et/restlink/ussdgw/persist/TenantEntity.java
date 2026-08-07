@@ -41,6 +41,10 @@ public class TenantEntity extends PanacheEntityBase {
     @Column(name = "max_tps", nullable = false)
     public int maxTps = 50;
 
+    /** HTTP AS pull/push body format: {@code XML} (default) or {@code JSON}. */
+    @Column(name = "http_as_wire_format", length = 8, nullable = false)
+    public String httpAsWireFormat = "XML";
+
     @Column(name = "created_at", nullable = false)
     public Instant createdAt = Instant.now();
 

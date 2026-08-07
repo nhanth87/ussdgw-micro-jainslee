@@ -4,7 +4,7 @@
 
 Thin index for agents. Durable detail → [`docs/agents/`](docs/agents/) — start at [`docs/agents/README.md`](docs/agents/README.md). **Before admin/UI/packaging edits:** [`lessons.md`](docs/agents/lessons.md) + [`skills.md`](docs/agents/skills.md).
 
-Greenfield RestLink **USSD** gateway (3GPP **pull/MO** + **push/NI**) that **replaces** classic WildFly [`ussdgateway`](../../../ussdgateway) / [`nhanth87/ussdgw`](https://github.com/nhanth87/ussdgw) `core/`. Wire contracts = **new** JSON/proto. **Not** SIM OTA / CAP / fleet / `/sendota`.
+Greenfield RestLink **USSD** gateway (3GPP **pull/MO** + **push/NI**) that **replaces** classic WildFly [`ussdgateway`](../../../ussdgateway) / [`nhanth87/ussdgw`](https://github.com/nhanth87/ussdgw) `core/`. HTTP AS wire = **dual-mode** (classic XmlMAPDialog-compatible **XML default** + greenfield **JSON**, per-tenant); gRPC JSON/proto as documented. **Not** SIM OTA / CAP / fleet / `/sendota`.
 
 ### Migration law (non-negotiable)
 
@@ -12,7 +12,7 @@ Greenfield RestLink **USSD** gateway (3GPP **pull/MO** + **push/NI**) that **rep
 |-------|-----------------|-------|
 | **Behavior** | Classic `ussdgw/core` (Parent/Child/Http/Grpc/Sip/Sri + session-bridge) + 3GPP USSD | Conflate with ota-sim-push product semantics |
 | **Admin UX shell** | OTA [`app/html/admin/`](../../ota-service/ota-sim-push/app/html/admin/) + `AdminPageRenderer` **layout only** | Fleet / CAP / portal OTA campaigns / Ki |
-| **AS wire** | [`docs/as-contract/`](docs/as-contract/) greenfield | Drop-in XmlMAPDialog |
+| **AS wire** | [`docs/as-contract/`](docs/as-contract/) — XML default + JSON; [`classic-xml.md`](docs/as-contract/classic-xml.md) | Assume JSON-only; invent non-classic XML tags |
 | **Access planes** | MAP + Diameter + SIP/USSI + SMPP live (stubs only when peer down) | Leave Diameter/SIP as permanent STUB_QUEUED |
 
 ## Topic index
@@ -42,7 +42,7 @@ Greenfield RestLink **USSD** gateway (3GPP **pull/MO** + **push/NI**) that **rep
 - **SCTP** — verify with `ss` / `/proc/net/sctp/eps`, **not** `netstat`. → [ss7-lab-pair](docs/agents/ss7-lab-pair.md)
 - **Sim persist XML** — never leave corrupt `*sccp*.xml` (`<1>` keys). Validate Jackson parse; quarantine + replace seed; smoke Start. → [ss7-lab-pair](docs/agents/ss7-lab-pair.md) · jSS7 AGENTS
 - **SBB handlers** — catch **`Throwable`** in every `onEvent`; end/cancel MAP dialogs; `IN SBB=` count must match `OUT SBB=`.
-- **HTTP/gRPC** — RA **callbacks** only — never 50ms timer poll. Pull body = `JsonPostRequest` raw JSON — **not** `CallbackRequest` envelope.
+- **HTTP/gRPC** — RA **callbacks** only — never 50ms timer poll. Pull body = raw wire (XML default or JSON per tenant) — **not** `CallbackRequest` envelope. Classic **NI sync** on `ussd.http.ni-path` (default `/ussd`) with **JSESSIONID**; park HTTP via async + **`AdaptiveTimeout`** — never `Thread.sleep`.
 - **HLR face** — inbound SRI-SM: `ussd.hlr.mode` default **PROXY_MAP fail-closed**; no silent FAKE; upper GT must not loop to local. → [ss7-lab-pair](docs/agents/ss7-lab-pair.md)
 - **TENANT login** — **username === tenantId**. RestLink = dist brand only.
 - **Flyway / DB** — lab **file H2** (`./data/ussdgw`, PG-mode) or **PostgreSQL** via `configs` / `QUARKUS_DATASOURCE_*`. Single `V1__ussdgw_baseline.sql`; wipe lab H2 / reset `flyway_schema_history` after squash. Boot guard `UssdSchemaInitializer`. Never `h2:mem` for ship. → [schema](docs/agents/schema.md)
@@ -88,7 +88,7 @@ Detail: [logging.md](docs/agents/logging.md).
 - Leave corrupt jSS7 sim persist XML or hand-edit illegal tags.
 - Treat repo-root `app/` / `build/` as runtime — runtime is **`dist/`** only.
 - Assume git `dist/app`+`configs` alone is copy-and-run — **missing `lib/`** until `./build/package-dist.sh`.
-- Use `CallbackRequest` for AS **pull**; poll HTTP/gRPC with timers.
+- Use `CallbackRequest` for AS **pull**; poll HTTP/gRPC with timers; assume JSON-only AS wire; `Thread.sleep` on NI HTTP park.
 - Silent FAKE HLR when mode is PROXY_*; point `upper-gt` at self.
 - Port OTA fleet/CAP/`/sendota` into this USSD GW.
 - Leave raw `{{TOKEN}}` in browser HTML — always seed vars (OTA admin lesson).
@@ -110,7 +110,7 @@ Lab AS sims: `tools/as-http-sim.py`, `tools/as-grpc-json-sim.py`.
 ## Scope (short)
 
 - Access PULL/PUSH: MAP + Diameter + SIP/USSI live when peer ready (stub only when down); SMPP lab MO + optional `submit_sm` NI.
-- AS modes: **SYNC** / **ASYNC_ACK** / **BRIDGE** (adaptive EWMA gate).
+- AS modes: **SYNC** / **ASYNC_ACK** / **BRIDGE** (adaptive EWMA gate); HTTP wire **XML|JSON** (default XML); classic NI sync + parked HTTP gated by `AdaptiveTimeout`.
 - Admin HTMX + Monitor Hub (`/admin/ss7|smpp|http` → hub tabs); HTTP Sync/Async/Callback panels.
 - HLR face: `FAKE|PROXY_MAP|PROXY_DIAMETER|FAKE_THEN_RESOLVE` (default PROXY_MAP fail-closed).
 - Saga: `ProfileFacility` table `ussdTx`; campaigns; TenantGuard; CDR async flusher.
