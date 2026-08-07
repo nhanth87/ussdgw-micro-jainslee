@@ -23,6 +23,27 @@
 | Dist | WildFly DU | RestLink/Ussdgw fast-jar + `dist-package-script.sh` |
 | Jolokia | Classic ops | **Intentional non-port** — Monitor Hub + HTMX admin |
 
+## Classic-parity clarifications
+
+Where classic gets a guarantee from its SBB tree, this gateway has to state it explicitly. These are
+the same behavior, not new semantics.
+
+| Guarantee | Classic mechanism | ussdgw-jainslee mechanism |
+|-----------|-------------------|---------------------------|
+| SRI-SM answer reaches **its own** pending NI push | `HttpServerSbb` creates a private `SriSbb` child per push; the answer arrives on that child's own MAP dialog activity, so an unmatched answer resolves to nothing | `PendingSriRegistry` keyed strictly on the outbound correlation id; a miss returns empty. Plus TTL (`ussd.sri.pending-ttl-ms`) because an explicit map can leak where an activity cannot |
+| Upper HLR answer reaches **its own** inbound dialog | Same per-query child correlation | `PendingHlrProxyRegistry` keyed on the outbound correlation; `takeAny()` removed. TTL expiry **aborts** the still-open inbound dialog (`ussd.hlr.proxy.pending-ttl-ms`) |
+| **One response per inbound SRI-SM dialog** | Classic has no `FAKE_THEN_RESOLVE`, so the case cannot arise | `Pending#enrichOnly` marks the leg whose inbound dialog `doFake` already closed; the upper answer only refreshes `HlrLocationCache` |
+| `networkId` on the HTTP NI leg | `xmlMAPDialog.getNetworkId()` off the AS dialog | `<dialog networkId>` / JSON `networkId` → authenticated tenant → `ussd.http.ni.default-network-id` |
+| Internal error on a MAP leg | Dialog ended toward the subscriber rather than left hanging | `MapUssdParentSbb.endDialogOnFailure` — `replyAndEnd` with the hard-fail text on an MS-facing leg, `abort` otherwise, nothing on an already-terminal dialog |
+
+### Deliberate divergence
+
+- **NI `/ussd` authentication.** Classic shipped the ingress with no application-level auth; it was
+  reachable only from an internal VLAN. An unauthenticated POST here fires a real
+  UnstructuredSS-Request at an arbitrary MSISDN, so the gateway requires a tenant or admin API key by
+  default (`ussd.http.ni.auth-required=true`) and rejects in the request's own wire format (classic
+  `<dialog>` XML or JSON). A lab opts out explicitly.
+
 ## Intentional non-ports
 
 - **Jolokia** management — replaced by Monitor Hub + disk admin shell.
