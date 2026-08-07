@@ -27,6 +27,7 @@ Greenfield **Digicom-ET USSDGW** (code packages `et.restlink.*`) — 3GPP **pull
 | Fast-jar dist (OTA peer) | OTA [`packaging.md`](../../ota-service/ota-sim-push/docs/agents/packaging.md) · [`skills.md` § Dist](docs/agents/skills.md) |
 | Schema H2 / PostgreSQL | [`schema.md`](docs/agents/schema.md) |
 | SS7 lab + HLR face | [`ss7-lab-pair.md`](docs/agents/ss7-lab-pair.md) · admin `/admin/hlr` |
+| Digicom ↔ Balance Plus (live) | [`ss7-lab-pair.md` § Digicom carrier](docs/agents/ss7-lab-pair.md) — SCTP/IPSP **server**, RC **12**, SPC **1470**, listen **2011/2019**, GT **251971200490**; seed `build/ss7-digicom-balance.json` = server `configs/ss7-digicom-balance.json` |
 | Parity vs classic | [`docs/parity-matrix.md`](docs/parity-matrix.md) |
 | AS contract | [`docs/as-contract/`](docs/as-contract/) |
 
@@ -39,7 +40,7 @@ Greenfield **Digicom-ET USSDGW** (code packages `et.restlink.*`) — 3GPP **pull
 - **Prove the artifact, not the source** — before debugging runtime: artifact mtime vs source, `jar tf ussdgw-app.jar | grep <NewClass>`, classpath of the *running* PID. Green `mvn test` ≠ deployed. Never trust `mvn -q test` alone (`Tests run: 0` looks green). → [lessons](docs/agents/lessons.md)
 - **Log4j2 ONLY** — `log4j-core` + `log4j2.xml` → `dist/logs/` (`ussd.log.dir`); never `/tmp`; never dual `SleeEventTrace`+`LOG.info`; never `log4j2-jboss-logmanager` / `quarkus.log.file*`. → [logging](docs/agents/logging.md)
 - **Link status truth** — see section below; `ss7.live` / `smpp.live` via `LinkStatusService` only (SCTP+M3UA ACTIVE / bound ESME). Never LISTEN-alone, Apply-once, or UI badge fixes.
-- **SCTP** — verify with `ss -ln --sctp` / `/proc/net/sctp/{eps,assocs}`, **not** `netstat` (empty netstat ≠ down; `map.enabled=false` ⇒ no listen 8013). → [ss7-lab-pair](docs/agents/ss7-lab-pair.md) · [lessons](docs/agents/lessons.md)
+- **SCTP** — verify with `ss -ln --sctp` / `/proc/net/sctp/{eps,assocs}`, **not** `netstat` (empty netstat ≠ down; `map.enabled=false` ⇒ no listen 8013). Digicom↔Balance Plus: listen **2011/2019**, RC **12**, IPSP+SCTP **server** — [ss7-lab-pair § Digicom](docs/agents/ss7-lab-pair.md). → [lessons](docs/agents/lessons.md)
 - **Sim persist XML** — never leave corrupt `*sccp*.xml` (`<1>` keys). Validate Jackson parse; quarantine + replace seed; smoke Start. → [ss7-lab-pair](docs/agents/ss7-lab-pair.md) · jSS7 AGENTS
 - **SBB handlers** — catch **`Throwable`** in every `onEvent`; end/cancel MAP dialogs; `IN SBB=` count must match `OUT SBB=`.
 - **Bridge idempotency** — a MAP reply / NI push may only follow a **won CAS**, never a read-only state check: `claimForAsResponse` (`AWAITING_AS|S1_RELEASED → RESPONDING`) and `onGateExpired` (returns `false` when it loses). Never `get()`+full `put()` after a CAS — it reverts concurrent single-field writes. Gate tick = `ConcurrentExecution.SKIP` + per-session `catch (Throwable)` + O(due) deadline index; one bad session must never starve every parked dialog. → [skills.md](docs/agents/skills.md)

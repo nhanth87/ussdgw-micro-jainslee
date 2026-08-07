@@ -10,7 +10,7 @@
     "links": [
       {
         "name": "L1-BP-1404",
-        "type": "client",
+        "type": "server",
         "channel": "sctp",
         "local": "172.16.144.163:2011",
         "peer": "10.177.55.241:2501",
@@ -18,7 +18,7 @@
       },
       {
         "name": "L2-BP-1403",
-        "type": "client",
+        "type": "server",
         "channel": "sctp",
         "local": "172.16.144.163:2019",
         "peer": "10.177.54.241:2502",
@@ -32,8 +32,9 @@
         "name": "AS-BP-1404",
         "mode": "loadshare",
         "functionality": "ipsp",
-        "ipsp": "client",
-        "routingContext": 101,
+        "ipsp": "server",
+        "exchangeType": "DE",
+        "routingContext": 12,
         "links": [
           "L1-BP-1404"
         ]
@@ -42,8 +43,9 @@
         "name": "AS-BP-1403",
         "mode": "loadshare",
         "functionality": "ipsp",
-        "ipsp": "client",
-        "routingContext": 101,
+        "ipsp": "server",
+        "exchangeType": "DE",
+        "routingContext": 12,
         "links": [
           "L2-BP-1403"
         ]

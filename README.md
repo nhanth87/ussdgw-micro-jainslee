@@ -80,9 +80,9 @@ Old ussdgw lived on **`172.16.144.167`**. Micro-jainslee carrier face is **`172.
 | Ours (SCP / Digicom) | Peer (Balance Plus) |
 |----------------------|---------------------|
 | IP **172.16.144.163** · SPC **1470** · GT **251971200490** | |
-| **IPSP client** · RC **101** · MAP SSN **8** (+ HLR face **6**) | |
-| SCTP client **:2011** → | **10.177.55.241:2501** SPC **1404** |
-| SCTP client **:2019** → | **10.177.54.241:2502** SPC **1403** |
+| **IPSP server** · RC **12** · MAP SSN **8** (+ HLR face **6**) | |
+| SCTP server **:2011** ← | **10.177.55.241:2501** SPC **1404** (client) |
+| SCTP server **:2019** ← | **10.177.54.241:2502** SPC **1403** (client) |
 
 Two separate M3UA AS (one link each) — not one AS with two links:
 
@@ -92,7 +92,7 @@ Two separate M3UA AS (one link each) — not one AS with two links:
     "links": [
       {
         "name": "L1-BP-1404",
-        "type": "client",
+        "type": "server",
         "channel": "sctp",
         "local": "172.16.144.163:2011",
         "peer": "10.177.55.241:2501",
@@ -100,7 +100,7 @@ Two separate M3UA AS (one link each) — not one AS with two links:
       },
       {
         "name": "L2-BP-1403",
-        "type": "client",
+        "type": "server",
         "channel": "sctp",
         "local": "172.16.144.163:2019",
         "peer": "10.177.54.241:2502",
@@ -114,16 +114,18 @@ Two separate M3UA AS (one link each) — not one AS with two links:
         "name": "AS-BP-1404",
         "mode": "loadshare",
         "functionality": "ipsp",
-        "ipsp": "client",
-        "routingContext": 101,
+        "ipsp": "server",
+        "exchangeType": "DE",
+        "routingContext": 12,
         "links": ["L1-BP-1404"]
       },
       {
         "name": "AS-BP-1403",
         "mode": "loadshare",
         "functionality": "ipsp",
-        "ipsp": "client",
-        "routingContext": 101,
+        "ipsp": "server",
+        "exchangeType": "DE",
+        "routingContext": 12,
         "links": ["L2-BP-1403"]
       }
     ],
@@ -151,11 +153,12 @@ ussd.map.hlr-ssn=6
 sudo systemctl stop ussdgw-ss7sim && sudo systemctl disable ussdgw-ss7sim
 # after editing configs/ss7-digicom-balance.json
 sudo systemctl restart ussdgw
-ss -ln --sctp   # expect client assoc toward .241:2501 / .241:2502 (not lab :8013)
+ss -ln --sctp   # expect LISTEN on .163:2011 and :2019
 curl -sS -H 'X-USSD-Admin-Key: ussd-admin' http://127.0.0.1:8088/admin/ss7/status
+# LIVE proof (2026-08-07): ss7.live after ASPAC RC12 — build/pcap/m3ua-aspac-rc12-20260807-135839.pcap
 ```
 
-Lab loopback pair remains [`build/ss7-lab.json`](build/ss7-lab.json) / [`docs/agents/ss7-lab-pair.md`](docs/agents/ss7-lab-pair.md). Pcaps for RC/ASP debug: `build/pcap/`.
+Lab loopback pair remains [`build/ss7-lab.json`](build/ss7-lab.json) / [`docs/agents/ss7-lab-pair.md`](docs/agents/ss7-lab-pair.md). Carrier RC12 success pcap: `build/pcap/m3ua-aspac-rc12-20260807-135839.pcap`.
 
 ### Admin
 
