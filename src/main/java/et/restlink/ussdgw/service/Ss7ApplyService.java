@@ -18,6 +18,11 @@ import jakarta.inject.Inject;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Locale;
+import java.util.Map;
 import java.util.Optional;
 
 import org.apache.logging.log4j.LogManager;
@@ -120,12 +125,18 @@ public class Ss7ApplyService {
             return "ss7=skipped(no-config;set-ussd.map.enabled-or-config-file)";
         }
         try {
-            wireSs7Ra();
+            Ss7Config full = resolveSs7Config();
+            if (full != null) {
+                warnSctpIpspRoleMismatch(full);
+            }
+            wireSs7Ra(full);
             if (ss7Ra == null || !ss7Ra.isActive()) {
                 throw new IllegalStateException("ra-jss7 registered but not active");
             }
-            String detail = "ss7=wired;source=" + (haveFile ? "file" : "props")
-                    + ";links=[" + hostIp() + ":" + hostPort() + "→" + peerIp() + ":" + peerPort() + "]";
+            String detail = formatWiredDetail(
+                    haveFile,
+                    full,
+                    hostIp(), hostPort(), peerIp(), peerPort());
             linkStatus.setSs7AppliedDetail(detail);
             return detail;
         } catch (RuntimeException ex) {
@@ -134,12 +145,97 @@ public class Ss7ApplyService {
         }
     }
 
-    private void wireSs7Ra() {
+    /**
+     * Applied-detail for {@code ss7.detail} / admin plane.
+     * When a config-file loads, summarize real SCTP endpoints + M3UA AS (ipsp + RC) —
+     * never the props fallback {@code 127.0.0.1:8013→8014}.
+     * Arrow: {@code local←peer} = SCTP server (peer INIT); {@code local→peer} = SCTP client.
+     */
+    static String formatWiredDetail(boolean configFileConfigured, Ss7Config cfg,
+                                    String hostIp, int hostPort, String peerIp, int peerPort) {
+        String propsLinks = hostIp + ":" + hostPort + "→" + peerIp + ":" + peerPort;
+        if (configFileConfigured && cfg == null) {
+            return "ss7=wired;source=file-missing;links=[" + propsLinks + "]";
+        }
+        if (cfg == null || cfg.sctp() == null || cfg.sctp().links() == null
+                || cfg.sctp().links().isEmpty()) {
+            return "ss7=wired;source=props;links=[" + propsLinks + "]";
+        }
+        List<String> sctpParts = new ArrayList<>();
+        for (Ss7Config.Link link : cfg.sctp().links()) {
+            if (link == null) {
+                continue;
+            }
+            String type = link.type() == null ? "?" : link.type().toLowerCase(Locale.ROOT);
+            String arrow = "server".equals(type) ? "←" : "→";
+            String name = link.name() == null ? "?" : link.name();
+            String local = link.local() == null ? "?" : link.local();
+            String peer = link.peer() == null ? "?" : link.peer();
+            sctpParts.add(name + ":" + type + ":" + local + arrow + peer);
+        }
+        List<String> m3uaParts = new ArrayList<>();
+        if (cfg.m3ua() != null && cfg.m3ua().as() != null) {
+            for (Ss7Config.As as : cfg.m3ua().as()) {
+                if (as == null) {
+                    continue;
+                }
+                String ipsp = as.ipsp() == null ? "?" : as.ipsp().toLowerCase(Locale.ROOT);
+                String rc = as.routingContext() == null ? "?" : String.valueOf(as.routingContext());
+                String name = as.name() == null ? "?" : as.name();
+                m3uaParts.add(name + ":ipsp/" + ipsp + "/rc=" + rc);
+            }
+        }
+        StringBuilder sb = new StringBuilder("ss7=wired;source=file;sctp=[")
+                .append(String.join(",", sctpParts)).append("]");
+        if (!m3uaParts.isEmpty()) {
+            sb.append(";m3ua=[").append(String.join(",", m3uaParts)).append("]");
+        }
+        return sb.toString();
+    }
+
+    /** RFC/SP: SCTP association role and M3UA IPSP role must agree per linked ASP. */
+    static void warnSctpIpspRoleMismatch(Ss7Config cfg) {
+        if (cfg == null || cfg.sctp() == null || cfg.m3ua() == null) {
+            return;
+        }
+        Map<String, String> linkType = new HashMap<>();
+        if (cfg.sctp().links() != null) {
+            for (Ss7Config.Link link : cfg.sctp().links()) {
+                if (link != null && link.name() != null) {
+                    linkType.put(link.name(), link.type() == null ? "" : link.type());
+                }
+            }
+        }
+        if (cfg.m3ua().as() == null) {
+            return;
+        }
+        for (Ss7Config.As as : cfg.m3ua().as()) {
+            if (as == null || as.links() == null) {
+                continue;
+            }
+            String ipsp = as.ipsp() == null ? "" : as.ipsp().toLowerCase(Locale.ROOT);
+            if (ipsp.isBlank()) {
+                continue;
+            }
+            for (String linkName : as.links()) {
+                String type = linkType.getOrDefault(linkName, "").toLowerCase(Locale.ROOT);
+                if (type.isBlank()) {
+                    continue;
+                }
+                if (!type.equals(ipsp)) {
+                    LOG.warn("SCTP/M3UA role mismatch: AS {} ipsp={} but link {} type={} "
+                                    + "(RFC 4666 IPSP + RFC 4960 association initiator must align)",
+                            as.name(), ipsp, linkName, type);
+                }
+            }
+        }
+    }
+
+    private void wireSs7Ra(Ss7Config full) {
         Path persist = Ss7PersistDirs.ensureConfigured(persistDir());
         LOG.info("jSS7 persist dir={}", persist);
 
         Ss7ResourceAdaptor ra = new Ss7ResourceAdaptor();
-        Ss7Config full = resolveSs7Config();
         if (full != null) {
             ra.setSs7Config(full);
         } else {
