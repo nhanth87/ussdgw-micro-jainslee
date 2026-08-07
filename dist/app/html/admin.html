@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
-  <title>RestLink USSD GW</title>
+  <title>Digicom-ET USSDGW</title>
   <script src="https://unpkg.com/htmx.org@2.0.4"></script>
   <style>
     :root { --ink:#1a2332; --accent:#0b6e4f; --line:#c5d0de; --ok:#0b6e4f; --warn:#b45309; --mute:#64748b; }
@@ -54,15 +54,15 @@
 </head>
 <body>
 <header>
-  <h1 class="brand">RestLink USSD GW</h1>
+  <h1 class="brand">Digicom-ET USSDGW</h1>
   <p class="tag">Greenfield gateway — MAP / Diameter / SMPP / SIP access + HTTP/gRPC AS + adaptive bridge.
     Plane config &amp; live status live on Monitor Hub (OTA pattern).</p>
   <nav>
     <button hx-get="/admin/status" hx-target="#panel" hx-swap="innerHTML"
             hx-headers='{"X-USSD-Admin-Key":"ussd-admin"}'>Status</button>
-    <a class="plane" href="/telemetry/?tab=ss7&amp;key=ussd-admin">SS7</a>
-    <a class="plane" href="/telemetry/?tab=smpp&amp;key=ussd-admin">SMPP</a>
-    <a class="plane" href="/telemetry/?tab=http&amp;key=ussd-admin">HTTP</a>
+    <a class="plane" href="/telemetry/?tab=ss7">SS7</a>
+    <a class="plane" href="/telemetry/?tab=smpp">SMPP</a>
+    <a class="plane" href="/telemetry/?tab=http">HTTP</a>
     <button hx-get="/admin/ss7/config" hx-target="#panel" hx-swap="innerHTML"
             hx-headers='{"X-USSD-Admin-Key":"ussd-admin"}'>SS7 form</button>
     <button hx-get="/admin/smpp/config" hx-target="#panel" hx-swap="innerHTML"
@@ -91,7 +91,7 @@
             hx-headers='{"X-USSD-Admin-Key":"ussd-admin"}'>CDR</button>
     <button hx-get="/admin/bridge" hx-target="#panel" hx-swap="innerHTML"
             hx-headers='{"X-USSD-Admin-Key":"ussd-admin"}'>Bridge</button>
-    <a href="/telemetry/?key=ussd-admin">Monitor Hub</a>
+    <a href="/telemetry/">Monitor Hub</a>
   </nav>
 </header>
 <main>

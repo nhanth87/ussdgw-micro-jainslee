@@ -36,11 +36,12 @@ import java.util.Optional;
 
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
+import org.eclipse.microprofile.config.inject.ConfigProperty;
 
 /**
  * Admin + Monitor Hub HTTP surface (OTA pattern).
- * Plane GETs {@code /admin/ss7|smpp|http} redirect to Monitor Hub tabs;
- * form editors remain under {@code /admin/ss7/config} (and smpp/http siblings).
+ * Plane GETs {@code /admin/ss7|smpp|http} serve Routing-style form shells (no hub redirect).
+ * {@code /admin/ss7/config} aliases the same panel for POST/HTMX. Monitor Hub = metrics only.
  */
 @ApplicationScoped
 public class AdminHttpHandler {
@@ -70,9 +71,30 @@ public class AdminHttpHandler {
     @Inject AsPullClient asPull;
     @Inject UssdSagaCoordinator saga;
 
+    /**
+     * {@code Secure} on the admin session cookie. Defaults to on; the plain-HTTP Digicom lab
+     * (nginx :80 → :8088, no TLS) sets {@code ussd.admin.cookie-secure=false}. Field initialisers
+     * mirror {@code defaultValue} so non-CDI construction in tests is fail-closed too.
+     */
+    @ConfigProperty(name = "ussd.admin.cookie-secure", defaultValue = "true")
+    boolean cookieSecure = true;
+
+    /** Double-submit CSRF on cookie-authenticated POSTs. Lab escape hatch: set to false. */
+    @ConfigProperty(name = "ussd.admin.csrf.enabled", defaultValue = "true")
+    boolean csrfEnabled = true;
+
     private volatile MonitorHandler monitorHub;
 
+    /**
+     * Admin HTTP reply. Headers stay a flat {@code Map} to match {@code HttpResponseExCommand},
+     * but {@code Set-Cookie} may carry multiple values joined by {@link #SET_COOKIE_SEP} —
+     * ra-http-server expands them with {@code addHeader} so login can emit session + CSRF
+     * cookies on one 302.
+     */
     public record HttpReply(int status, String contentType, byte[] body, Map<String, String> headers) {
+        /** Joiner for multiple Set-Cookie values inside the flat header map. */
+        public static final String SET_COOKIE_SEP = "\n";
+
         public static HttpReply html(String html) {
             return new HttpReply(200, "text/html; charset=utf-8",
                     html.getBytes(StandardCharsets.UTF_8), Map.of());
@@ -105,6 +127,33 @@ public class AdminHttpHandler {
             Map<String, String> h = new LinkedHashMap<>(
                     headers == null ? Map.of() : headers);
             h.put(name, value);
+            return new HttpReply(status, contentType, body, Map.copyOf(h));
+        }
+
+        /** Append a Set-Cookie without clobbering ones already on this reply. */
+        public HttpReply addSetCookie(String cookie) {
+            if (cookie == null || cookie.isBlank()) {
+                return this;
+            }
+            Map<String, String> h = new LinkedHashMap<>(
+                    headers == null ? Map.of() : headers);
+            String existing = null;
+            String existingKey = null;
+            for (Map.Entry<String, String> e : h.entrySet()) {
+                if (e.getKey() != null && e.getKey().equalsIgnoreCase("Set-Cookie")) {
+                    existing = e.getValue();
+                    existingKey = e.getKey();
+                    break;
+                }
+            }
+            if (existingKey != null) {
+                h.remove(existingKey);
+            }
+            if (existing == null || existing.isBlank()) {
+                h.put("Set-Cookie", cookie);
+            } else {
+                h.put("Set-Cookie", existing + SET_COOKIE_SEP + cookie);
+            }
             return new HttpReply(status, contentType, body, Map.copyOf(h));
         }
     }
@@ -226,7 +275,8 @@ public class AdminHttpHandler {
         }
         if (p.equals("/admin/logout")) {
             return Optional.of(HttpReply.redirect("/admin/login")
-                    .withHeader("Set-Cookie", SignedSessionCookie.clearCookieHeader()));
+                    .addSetCookie(SignedSessionCookie.clearCookieHeader(cookieSecure))
+                    .addSetCookie(SignedSessionCookie.clearCsrfCookieHeader(cookieSecure)));
         }
 
         // Browser HTML shells require a form-login session cookie (API key alone is not enough).
@@ -235,7 +285,12 @@ public class AdminHttpHandler {
             if (!sessionOk) {
                 return Optional.of(HttpReply.redirect("/admin/login"));
             }
-            Optional<HttpReply> shell = serveShellPage(p, principal.orElse(null));
+            AdminAuthService.Principal shellWho = principal.orElse(null);
+            if (isIdentityAdminPath(p) && !isAdminRole(shellWho)) {
+                return Optional.of(identityForbidden(shellWho));
+            }
+            Optional<HttpReply> shell = serveShellPage(p, shellWho, query)
+                    .map(r -> withCsrfCookie(r, headers));
             if (shell.isPresent()) return shell;
         }
 
@@ -245,31 +300,39 @@ public class AdminHttpHandler {
 
         AdminAuthService.Principal who = principal.orElse(null);
 
+        // User / tenant management creates and re-roles principals — ADMIN only. OPS is scoped
+        // with ADMIN for the SS7 stack editor, not for identity CRUD.
+        if (isIdentityAdminPath(p) && !isAdminRole(who)) {
+            return Optional.of(identityForbidden(who));
+        }
+
         if ("POST".equalsIgnoreCase(method)) {
+            Optional<HttpReply> csrf = csrfFailure(method, headers, who);
+            if (csrf.isPresent()) return csrf;
             Optional<HttpReply> post = handlePost(p, body, who);
             if (post.isPresent()) return post;
         }
 
         String tab = query == null ? null : query.get("tab");
-        String keyQ = query == null ? null : query.get("key");
         return switch (p) {
             case "/admin/status" -> Optional.of(statusHtml());
             case "/admin/status.json" -> Optional.of(statusJson());
-            case "/admin/cdr" -> Optional.of(cdrHtml(query, who));
+            case "/admin/cdr", "/admin/cdr/partial" -> Optional.of(cdrRowsReply(query, who));
             case "/admin/bridge" -> Optional.of(planes.bridgeGet());
-            case "/admin/ss7" -> Optional.of(hubRedirect("ss7", keyQ));
-            case "/admin/smpp" -> Optional.of(hubRedirect("smpp", keyQ));
-            case "/admin/http" -> Optional.of(hubRedirect("http", keyQ));
-            case "/admin/ss7/config" -> Optional.of(planes.ss7Get());
-            case "/admin/smpp/config" -> Optional.of(planes.smppGet());
-            case "/admin/http/config" -> Optional.of(planes.httpGet());
+            case "/admin/ss7", "/admin/ss7/config" -> Optional.of(planes.ss7Get(who));
+            case "/admin/ss7/status" -> Optional.of(planes.ss7StatusGet());
+            case "/admin/hlr", "/admin/hlr/config" -> Optional.of(planes.hlrGet(who));
+            case "/admin/smpp", "/admin/smpp/config" -> Optional.of(planes.smppGet());
+            case "/admin/smpp/status" -> Optional.of(planes.smppStatusGet());
+            case "/admin/http", "/admin/http/config" -> Optional.of(planes.httpGet());
             case "/admin/http/sync" -> Optional.of(httpAsModes.get("sync", who));
             case "/admin/http/async" -> Optional.of(httpAsModes.get("async", who));
             case "/admin/http/callback" -> Optional.of(httpAsModes.get("callback", who));
             case "/admin/grpc" -> Optional.of(planes.grpcGet());
-            case "/admin/routing", "/admin/rules" -> Optional.of(catalog.routingGet(who));
-            case "/admin/tenants" -> Optional.of(catalog.tenantsGet(who));
-            case "/admin/users" -> Optional.of(catalog.usersGet(who));
+            case "/admin/routing", "/admin/rules", "/admin/routing/partial" ->
+                    Optional.of(catalog.routingGet(who));
+            case "/admin/tenants", "/admin/tenants/partial" -> Optional.of(catalog.tenantsGet(who));
+            case "/admin/users", "/admin/users/partial" -> Optional.of(catalog.usersGet(who));
             case "/admin/campaigns" -> Optional.of(campaigns.get(who));
             case "/admin/lab/mo", "/admin/lab-mo" -> Optional.of(labMo.get(who));
             case "/admin", "/admin/" -> Optional.of(statusHtml());
@@ -299,8 +362,56 @@ public class AdminHttpHandler {
                 return HttpReply.text(401, "invalid credentials");
             }
         }
+        // Session + CSRF on the same 302. Multiple Set-Cookie values are newline-joined in the
+        // flat Map and expanded by ra-http-server (addHeader). See HttpReply.addSetCookie.
+        String csrf = SignedSessionCookie.csrfToken(adminAuth.sessionHmacSecret(), token.get());
         return HttpReply.redirect("/admin")
-                .withHeader("Set-Cookie", SignedSessionCookie.setCookieHeader(token.get()));
+                .addSetCookie(SignedSessionCookie.setCookieHeader(token.get(), cookieSecure))
+                .addSetCookie(SignedSessionCookie.setCsrfCookieHeader(csrf, cookieSecure));
+    }
+
+    /** Refresh the JS-readable CSRF companion on every shell page load (HTMX SPA stays current). */
+    private HttpReply withCsrfCookie(HttpReply reply, Map<String, String> headers) {
+        if (!csrfEnabled) return reply;
+        Optional<String> session =
+                SignedSessionCookie.extractFromCookieHeader(headerValue(headers, "Cookie"));
+        if (session.isEmpty()) return reply;
+        String csrf = SignedSessionCookie.csrfToken(adminAuth.sessionHmacSecret(), session.get());
+        if (csrf.isEmpty()) return reply;
+        return reply.addSetCookie(SignedSessionCookie.setCsrfCookieHeader(csrf, cookieSecure));
+    }
+
+    /**
+     * Double-submit CSRF check. Only cookie-authenticated mutations need it: an API-key or Basic
+     * caller supplies its own credential per request, so it cannot be ridden by a foreign origin.
+     */
+    private Optional<HttpReply> csrfFailure(String method, Map<String, String> headers,
+                                            AdminAuthService.Principal who) {
+        if (!csrfEnabled || !"POST".equalsIgnoreCase(method)) return Optional.empty();
+        if (who == null || !who.fromSession()) return Optional.empty();
+        Optional<String> session =
+                SignedSessionCookie.extractFromCookieHeader(headerValue(headers, "Cookie"));
+        if (session.isEmpty()) return Optional.empty();
+        String presented = headerValue(headers, SignedSessionCookie.CSRF_HEADER);
+        if (SignedSessionCookie.csrfMatches(adminAuth.sessionHmacSecret(), session.get(),
+                presented)) {
+            return Optional.empty();
+        }
+        LOG.warn("[admin] CSRF token missing/invalid on session POST by username={}",
+                who.username());
+        return Optional.of(HttpReply.text(403,
+                "CSRF token missing or invalid — reload /admin/login "
+                        + "(lab escape hatch: ussd.admin.csrf.enabled=false)"));
+    }
+
+    private static String headerValue(Map<String, String> headers, String name) {
+        if (headers == null || name == null) return null;
+        String v = headers.get(name);
+        if (v != null) return v;
+        for (Map.Entry<String, String> e : headers.entrySet()) {
+            if (e.getKey() != null && e.getKey().equalsIgnoreCase(name)) return e.getValue();
+        }
+        return null;
     }
 
     private static Map<String, String> parseForm(String body) {
@@ -345,16 +456,39 @@ public class AdminHttpHandler {
         return shellTemplateName(path) != null;
     }
 
-    private Optional<HttpReply> serveShellPage(String path, AdminAuthService.Principal who) {
+    private Optional<HttpReply> serveShellPage(String path, AdminAuthService.Principal who,
+                                               Map<String, String> query) {
         String name = shellTemplateName(path);
         if (name == null || pages == null || nav == null) return Optional.empty();
         boolean loggedIn = who != null && who.fromSession();
         try {
-            return Optional.of(pages.pageWith(name, nav.adminPageVars(loggedIn, Map.of())));
+            Map<String, String> extra = shellExtraVars(name, who, query);
+            return Optional.of(pages.pageWith(name, nav.adminPageVars(loggedIn, extra)));
         } catch (Exception e) {
             LOG.warn("[admin] shell page {}: {}", name, e.toString());
             return Optional.empty();
         }
+    }
+
+    private Map<String, String> shellExtraVars(String name, AdminAuthService.Principal who,
+                                               Map<String, String> query) {
+        return switch (name) {
+            case "cdr.html" -> cdrPageVars(query, who);
+            case "routing.html" -> catalog.routingPageVars(who);
+            case "tenants.html" -> catalog.tenantsPageVars();
+            case "users.html" -> catalog.usersPageVars();
+            case "bridge.html" -> planes.bridgePageVars();
+            case "ss7.html" -> planes.ss7PageVars(who);
+            case "smpp.html" -> planes.smppPageVars();
+            case "http.html" -> planes.httpPageVars();
+            case "grpc.html" -> planes.grpcPageVars();
+            case "diameter.html" -> planes.diameterPageVars();
+            case "sip.html" -> planes.sipPageVars();
+            case "hlr.html" -> planes.hlrPageVars(who);
+            case "campaigns.html" -> campaigns.pageVars(who);
+            case "lab-mo.html" -> labMo.pageVars(who);
+            default -> Map.of();
+        };
     }
 
     static String shellTemplateName(String path) {
@@ -372,11 +506,12 @@ public class AdminHttpHandler {
             case "/admin/http/async" -> "http-async.html";
             case "/admin/http/callback" -> "http-callback.html";
             case "/admin/grpc" -> "grpc.html";
-            case "/admin/diameter" -> "diameter.html";
-            case "/admin/sip" -> "sip.html";
-            case "/admin/ss7/config" -> "ss7.html";
-            case "/admin/smpp/config" -> "smpp.html";
-            case "/admin/http/config" -> "http.html";
+            case "/admin/diameter", "/admin/diameter/config" -> "diameter.html";
+            case "/admin/sip", "/admin/sip/config" -> "sip.html";
+            case "/admin/hlr", "/admin/hlr/config" -> "hlr.html";
+            case "/admin/ss7", "/admin/ss7/config" -> "ss7.html";
+            case "/admin/smpp", "/admin/smpp/config" -> "smpp.html";
+            case "/admin/http", "/admin/http/config" -> "http.html";
             default -> null;
         };
     }
@@ -386,15 +521,10 @@ public class AdminHttpHandler {
         if (path.endsWith("/ss7")) return "ss7";
         if (path.endsWith("/smpp") || path.endsWith("/smpp.html")) return "smpp";
         if (path.endsWith("/http")) return "http";
+        if (path.endsWith("/grpc")) return "grpc";
+        if (path.endsWith("/diameter")) return "diameter";
+        if (path.endsWith("/sip")) return "sip";
         return "all";
-    }
-
-    private static HttpReply hubRedirect(String tab, String key) {
-        StringBuilder loc = new StringBuilder("/telemetry/?tab=").append(tab);
-        if (key != null && !key.isBlank()) {
-            loc.append("&key=").append(key);
-        }
-        return HttpReply.redirect(loc.toString());
     }
 
     static boolean isMonitorHubPath(String path) {
@@ -407,25 +537,33 @@ public class AdminHttpHandler {
                 || path.startsWith("/api/ai");
     }
 
+    /** Inert Monitor Hub assets only — never anything that renders live plane state. */
+    private static final java.util.Set<String> PUBLIC_STATIC_EXTENSIONS = java.util.Set.of(
+            ".js", ".css", ".svg", ".png", ".ico", ".map", ".woff", ".woff2");
+
+    /**
+     * Anonymous GET allowlist for the Monitor Hub. Restricted to static assets by extension:
+     * {@code partial/} fragments render live plane state and metrics, so they need a principal
+     * like every other data surface. The hub shell itself is served to authenticated users.
+     */
     static boolean isPublicMonitorStatic(String method, String path) {
         if (method == null || (!"GET".equalsIgnoreCase(method) && !"HEAD".equalsIgnoreCase(method))) {
             return false;
         }
-        if (path.equals("/telemetry") || path.equals("/telemetry/")) {
-            return true;
-        }
-        if (path.startsWith("/telemetry/")) {
-            String rest = path.substring("/telemetry/".length()).toLowerCase();
-            if (rest.startsWith("partial/")) return true;
-            return rest.endsWith(".js") || rest.endsWith(".css") || rest.endsWith(".html")
-                    || rest.endsWith(".svg") || rest.endsWith(".png") || rest.endsWith(".ico")
-                    || rest.endsWith(".map") || rest.isEmpty();
-        }
-        if (path.startsWith("/admin/ra/")) {
-            String lower = path.toLowerCase();
-            return lower.endsWith(".html") || lower.endsWith(".js") || lower.endsWith(".css");
+        if (path.startsWith("/telemetry/") || path.startsWith("/admin/ra/")) {
+            return hasPublicStaticExtension(path);
         }
         return false;
+    }
+
+    private static boolean hasPublicStaticExtension(String path) {
+        int slash = path.lastIndexOf('/');
+        String file = (slash < 0 ? path : path.substring(slash + 1)).toLowerCase();
+        int dot = file.lastIndexOf('.');
+        if (dot < 0) {
+            return false;
+        }
+        return PUBLIC_STATIC_EXTENSIONS.contains(file.substring(dot));
     }
 
     private static HttpReply toHttpReply(RaAdminHttpResponse r) {
@@ -451,9 +589,14 @@ public class AdminHttpHandler {
                     case "/admin/http/callback" -> Optional.of(httpAsModes.post("callback", body, who));
                     case "/admin/tenants", "/admin/users",
                          "/admin/ss7", "/admin/ss7/config", "/admin/ss7/apply", "/admin/ss7/start", "/admin/ss7/stop",
+                         "/admin/hlr", "/admin/hlr/config", "/admin/hlr/apply",
                          "/admin/smpp", "/admin/smpp/config", "/admin/smpp/apply", "/admin/smpp/start", "/admin/smpp/stop",
                          "/admin/http", "/admin/http/config", "/admin/http/apply", "/admin/http/start", "/admin/http/stop",
                          "/admin/grpc", "/admin/grpc/apply", "/admin/grpc/start", "/admin/grpc/stop",
+                         "/admin/diameter", "/admin/diameter/config", "/admin/diameter/apply",
+                         "/admin/diameter/start", "/admin/diameter/stop",
+                         "/admin/sip", "/admin/sip/config", "/admin/sip/apply",
+                         "/admin/sip/start", "/admin/sip/stop",
                          "/admin/bridge" ->
                             Optional.of(HttpReply.text(403, "forbidden for TENANT role"));
                     default -> Optional.empty();
@@ -462,15 +605,23 @@ public class AdminHttpHandler {
             return switch (p) {
                 case "/admin/ss7", "/admin/ss7/config",
                      "/admin/ss7/apply", "/admin/ss7/start", "/admin/ss7/stop" ->
-                        Optional.of(delegatePlanePost("ss7", p, body));
+                        Optional.of(delegatePlanePost("ss7", p, body, who));
+                case "/admin/hlr", "/admin/hlr/config", "/admin/hlr/apply" ->
+                        Optional.of(delegatePlanePost("hlr", p, body, who));
                 case "/admin/smpp", "/admin/smpp/config",
                      "/admin/smpp/apply", "/admin/smpp/start", "/admin/smpp/stop" ->
-                        Optional.of(delegatePlanePost("smpp", p, body));
+                        Optional.of(delegatePlanePost("smpp", p, body, who));
                 case "/admin/http", "/admin/http/config",
                      "/admin/http/apply", "/admin/http/start", "/admin/http/stop" ->
-                        Optional.of(delegatePlanePost("http", p, body));
+                        Optional.of(delegatePlanePost("http", p, body, who));
                 case "/admin/grpc", "/admin/grpc/apply", "/admin/grpc/start", "/admin/grpc/stop" ->
-                        Optional.of(delegatePlanePost("grpc", p, body));
+                        Optional.of(delegatePlanePost("grpc", p, body, who));
+                case "/admin/diameter", "/admin/diameter/config",
+                     "/admin/diameter/apply", "/admin/diameter/start", "/admin/diameter/stop" ->
+                        Optional.of(delegatePlanePost("diameter", p, body, who));
+                case "/admin/sip", "/admin/sip/config",
+                     "/admin/sip/apply", "/admin/sip/start", "/admin/sip/stop" ->
+                        Optional.of(delegatePlanePost("sip", p, body, who));
                 case "/admin/bridge" -> Optional.of(planes.bridgePost(body));
                 case "/admin/routing", "/admin/rules" -> Optional.of(catalog.routingPost(body, who));
                 case "/admin/tenants" -> Optional.of(catalog.tenantsPost(body, who));
@@ -487,7 +638,8 @@ public class AdminHttpHandler {
         }
     }
 
-    private HttpReply delegatePlanePost(String plane, String path, String body) {
+    private HttpReply delegatePlanePost(String plane, String path, String body,
+                                        AdminAuthService.Principal who) {
         String action = null;
         if (path.endsWith("/apply")) action = "apply";
         else if (path.endsWith("/start")) action = "start";
@@ -500,12 +652,32 @@ public class AdminHttpHandler {
             case "smpp" -> planes.smppPost(effective);
             case "http" -> planes.httpPost(effective);
             case "grpc" -> planes.grpcPost(effective);
-            default -> planes.ss7Post(effective);
+            case "diameter" -> planes.diameterPost(effective);
+            case "sip" -> planes.sipPost(effective);
+            case "hlr" -> planes.hlrPost(effective, who);
+            default -> planes.ss7Post(effective, who);
         };
     }
 
     private boolean isPublicAsset(String p) {
         return p.endsWith(".css") || p.endsWith(".js") || p.endsWith(".svg");
+    }
+
+    /** Admin surfaces that mint or re-role principals. */
+    static boolean isIdentityAdminPath(String p) {
+        return "/admin/users".equals(p) || "/admin/users/partial".equals(p)
+                || "/admin/tenants".equals(p) || "/admin/tenants/partial".equals(p);
+    }
+
+    /** Null principal = internal/automation call path (admin key already resolved to ADMIN). */
+    static boolean isAdminRole(AdminAuthService.Principal who) {
+        return who == null || "ADMIN".equals(who.role());
+    }
+
+    private static HttpReply identityForbidden(AdminAuthService.Principal who) {
+        String role = who == null ? "anonymous" : String.valueOf(who.role());
+        return HttpReply.text(403,
+                "forbidden — /admin/users and /admin/tenants require role ADMIN (have " + role + ")");
     }
 
     private static boolean hasBrowserSession(Optional<AdminAuthService.Principal> principal) {
@@ -549,18 +721,23 @@ public class AdminHttpHandler {
         sb.append(linkStatus.htmlPartial("all"));
         sb.append("</div></div>");
         sb.append("<p class=\"mt-4 text-sm text-ink-mute\">");
-        sb.append("Monitor Hub <a class=\"text-signal hover:underline\" href=\"/telemetry/?tab=ss7\">SS7</a>");
-        sb.append(" · <a class=\"text-signal hover:underline\" href=\"/telemetry/?tab=smpp\">SMPP</a>");
-        sb.append(" · <a class=\"text-signal hover:underline\" href=\"/telemetry/?tab=http\">HTTP</a>");
-        sb.append(" · config <a class=\"text-signal hover:underline\" href=\"/admin/ss7/config\">SS7</a>");
-        sb.append(" · <a class=\"text-signal hover:underline\" href=\"/admin/smpp/config\">SMPP</a>");
+        sb.append("Config <a class=\"text-signal hover:underline\" href=\"/admin/ss7\">SS7</a>");
+        sb.append(" · <a class=\"text-signal hover:underline\" href=\"/admin/hlr\">HLR</a>");
+        sb.append(" · <a class=\"text-signal hover:underline\" href=\"/admin/smpp\">SMPP</a>");
+        sb.append(" · <a class=\"text-signal hover:underline\" href=\"/admin/http\">HTTP</a>");
+        sb.append(" · <a class=\"text-signal hover:underline\" href=\"/admin/grpc\">gRPC</a>");
+        sb.append(" · <a class=\"text-signal hover:underline\" href=\"/admin/diameter\">Diameter</a>");
+        sb.append(" · <a class=\"text-signal hover:underline\" href=\"/admin/sip\">SIP</a>");
+        sb.append(" · <a class=\"text-signal hover:underline\" href=\"/admin/lab-mo\">Lab MO</a>");
         sb.append(" · <a class=\"text-signal hover:underline\" href=\"/admin/bridge\">Bridge</a>");
+        sb.append(" · Hub <a class=\"text-signal hover:underline\" href=\"/telemetry/?tab=ss7\">SS7</a>");
+        sb.append(" · <a class=\"text-signal hover:underline\" href=\"/telemetry/?tab=smpp\">SMPP</a>");
         sb.append(" · <a class=\"text-signal hover:underline\" href=\"/admin/cdr\">CDR</a>");
         sb.append(" · JSON <code class=\"font-mono text-slate-300\">/admin/status.json</code>");
         sb.append("</p>");
-        // Keep link-truth fields for operators who scrape the fragment
-        sb.append("<pre class=\"mt-4 max-h-40 overflow-auto rounded-md border border-ink-line bg-ink p-3 ")
-                .append("font-mono text-xs text-ink-mute\">");
+        sb.append("<details class=\"mt-4 rounded-md border border-ink-line bg-ink-panel/60 p-3\">");
+        sb.append("<summary class=\"cursor-pointer text-xs uppercase tracking-[0.18em] text-ink-mute\">Link truth dump</summary>");
+        sb.append("<pre class=\"mt-2 max-h-40 overflow-auto font-mono text-xs text-ink-mute\">");
         for (String k : new String[]{
                 "ss7.live", "ss7.detail", "smpp.detail", "http.detail", "grpc.detail",
                 "diameter.live", "diameter.detail", "sip.live", "sip.detail",
@@ -573,7 +750,7 @@ public class AdminHttpHandler {
                 sb.append(esc(k)).append(" = ").append(esc(String.valueOf(v))).append('\n');
             }
         }
-        sb.append("</pre></div>");
+        sb.append("</pre></details></div>");
         return HttpReply.html(sb.toString());
     }
 
@@ -607,22 +784,40 @@ public class AdminHttpHandler {
         return HttpReply.json(200, m);
     }
 
-    private HttpReply cdrHtml(Map<String, String> query, AdminAuthService.Principal who) {
-        int limit = CdrService.DEFAULT_LIMIT;
-        if (query != null && query.get("limit") != null) {
-            try { limit = Integer.parseInt(query.get("limit")); } catch (NumberFormatException ignored) {}
-        }
+    private Map<String, String> cdrPageVars(Map<String, String> query, AdminAuthService.Principal who) {
+        String msisdn = query == null ? "" : query.getOrDefault("msisdn", "");
+        int limit = CdrService.clampLimit(query == null ? null : query.get("limit"));
+        Map<String, String> m = new LinkedHashMap<>();
+        m.put("{{ROWS}}", cdrRowsHtml(msisdn, limit, who));
+        m.put("{{MSISDN}}", esc(msisdn == null ? "" : msisdn));
+        m.put("{{LIMIT}}", Integer.toString(limit));
+        return m;
+    }
+
+    private HttpReply cdrRowsReply(Map<String, String> query, AdminAuthService.Principal who) {
+        String msisdn = query == null ? null : query.get("msisdn");
+        int limit = CdrService.clampLimit(query == null ? null : query.get("limit"));
+        return HttpReply.html(cdrRowsHtml(msisdn, limit, who))
+                .withHeader("Vary", "HX-Request");
+    }
+
+    private String cdrRowsHtml(String msisdn, int limit, AdminAuthService.Principal who) {
         String scope = who != null && who.isTenantScoped() ? who.tenantId() : null;
-        StringBuilder sb = new StringBuilder("<table><tr><th>When</th><th>Corr</th><th>Phase</th><th>MSISDN</th><th>Status</th></tr>");
-        for (CdrRecord r : cdr.listRecords(limit, scope)) {
-            sb.append("<tr><td>").append(r.createdAt).append("</td><td>")
-                    .append(esc(r.correlationId)).append("</td><td>")
-                    .append(esc(r.phase)).append("</td><td>")
-                    .append(esc(r.msisdn)).append("</td><td>")
-                    .append(esc(r.status)).append("</td></tr>");
+        StringBuilder sb = new StringBuilder();
+        var rows = cdr.listRecords(limit, scope, msisdn);
+        if (rows.isEmpty()) {
+            sb.append("<tr><td colspan=\"6\" class=\"px-3 py-4 text-ink-mute italic\">No CDR rows.</td></tr>");
+            return sb.toString();
         }
-        sb.append("</table>");
-        return HttpReply.html(sb.toString());
+        for (CdrRecord r : rows) {
+            sb.append("<tr><td class=\"px-3 py-2\">").append(esc(String.valueOf(r.createdAt))).append("</td>")
+                    .append("<td class=\"px-3 py-2\">").append(esc(r.correlationId)).append("</td>")
+                    .append("<td class=\"px-3 py-2\">").append(esc(r.phase)).append("</td>")
+                    .append("<td class=\"px-3 py-2\">").append(esc(r.msisdn)).append("</td>")
+                    .append("<td class=\"px-3 py-2\">").append(esc(r.shortCode)).append("</td>")
+                    .append("<td class=\"px-3 py-2\">").append(esc(r.status)).append("</td></tr>");
+        }
+        return sb.toString();
     }
 
     private HttpReply serveFile(String relative) {
@@ -650,6 +845,6 @@ public class AdminHttpHandler {
 
     private static String esc(String s) {
         if (s == null) return "";
-        return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;");
+        return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\"", "&quot;");
     }
 }

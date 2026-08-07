@@ -21,7 +21,15 @@ mise exec -- mvn -B -ntp package -DskipTests
 cd dist && ./run.sh
 ```
 
-Admin: `http://127.0.0.1:8088/admin/?key=ussd-admin`  
+Admin: `http://127.0.0.1:8088/admin/login` (form login), or for automation
+`curl -H 'X-USSD-Admin-Key: <ussd.admin.api-key>' http://127.0.0.1:8088/admin/status.json`.
+`?key=` is no longer accepted — it leaks a full-ADMIN credential into access logs and history.
+
+**Digicom lab after this hardening:** keep `ussd.lab.allow-default-secrets=true` in server
+`dist/configs/application.properties`, **or** rotate `ussd.admin.session-hmac-secret` /
+`ussd.admin.api-key` before the next boot — otherwise startup fails closed. Checklist:
+[docs/prod-release-path.md](docs/prod-release-path.md).
+
 AS pull (HTTP): short-code rules → POST JSON to AS URL  
 AS callback: `POST /as/callback`
 
@@ -34,8 +42,8 @@ Same Digicom pattern as OTA. Default lab uses **file H2** under `dist/data/` (`M
 ```properties
 quarkus.datasource.db-kind=postgresql
 quarkus.datasource.username=ussdgw
-quarkus.datasource.password=ussdgw
 quarkus.datasource.jdbc.url=jdbc:postgresql://127.0.0.1:5432/ussdgw
+# export QUARKUS_DATASOURCE_PASSWORD=…  (never commit the password)
 ```
 
 ```bash

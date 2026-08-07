@@ -25,6 +25,7 @@ import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.eclipse.microprofile.config.inject.ConfigProperty;
 import org.flywaydb.core.Flyway;
+import org.flywaydb.core.api.output.RepairResult;
 
 /**
  * Startup DB guard (OTA parity): Flyway repair + migrate, then verify required tables/columns.
@@ -48,6 +49,7 @@ public class UssdSchemaInitializer {
     static final List<RequiredColumn> REQUIRED_COLUMNS = List.of(
             new RequiredColumn("ussd_short_code", "tenant_id"),
             new RequiredColumn("ussd_short_code", "network_id"),
+            new RequiredColumn("ussd_short_code", "mark"),
             new RequiredColumn("ussd_tenant", "http_api_key"),
             new RequiredColumn("ussd_tenant", "network_id"),
             new RequiredColumn("ussd_tenant", "max_tps"),
@@ -56,12 +58,17 @@ public class UssdSchemaInitializer {
             new RequiredColumn("ussd_admin_user", "tenant_id"),
             new RequiredColumn("ussd_cdr", "tenant_id"),
             new RequiredColumn("ussd_cdr", "origination_type"),
+            new RequiredColumn("ussd_cdr", "gate_ms"),
+            new RequiredColumn("ussd_cdr", "observed_ewma_ms"),
             new RequiredColumn("ussd_campaign", "tenant_id")
     );
 
     static final List<String> MIGRATIONS = List.of(
             "V1__ussdgw_baseline.sql",
-            "V2__tenant_http_as_wire_format.sql"
+            "V2__tenant_http_as_wire_format.sql",
+            "V3__short_code_mark.sql",
+            "V4__config_value_unicode.sql",
+            "V5__cdr_gate_metrics.sql"
     );
 
     @Inject
@@ -82,12 +89,7 @@ public class UssdSchemaInitializer {
     }
 
     public void ensureSchema() {
-        try {
-            flyway.repair();
-        } catch (RuntimeException ex) {
-            LOG.debug("[ussd-schema] flyway.repair skipped: {}", ex.getMessage());
-        }
-        int applied = flyway.migrate().migrationsExecuted;
+        int applied = migrateRepairingOnlyIfNeeded();
         if (applied > 0) {
             LOG.info("[ussd-schema] Flyway migrate finished, migrationsExecuted={}", applied);
         } else {
@@ -115,6 +117,37 @@ public class UssdSchemaInitializer {
                             + ". Check JDBC URL / credentials and db/migration/" + MIGRATIONS);
         }
         LOG.info("[ussd-schema] OK after SQL fallback — schema ready");
+    }
+
+    /**
+     * Migrate first; repair only when Flyway itself refuses. An unconditional {@code repair()}
+     * silently rewrites drifted checksums on every boot, which defeats
+     * {@code quarkus.flyway.validate-on-migrate=true} — the checksum mismatch that should have
+     * stopped the node is erased before anyone sees it.
+     */
+    private int migrateRepairingOnlyIfNeeded() {
+        try {
+            return flyway.migrate().migrationsExecuted;
+        } catch (RuntimeException first) {
+            LOG.warn("[ussd-schema] Flyway migrate rejected the existing history ({}) — "
+                            + "running repair once, then retrying",
+                    first.getMessage());
+            try {
+                RepairResult repair = flyway.repair();
+                LOG.warn("[ussd-schema] Flyway repair: aligned={} removed={} deleted={} actions={}",
+                        size(repair.migrationsAligned), size(repair.migrationsRemoved),
+                        size(repair.migrationsDeleted), repair.repairActions);
+            } catch (RuntimeException repairFailed) {
+                LOG.error("[ussd-schema] Flyway repair failed: {}", repairFailed.getMessage(),
+                        repairFailed);
+                throw first;
+            }
+            return flyway.migrate().migrationsExecuted;
+        }
+    }
+
+    private static int size(List<?> list) {
+        return list == null ? 0 : list.size();
     }
 
     List<String> findMissingTables() {

@@ -1,0 +1,179 @@
+package et.restlink.ussdgw.security;
+
+import jakarta.enterprise.context.ApplicationScoped;
+
+import java.net.InetAddress;
+import java.net.URI;
+import java.net.UnknownHostException;
+import java.util.LinkedHashSet;
+import java.util.Locale;
+import java.util.Optional;
+import java.util.Set;
+
+import org.eclipse.microprofile.config.inject.ConfigProperty;
+
+/**
+ * Guards the operator-supplied {@code asUrl} on a short-code rule against SSRF.
+ *
+ * <p>A TENANT-role principal can create routing rules, and {@code AsPullClient} later fetches
+ * whatever they name and returns the body to the handset as the USSD reply. Without this check
+ * that is a read primitive against cloud metadata endpoints ({@code 169.254.169.254}) and any
+ * internal service reachable from the gateway.
+ *
+ * <p>Literal IPs are classified without touching the network so the check never blocks. DNS is
+ * only consulted when {@code ussd.as.url.resolve-dns=true}, which an operator may enable to also
+ * catch hostnames that resolve into private space.
+ */
+@ApplicationScoped
+public class AsUrlValidator {
+
+    /** Hostnames that mean "this machine" without needing a resolver. */
+    private static final Set<String> LOCAL_HOST_NAMES = Set.of(
+            "localhost", "localhost.localdomain", "ip6-localhost", "ip6-loopback");
+
+    /** Cloud metadata service names — the classic SSRF target. */
+    private static final Set<String> METADATA_HOST_NAMES = Set.of(
+            "metadata", "metadata.google.internal", "metadata.goog",
+            "instance-data", "instance-data.ec2.internal");
+
+    /**
+     * Hosts the tenant may point at even though they are private. The Digicom lab AS runs on
+     * {@code http://127.0.0.1:8090/ussd/pull}, so the shipped properties list it here.
+     */
+    @ConfigProperty(name = "ussd.as.url.host-allowlist", defaultValue = "")
+    String hostAllowlist = "";
+
+    /** Blanket opt-out for an isolated lab network. */
+    @ConfigProperty(name = "ussd.as.url.allow-private-hosts", defaultValue = "false")
+    boolean allowPrivateHosts = false;
+
+    /** Off by default: a resolver lookup on the admin request thread is blocking IO. */
+    @ConfigProperty(name = "ussd.as.url.resolve-dns", defaultValue = "false")
+    boolean resolveDns = false;
+
+    /** @return the rejection reason, or empty when the URL is acceptable. */
+    public Optional<String> reject(String asUrl) {
+        return reject(asUrl, parseAllowlist(hostAllowlist), allowPrivateHosts, resolveDns);
+    }
+
+    static Optional<String> reject(String asUrl, Set<String> allowlist, boolean allowPrivate,
+                                   boolean resolveDns) {
+        if (asUrl == null || asUrl.isBlank()) {
+            return Optional.of("asUrl required");
+        }
+        URI uri;
+        try {
+            uri = URI.create(asUrl.trim());
+        } catch (IllegalArgumentException ex) {
+            return Optional.of("asUrl is not a valid URL");
+        }
+        String scheme = uri.getScheme() == null ? "" : uri.getScheme().toLowerCase(Locale.ROOT);
+        if (!scheme.equals("http") && !scheme.equals("https")) {
+            return Optional.of("asUrl scheme must be http or https (got "
+                    + (scheme.isEmpty() ? "none" : scheme) + ")");
+        }
+        String host = uri.getHost();
+        if (host == null || host.isBlank()) {
+            return Optional.of("asUrl has no host");
+        }
+        String normalized = normalizeHost(host);
+        if (allowlist.contains(normalized)) {
+            return Optional.empty();
+        }
+        if (allowPrivate) {
+            return Optional.empty();
+        }
+        if (METADATA_HOST_NAMES.contains(normalized)) {
+            return Optional.of(deny(host, "cloud metadata endpoint", allowlist));
+        }
+        if (LOCAL_HOST_NAMES.contains(normalized)) {
+            return Optional.of(deny(host, "loopback", allowlist));
+        }
+        Optional<InetAddress> literal = parseLiteralAddress(normalized);
+        if (literal.isPresent()) {
+            String why = classify(literal.get());
+            return why == null ? Optional.empty() : Optional.of(deny(host, why, allowlist));
+        }
+        if (resolveDns) {
+            try {
+                for (InetAddress addr : InetAddress.getAllByName(normalized)) {
+                    String why = classify(addr);
+                    if (why != null) {
+                        return Optional.of(deny(host, why + " (" + addr.getHostAddress() + ")",
+                                allowlist));
+                    }
+                }
+            } catch (UnknownHostException ex) {
+                return Optional.of("asUrl host " + host + " does not resolve");
+            }
+        }
+        return Optional.empty();
+    }
+
+    /** @return why the address is off-limits, or null when it is a normal routable host. */
+    private static String classify(InetAddress addr) {
+        if (addr.isLoopbackAddress()) return "loopback";
+        if (addr.isLinkLocalAddress()) return "link-local (cloud metadata range)";
+        if (addr.isSiteLocalAddress()) return "private / RFC1918";
+        if (addr.isAnyLocalAddress()) return "wildcard";
+        if (addr.isMulticastAddress()) return "multicast";
+        if (isUniqueLocalIpv6(addr)) return "IPv6 unique-local";
+        if (isCarrierGradeNat(addr)) return "carrier-grade NAT (100.64.0.0/10)";
+        return null;
+    }
+
+    private static boolean isUniqueLocalIpv6(InetAddress addr) {
+        byte[] b = addr.getAddress();
+        return b.length == 16 && (b[0] & 0xFE) == 0xFC;
+    }
+
+    private static boolean isCarrierGradeNat(InetAddress addr) {
+        byte[] b = addr.getAddress();
+        return b.length == 4 && (b[0] & 0xFF) == 100 && (b[1] & 0xFF) >= 64 && (b[1] & 0xFF) <= 127;
+    }
+
+    private static String deny(String host, String why, Set<String> allowlist) {
+        return "asUrl host " + host + " is " + why
+                + " — refused as SSRF. Allow it with ussd.as.url.host-allowlist"
+                + (allowlist.isEmpty() ? "" : " (current: " + String.join(",", allowlist) + ")")
+                + " or ussd.as.url.allow-private-hosts=true.";
+    }
+
+    /** Literal-IP parse only — never a resolver call. */
+    private static Optional<InetAddress> parseLiteralAddress(String host) {
+        String h = host;
+        if (h.startsWith("[") && h.endsWith("]")) {
+            h = h.substring(1, h.length() - 1);
+        }
+        try {
+            return Optional.of(InetAddress.ofLiteral(h));
+        } catch (IllegalArgumentException ex) {
+            return Optional.empty();
+        }
+    }
+
+    private static String normalizeHost(String host) {
+        String h = host.trim().toLowerCase(Locale.ROOT);
+        if (h.startsWith("[") && h.endsWith("]")) {
+            h = h.substring(1, h.length() - 1);
+        }
+        while (h.endsWith(".")) {
+            h = h.substring(0, h.length() - 1);
+        }
+        return h;
+    }
+
+    static Set<String> parseAllowlist(String csv) {
+        Set<String> out = new LinkedHashSet<>();
+        if (csv == null || csv.isBlank()) {
+            return Set.of();
+        }
+        for (String part : csv.split(",")) {
+            String p = normalizeHost(part);
+            if (!p.isEmpty()) {
+                out.add(p);
+            }
+        }
+        return Set.copyOf(out);
+    }
+}

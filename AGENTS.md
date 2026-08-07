@@ -1,10 +1,10 @@
-# AGENTS.md — RestLink USSD GW (ussdgw-jainslee)
+# AGENTS.md — Digicom-ET USSDGW (ussdgw-jainslee)
 
 **JDK: Java 25 only** (`maven.compiler.release=25`, mise **zulu-25**). Never Java 8/11/17/21.
 
 Thin index for agents. Durable detail → [`docs/agents/`](docs/agents/) — start at [`docs/agents/README.md`](docs/agents/README.md). **Before admin/UI/packaging edits:** [`lessons.md`](docs/agents/lessons.md) + [`skills.md`](docs/agents/skills.md).
 
-Greenfield RestLink **USSD** gateway (3GPP **pull/MO** + **push/NI**) that **replaces** classic WildFly [`ussdgateway`](../../../ussdgateway) / [`nhanth87/ussdgw`](https://github.com/nhanth87/ussdgw) `core/`. HTTP AS wire = **dual-mode** (classic XmlMAPDialog-compatible **XML default** + greenfield **JSON**, per-tenant); gRPC JSON/proto as documented. **Not** SIM OTA / CAP / fleet / `/sendota`.
+Greenfield **Digicom-ET USSDGW** (code packages `et.restlink.*`) — 3GPP **pull/MO** + **push/NI** gateway that **replaces** classic WildFly [`ussdgateway`](../../../ussdgateway) / [`nhanth87/ussdgw`](https://github.com/nhanth87/ussdgw) `core/`. HTTP AS wire = **dual-mode** (classic XmlMAPDialog-compatible **XML default** + greenfield **JSON**, per-tenant); gRPC JSON/proto as documented. **Not** SIM OTA / CAP / fleet / `/sendota`.
 
 ### Migration law (non-negotiable)
 
@@ -26,7 +26,7 @@ Greenfield RestLink **USSD** gateway (3GPP **pull/MO** + **push/NI**) that **rep
 | Admin UX (OTA shell → USSD) | [`skills.md`](docs/agents/skills.md) § Admin · `app/html/admin/` |
 | Fast-jar dist (OTA peer) | OTA [`packaging.md`](../../ota-service/ota-sim-push/docs/agents/packaging.md) · [`skills.md` § Dist](docs/agents/skills.md) |
 | Schema H2 / PostgreSQL | [`schema.md`](docs/agents/schema.md) |
-| SS7 lab + HLR face | [`ss7-lab-pair.md`](docs/agents/ss7-lab-pair.md) |
+| SS7 lab + HLR face | [`ss7-lab-pair.md`](docs/agents/ss7-lab-pair.md) · admin `/admin/hlr` |
 | Parity vs classic | [`docs/parity-matrix.md`](docs/parity-matrix.md) |
 | AS contract | [`docs/as-contract/`](docs/as-contract/) |
 
@@ -42,10 +42,15 @@ Greenfield RestLink **USSD** gateway (3GPP **pull/MO** + **push/NI**) that **rep
 - **SCTP** — verify with `ss -ln --sctp` / `/proc/net/sctp/{eps,assocs}`, **not** `netstat` (empty netstat ≠ down; `map.enabled=false` ⇒ no listen 8013). → [ss7-lab-pair](docs/agents/ss7-lab-pair.md) · [lessons](docs/agents/lessons.md)
 - **Sim persist XML** — never leave corrupt `*sccp*.xml` (`<1>` keys). Validate Jackson parse; quarantine + replace seed; smoke Start. → [ss7-lab-pair](docs/agents/ss7-lab-pair.md) · jSS7 AGENTS
 - **SBB handlers** — catch **`Throwable`** in every `onEvent`; end/cancel MAP dialogs; `IN SBB=` count must match `OUT SBB=`.
+- **Bridge idempotency** — a MAP reply / NI push may only follow a **won CAS**, never a read-only state check: `claimForAsResponse` (`AWAITING_AS|S1_RELEASED → RESPONDING`) and `onGateExpired` (returns `false` when it loses). Never `get()`+full `put()` after a CAS — it reverts concurrent single-field writes. Gate tick = `ConcurrentExecution.SKIP` + per-session `catch (Throwable)` + O(due) deadline index; one bad session must never starve every parked dialog. → [skills.md](docs/agents/skills.md)
 - **HTTP/gRPC** — RA **callbacks** only — never 50ms timer poll. Pull body = raw wire (XML default or JSON per tenant) — **not** `CallbackRequest` envelope. Classic **NI sync** on `ussd.http.ni-path` (default `/ussd`) with **JSESSIONID**; park HTTP via async + **`AdaptiveTimeout`** — never `Thread.sleep`.
-- **HLR face** — inbound SRI-SM: `ussd.hlr.mode` default **PROXY_MAP fail-closed**; no silent FAKE; upper GT must not loop to local. → [ss7-lab-pair](docs/agents/ss7-lab-pair.md)
-- **TENANT login** — **username === tenantId**. RestLink = dist brand only.
-- **Flyway / DB** — lab **file H2** (`./data/ussdgw`, PG-mode) or **PostgreSQL** via server `configs` / `QUARKUS_DATASOURCE_*`. Dedicated DB **`ussdgw`** (never OTA’s **`ota`**); `db-kind` is **build-time** (H2→PG needs rebuild). Single `V1__ussdgw_baseline.sql`; wipe lab H2 / reset `flyway_schema_history` after squash. Boot guard `UssdSchemaInitializer`. Never `h2:mem` for ship. → [schema](docs/agents/schema.md) · [lessons](docs/agents/lessons.md)
+- **HLR face** — inbound SRI-SM: `ussd.hlr.mode` default **PROXY_MAP fail-closed**; no silent FAKE; outbound SRI CalledParty = resolved **`ussd.hlr.upper-gt`** (never MSISDN); blank/self-loop fail-closed; never `PendingSri`/`HLR takeAny`. → [ss7-lab-pair](docs/agents/ss7-lab-pair.md) · [lessons](docs/agents/lessons.md)
+- **AS pull state** — `@ApplicationScoped` **`AsPullStateRegistry`** (not SBB instance maps); else EWMA never seeds under load. → [lessons](docs/agents/lessons.md)
+- **NI `/ussd` auth** — default **required**; lab opt-out `ussd.http.ni.auth-required=false`. Secrets fail-closed unless `ussd.lab.allow-default-secrets=true`; header-only **`X-USSD-Admin-Key`**; bcrypt; package-dist never clobbers configs. → [lessons](docs/agents/lessons.md)
+- **TENANT login** — **username === tenantId**. UI brand = **Digicom-ET USSDGW** (packages stay `et.restlink.*`).
+- **Admin UX** — plane pages match **Routing** shell (seeded form-card; **no** `hx-live-badge`). **SS7/SMPP = JSON only** (no field grids); **HLR face** at `/admin/hlr` (mode/fake/upper/Diameter dest — not in SS7 JSON); **HTTP/gRPC = status only** (read-only NI URL on HTTP); **Diameter/SIP = enabled + listen/peer forms**. Canonical shells at `/admin/ss7|hlr|smpp|http|grpc|diameter|sip` (**no** hub redirect). SS7 `stackJson` editable **ADMIN/OPS** only — TENANT sees LIVE/DOWN. Status tables use **ink-panel** (not nested black `bg-ink`). Bridge wait/fail = UTF-8 + AUTO→UCS-2. Dashboard Planes Open → `/admin/ss7` etc. → [skills § Admin](docs/agents/skills.md)
+- **Flyway / DB** — lab **file H2** (`./data/ussdgw`, PG-mode) or **PostgreSQL** via server `configs` / `QUARKUS_DATASOURCE_*`. Dedicated DB **`ussdgw`** (never OTA’s **`ota`**); `db-kind` is **build-time** (H2→PG needs rebuild). Single `V1__ussdgw_baseline.sql`; wipe lab H2 / reset `flyway_schema_history` after squash. Boot guard `UssdSchemaInitializer`. Never `h2:mem` for ship. Digicom: rsync jars/lib/html only — never overwrite server configs. → [schema](docs/agents/schema.md) · [lessons](docs/agents/lessons.md)
+- **Lab tools** — `tools/as-node/` menus; `tools/ss7-simulator/` CLI JMX dial/dt; `ss7-lab.json` needs HLR **`ssn:6`**. Load test: align map/load SSN/PC/ports; don’t measure adaptive until pull registry is fixed. → [lessons](docs/agents/lessons.md)
 - **Lab heap** — Digicom-safe `run-dist.sh` defaults **`-Xms2g -Xmx4g`** (live `digicom-nb`); **AlwaysPreTouch** only if `USSD_ALWAYS_PRETOUCH=1`; override to **8g** via `USSD_XMS`/`USSD_XMX` on bigger hosts. Do **not** co-force OTA **8G** + ussdgw **8G+PreTouch** on ~15 GiB. → [lessons](docs/agents/lessons.md)
 - **Commits** — **nhanth87 / Tran Nhan** only. No AI `Co-authored-by:` / trailers (Cursor injects — strip / clean `commit-tree`). Hooks reject; never `--no-verify`.
 
@@ -112,7 +117,7 @@ Lab AS sims: **`tools/as-node/`** (Fastify — prefer), `tools/as-http-sim.py`, 
 
 - Access PULL/PUSH: MAP + Diameter + SIP/USSI live when peer ready (stub only when down); SMPP lab MO + optional `submit_sm` NI.
 - AS modes: **SYNC** / **ASYNC_ACK** / **BRIDGE** (adaptive EWMA gate); HTTP wire **XML|JSON** (default XML); classic NI sync + parked HTTP gated by `AdaptiveTimeout`.
-- Admin HTMX + Monitor Hub (`/admin/ss7|smpp|http` → hub tabs); HTTP Sync/Async/Callback panels.
+- Admin forms at `/admin/ss7|hlr|smpp|http` (Routing shell; no hub redirect); Monitor Hub = metrics only; HTTP Sync/Async/Callback panels.
 - HLR face: `FAKE|PROXY_MAP|PROXY_DIAMETER|FAKE_THEN_RESOLVE` (default PROXY_MAP fail-closed).
 - Saga: `ProfileFacility` table `ussdTx`; campaigns; TenantGuard; CDR async flusher.
 - Alphabets: **AS-driven** (`ucs7`|`ucs8`|`unicode`|`auto`) → MAP CBS DCS.

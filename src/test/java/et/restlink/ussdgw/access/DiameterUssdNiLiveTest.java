@@ -38,8 +38,8 @@ class DiameterUssdNiLiveTest {
             }
         };
         set(diameter, "config", cfg);
-        set(diameter, "destHost", "peer.restlink.local");
-        set(diameter, "destRealm", "restlink.local");
+        set(cfg, "diameterDestHostProp", java.util.Optional.of("peer.restlink.local"));
+        set(cfg, "diameterDestRealmProp", "restlink.local");
         set(diameter, "cdr", new CdrService() {
             @Override
             public void write(String correlationId, CdrPhase phase,

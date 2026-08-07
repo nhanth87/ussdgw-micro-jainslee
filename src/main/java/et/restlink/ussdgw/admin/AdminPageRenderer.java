@@ -125,9 +125,9 @@ public class AdminPageRenderer {
     public static String fallbackLandingHtml() {
         return """
                 <!DOCTYPE html><html lang="en"><head><meta charset="utf-8"/>
-                <title>RestLink USSD GW</title></head>
+                <title>Digicom-ET USSDGW</title></head>
                 <body>
-                <h1>RestLink USSD GW</h1>
+                <h1>Digicom-ET USSDGW</h1>
                 <p>3GPP USSD pull/push gateway.</p>
                 <p><a href="/admin/login">Admin login</a> · <a href="/health">Health</a></p>
                 </body></html>
@@ -136,14 +136,15 @@ public class AdminPageRenderer {
 
     public static String fallbackDashboard() {
         return """
-                <!DOCTYPE html><html><head><meta charset="utf-8"/><title>USSD Admin</title></head>
+                <!DOCTYPE html><html><head><meta charset="utf-8"/><title>Digicom-ET USSDGW Admin</title></head>
                 <body>
-                <h1>RestLink USSD Admin</h1>
+                <h1>Digicom-ET USSDGW Admin</h1>
                 <p>Static templates missing from app/html — serving fallback.</p>
                 <ul>
-                  <li><a href="/telemetry/?tab=ss7">SS7</a></li>
-                  <li><a href="/telemetry/?tab=smpp">SMPP</a></li>
-                  <li><a href="/telemetry/?tab=http">HTTP</a></li>
+                  <li><a href="/admin/ss7">SS7 config</a></li>
+                  <li><a href="/admin/smpp">SMPP config</a></li>
+                  <li><a href="/admin/http">HTTP config</a></li>
+                  <li><a href="/telemetry/?tab=ss7">Monitor Hub</a></li>
                   <li><a href="/health">/health</a></li>
                 </ul>
                 </body></html>
@@ -154,8 +155,16 @@ public class AdminPageRenderer {
         return o == null ? "" : escapeHtml(o.toString());
     }
 
+    /** Matches the handler-local {@code esc()} helpers — quotes included, for attribute values. */
     public static String escapeHtml(String s) {
-        return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;");
+        if (s == null) {
+            return "";
+        }
+        return s.replace("&", "&amp;")
+                .replace("<", "&lt;")
+                .replace(">", "&gt;")
+                .replace("\"", "&quot;")
+                .replace("'", "&#39;");
     }
 
     Path uiRoot() {

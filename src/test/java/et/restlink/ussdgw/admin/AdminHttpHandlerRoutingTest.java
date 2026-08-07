@@ -45,6 +45,10 @@ class AdminHttpHandlerRoutingTest {
             public java.util.List<et.restlink.ussdgw.cdr.CdrRecord> listRecords(int limit, String tenantId) {
                 return java.util.List.of();
             }
+            @Override
+            public java.util.List<et.restlink.ussdgw.cdr.CdrRecord> listRecords(int limit, String tenantId, String msisdn) {
+                return java.util.List.of();
+            }
         });
         set(handler, "bridge", new VirtualSessionBridge());
         set(handler, "store", new VirtualSessionStore());
@@ -74,8 +78,26 @@ class AdminHttpHandlerRoutingTest {
             @Override public AdminHttpHandler.HttpReply ss7Get() {
                 return AdminHttpHandler.HttpReply.html("<div class=\"ss7-panel\">jSS7 form mapEnabled</div>");
             }
+            @Override public AdminHttpHandler.HttpReply ss7Get(AdminAuthService.Principal who) {
+                return ss7Get();
+            }
             @Override public AdminHttpHandler.HttpReply ss7Post(String body) {
                 return AdminHttpHandler.HttpReply.html("<pre>ss7=test-apply</pre><div class=\"ss7-panel\">ok</div>");
+            }
+            @Override public AdminHttpHandler.HttpReply ss7Post(String body, AdminAuthService.Principal who) {
+                return ss7Post(body);
+            }
+            @Override public AdminHttpHandler.HttpReply hlrGet() {
+                return AdminHttpHandler.HttpReply.html("<div class=\"hlr-panel\">HLR face mode PROXY_MAP</div>");
+            }
+            @Override public AdminHttpHandler.HttpReply hlrGet(AdminAuthService.Principal who) {
+                return hlrGet();
+            }
+            @Override public AdminHttpHandler.HttpReply hlrPost(String body) {
+                return AdminHttpHandler.HttpReply.html("<pre>hlr=test-save</pre><div class=\"hlr-panel\">ok</div>");
+            }
+            @Override public AdminHttpHandler.HttpReply hlrPost(String body, AdminAuthService.Principal who) {
+                return hlrPost(body);
             }
             @Override public AdminHttpHandler.HttpReply smppGet() {
                 return AdminHttpHandler.HttpReply.html("<div class=\"smpp-panel\">SMPP</div>");
@@ -98,7 +120,7 @@ class AdminHttpHandlerRoutingTest {
         set(handler, "planes", planes);
         set(handler, "campaigns", new AdminCampaignHandler() {
             @Override public AdminHttpHandler.HttpReply get(AdminAuthService.Principal who) {
-                return AdminHttpHandler.HttpReply.html("<div>campaigns-ok</div>");
+                return AdminHttpHandler.HttpReply.html("<tr><td>campaigns-ok</td></tr>");
             }
         });
         set(handler, "labMo", new AdminLabMoHandler() {
@@ -158,23 +180,76 @@ class AdminHttpHandlerRoutingTest {
     }
 
     @Test
-    void ss7GetRedirectsToHub() {
+    void ss7GetServesFormPanelNotHubRedirect() {
         Optional<AdminHttpHandler.HttpReply> r = handler.tryHandle(
                 "GET", "/admin/ss7",
-                Map.of("X-USSD-Admin-Key", "ussd-admin"), Map.of(), null);
+                authHx(), Map.of(), null);
         assertThat(r).isPresent();
-        assertThat(r.get().status()).isEqualTo(302);
-        assertThat(r.get().headers().get("Location")).contains("/telemetry/?tab=ss7");
+        assertThat(r.get().status()).isEqualTo(200);
+        assertThat(new String(r.get().body())).contains("ss7-panel");
+        assertThat(r.get().headers().get("Location")).isNull();
     }
 
     @Test
-    void smppGetRedirectsToHub() {
+    void ss7ConfigAliasServesFormPanel() {
+        Optional<AdminHttpHandler.HttpReply> r = handler.tryHandle(
+                "GET", "/admin/ss7/config",
+                authHx(), Map.of(), null);
+        assertThat(r).isPresent();
+        assertThat(r.get().status()).isEqualTo(200);
+        assertThat(new String(r.get().body())).contains("ss7-panel");
+    }
+
+    @Test
+    void hlrGetServesFormPanelNotHubRedirect() {
+        Optional<AdminHttpHandler.HttpReply> r = handler.tryHandle(
+                "GET", "/admin/hlr",
+                authHx(), Map.of(), null);
+        assertThat(r).isPresent();
+        assertThat(r.get().status()).isEqualTo(200);
+        assertThat(new String(r.get().body())).contains("hlr-panel");
+        assertThat(r.get().headers().get("Location")).isNull();
+    }
+
+    @Test
+    void hlrConfigAliasServesFormPanel() {
+        Optional<AdminHttpHandler.HttpReply> r = handler.tryHandle(
+                "GET", "/admin/hlr/config",
+                authHx(), Map.of(), null);
+        assertThat(r).isPresent();
+        assertThat(r.get().status()).isEqualTo(200);
+        assertThat(new String(r.get().body())).contains("hlr-panel");
+    }
+
+    @Test
+    void hlrSavePost() {
+        Optional<AdminHttpHandler.HttpReply> r = handler.tryHandle(
+                "POST", "/admin/hlr",
+                Map.of("X-USSD-Admin-Key", "ussd-admin"), Map.of(),
+                "action=save&mode=PROXY_MAP");
+        assertThat(r).isPresent();
+        assertThat(new String(r.get().body())).contains("hlr=test-save");
+        assertThat(r.get().contentType()).contains("text/html");
+    }
+
+    @Test
+    void smppGetServesFormPanelNotHubRedirect() {
         Optional<AdminHttpHandler.HttpReply> r = handler.tryHandle(
                 "GET", "/admin/smpp",
-                Map.of("X-USSD-Admin-Key", "ussd-admin"), Map.of("key", "ussd-admin"), null);
+                authHx(), Map.of("key", "ussd-admin"), null);
         assertThat(r).isPresent();
-        assertThat(r.get().status()).isEqualTo(302);
-        assertThat(r.get().headers().get("Location")).contains("tab=smpp").contains("key=ussd-admin");
+        assertThat(r.get().status()).isEqualTo(200);
+        assertThat(new String(r.get().body())).contains("smpp-panel");
+    }
+
+    @Test
+    void smppConfigAliasServesFormPanel() {
+        Optional<AdminHttpHandler.HttpReply> r = handler.tryHandle(
+                "GET", "/admin/smpp/config",
+                authHx(), Map.of(), null);
+        assertThat(r).isPresent();
+        assertThat(r.get().status()).isEqualTo(200);
+        assertThat(new String(r.get().body())).contains("smpp-panel");
     }
 
     @Test
@@ -266,7 +341,33 @@ class AdminHttpHandlerRoutingTest {
     void monitorHubPathDetection() {
         assertThat(AdminHttpHandler.isMonitorHubPath("/telemetry/")).isTrue();
         assertThat(AdminHttpHandler.isMonitorHubPath("/api/ra/smpp-ra/status")).isTrue();
-        assertThat(AdminHttpHandler.isPublicMonitorStatic("GET", "/telemetry/")).isTrue();
+        // Live hub shell / partials need a principal; only static asset extensions stay public.
+        assertThat(AdminHttpHandler.isPublicMonitorStatic("GET", "/telemetry/")).isFalse();
+        assertThat(AdminHttpHandler.isPublicMonitorStatic("GET", "/telemetry/app.js")).isTrue();
+    }
+
+    @Test
+    void tenantForbiddenOnDiameterAndSipPost() {
+        AdminAuthService.Principal tenant = new AdminAuthService.Principal("TENANT", "t1");
+        // Drive handlePost via tryHandle with a forged session-free principal path: use catalog
+        // identity is separate — plane POST uses who from authenticate. Inject via reflection
+        // by posting with Basic is hard; call handlePost through public tryHandle after stubbing auth.
+        AdminAuthService stubAuth = new AdminAuthService() {
+            @Override
+            public Optional<Principal> authenticate(Map<String, String> headers, Map<String, String> query) {
+                return Optional.of(tenant);
+            }
+        };
+        set(handler, "adminAuth", stubAuth);
+        set(handler, "csrfEnabled", false);
+        Optional<AdminHttpHandler.HttpReply> diameter = handler.tryHandle(
+                "POST", "/admin/diameter/apply", Map.of(), Map.of(), "x=1");
+        assertThat(diameter).isPresent();
+        assertThat(diameter.get().status()).isEqualTo(403);
+        Optional<AdminHttpHandler.HttpReply> sip = handler.tryHandle(
+                "POST", "/admin/sip/apply", Map.of(), Map.of(), "x=1");
+        assertThat(sip).isPresent();
+        assertThat(sip.get().status()).isEqualTo(403);
     }
 
     private static Map<String, String> authHx() {

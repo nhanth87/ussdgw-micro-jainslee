@@ -27,6 +27,7 @@ public final class UssdTxProfileMapper {
         p.setGateDeadlineMs(s.gateDeadlineMs());
         p.setGateMs(s.gateMs());
         p.setPullStartedAtMs(s.pullStartedAtMs());
+        p.setPullStartedAtNanos(s.pullStartedAtNanos());
         p.setInvokeId(s.invokeId());
         p.setDialogAlive(s.dialogAlive());
         p.setAdaptiveBridgeArm(s.adaptiveBridgeArm());
@@ -76,6 +77,9 @@ public final class UssdTxProfileMapper {
         }
         if (p.getPullStartedAtMs() != null) {
             s.setPullStartedAtMs(p.getPullStartedAtMs());
+        }
+        if (p.getPullStartedAtNanos() != null) {
+            s.setPullStartedAtNanos(p.getPullStartedAtNanos());
         }
         if (p.getInvokeId() != null) {
             s.setInvokeId(p.getInvokeId());

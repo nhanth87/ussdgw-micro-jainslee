@@ -14,6 +14,6 @@ public class ConfigEntity extends PanacheEntityBase {
     @Column(name = "config_key", length = 128)
     public String configKey;
 
-    @Column(name = "config_value", length = 1024, nullable = false)
+    @Column(name = "config_value", length = 4096, nullable = false)
     public String configValue;
 }

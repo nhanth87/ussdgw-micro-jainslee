@@ -47,6 +47,14 @@ public class CdrEntity {
     @Column(name = "origination_type", length = 32)
     public String originationType;
 
+    /** Adaptive gate applied to this leg (ms), when the row belongs to a gated phase. */
+    @Column(name = "gate_ms")
+    public Long gateMs;
+
+    /** EWMA of AS latency for {@link #networkId} at the time of the row (ms). */
+    @Column(name = "observed_ewma_ms")
+    public Long observedEwmaMs;
+
     @Column(name = "csv_line", nullable = false, length = 4000)
     public String csvLine;
 }

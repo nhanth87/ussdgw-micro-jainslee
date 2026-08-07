@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
-  <title>SIP / USSI — RestLink USSD</title>
+  <title>SIP / USSI — Digicom-ET USSDGW</title>
   <script>
     (function () {
       try {
@@ -38,30 +38,96 @@
   <script defer src="/admin/static/alpine.min.js"></script>
 </head>
 <body x-data class="min-h-full bg-ink font-display text-slate-200 antialiased"
-      style="background-image:radial-gradient(ellipse 80% 50% at 10% -10%,rgba(232,163,23,0.10),transparent),radial-gradient(ellipse 60% 40% at 100% 0%,rgba(56,100,160,0.12),transparent)">
+      style="background-image:radial-gradient(ellipse 80% 50% at 10% -10%,rgba(232,163,23,0.08),transparent),radial-gradient(ellipse 60% 40% at 100% 0%,rgba(56,100,160,0.12),transparent)">
   <header class="sticky top-0 z-40 border-b border-ink-line/80 bg-ink/90 backdrop-blur">
     <div class="mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-3 px-4 py-3">
       <div class="flex items-center gap-3">
         <span class="h-8 w-1 rounded-full bg-signal" aria-hidden="true"></span>
-        <a href="/admin" class="text-lg font-semibold tracking-wide text-slate-100">RestLink USSD</a>
-        <span class="hidden text-xs uppercase tracking-[0.2em] text-ink-mute sm:inline">ops</span>
+        <h1 class="text-lg font-semibold text-slate-100">SIP / USSI</h1>
       </div>
-      <nav class="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-ink-mute">
-        {{NAV_LINKS}}
-      </nav>
+      <nav class="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-ink-mute">{{NAV_LINKS}}</nav>
     </div>
   </header>
   <main class="mx-auto max-w-6xl px-4 py-8">
     {{NOTICE}}
-    <p class="text-xs uppercase tracking-[0.25em] text-signal">Access plane</p>
-    <h1 class="mt-1 text-2xl font-semibold text-slate-50">SIP / USSI</h1>
-    <p class="mt-1 text-sm text-ink-mute">SIP MESSAGE / USSI MO/NI (TS 24.390).</p>
-    <div id="panel" class="mt-6 min-h-[12rem] rounded-lg border border-ink-line/60 bg-ink-panel/40 p-4"
-         hx-get="/admin/status"
-         hx-trigger="load"
-         hx-swap="innerHTML">
-      <p class="text-sm text-ink-mute">loading…</p>
+    <div id="plane-notice"></div>
+
+    <p class="text-xs uppercase tracking-[0.25em] text-signal">Create / update</p>
+    <div class="ops-section-indent">
+      <section class="form-card mb-10 rounded-lg border border-ink-line bg-ink-panel/80 p-5" style="max-width:40rem;margin-inline:auto">
+        <h2 class="mt-1 text-xl font-semibold text-slate-50">SIP / USSI</h2>
+        <p class="mt-1 mb-4 text-sm text-slate-300">
+          Access plane — persist KV then Save &amp; Apply wires <code class="font-mono">ra-sip-servlet</code>
+          when enabled (TS 24.390 MESSAGE / USSI).
+        </p>
+        <form method="post" action="/admin/sip" accept-charset="UTF-8" class="space-y-3"
+              hx-post="/admin/sip" hx-target="#plane-notice" hx-swap="innerHTML" hx-indicator="#sip-ind">
+          <div>
+            <label class="block text-xs uppercase tracking-wider text-ink-mute">enabled</label>
+            <select name="enabled" class="mt-1 w-full rounded-md border border-ink-line bg-ink-panel px-3 py-2 text-sm focus:border-signal focus:outline-none">
+              <option value="true" {{ENABLED_TRUE}}>true</option>
+              <option value="false" {{ENABLED_FALSE}}>false</option>
+            </select>
+          </div>
+          <div>
+            <label class="block text-xs uppercase tracking-wider text-ink-mute">host</label>
+            <input name="host" value="{{HOST}}" type="text"
+                   class="mt-1 w-full rounded-md border border-ink-line bg-ink-panel px-3 py-2 font-mono text-sm focus:border-signal focus:outline-none focus:ring-1 focus:ring-signal/40"/>
+          </div>
+          <div>
+            <label class="block text-xs uppercase tracking-wider text-ink-mute">tcpPort</label>
+            <input name="tcpPort" value="{{TCP_PORT}}" type="text"
+                   class="mt-1 w-full rounded-md border border-ink-line bg-ink-panel px-3 py-2 font-mono text-sm focus:border-signal focus:outline-none focus:ring-1 focus:ring-signal/40"/>
+          </div>
+          <div>
+            <label class="block text-xs uppercase tracking-wider text-ink-mute">udpPort</label>
+            <input name="udpPort" value="{{UDP_PORT}}" type="text"
+                   class="mt-1 w-full rounded-md border border-ink-line bg-ink-panel px-3 py-2 font-mono text-sm focus:border-signal focus:outline-none focus:ring-1 focus:ring-signal/40"/>
+          </div>
+          <div>
+            <label class="block text-xs uppercase tracking-wider text-ink-mute">fromUri</label>
+            <input name="fromUri" value="{{FROM_URI}}" type="text"
+                   class="mt-1 w-full rounded-md border border-ink-line bg-ink-panel px-3 py-2 font-mono text-sm focus:border-signal focus:outline-none focus:ring-1 focus:ring-signal/40"/>
+          </div>
+          <div>
+            <label class="block text-xs uppercase tracking-wider text-ink-mute">requestUriTemplate</label>
+            <input name="requestUriTemplate" value="{{REQUEST_URI}}" type="text"
+                   class="mt-1 w-full rounded-md border border-ink-line bg-ink-panel px-3 py-2 font-mono text-sm focus:border-signal focus:outline-none focus:ring-1 focus:ring-signal/40"/>
+            <p class="mt-1 text-xs text-ink-mute">e.g. sip:{msisdn}@ussd.restlink.local</p>
+          </div>
+          <div class="plane-actions flex flex-wrap gap-2 pt-2">
+            <button type="submit" name="action" value="save"
+                    class="rounded-md border border-ink-line px-3 py-2 text-sm text-ink-mute hover:border-signal hover:text-signal">Save</button>
+            <button type="submit" name="action" value="saveApply"
+                    class="rounded-md bg-signal px-3 py-2 text-sm font-semibold text-ink hover:bg-signal-dim">Save &amp; Apply</button>
+            <button type="submit" name="action" value="apply"
+                    class="rounded-md border border-ink-line px-3 py-2 text-sm text-ink-mute hover:border-signal hover:text-signal">Apply</button>
+            <button type="submit" name="action" value="start"
+                    class="rounded-md border border-ink-line px-3 py-2 text-sm text-ink-mute hover:border-signal hover:text-signal">Start</button>
+            <button type="submit" name="action" value="stop"
+                    class="rounded-md border border-ink-line px-3 py-2 text-sm text-ink-mute hover:border-signal hover:text-signal">Stop</button>
+            <span id="sip-ind" class="htmx-indicator text-xs font-mono text-ink-mute self-center">saving…</span>
+          </div>
+        </form>
+      </section>
     </div>
+
+    <p class="text-xs uppercase tracking-[0.25em] text-signal">Directory / status</p>
+    <div class="ops-section-indent">
+      <div class="mb-3 flex flex-wrap items-end justify-between gap-3">
+        <h2 class="mt-1 text-xl font-semibold text-slate-50">RA truth</h2>
+        <button type="button"
+                class="rounded-md border border-ink-line px-3 py-1.5 text-xs text-ink-mute hover:border-signal hover:text-signal"
+                hx-get="/admin/links?tab=sip" hx-target="#sip-status" hx-swap="innerHTML">Refresh</button>
+      </div>
+      <div id="sip-status" class="rounded-lg border border-ink-line bg-ink-panel/60 p-4"
+           hx-get="/admin/links?tab=sip" hx-trigger="load, every 5s" hx-swap="innerHTML">{{STATUS_HTML}}</div>
+      <p class="mt-3 text-sm text-ink-mute">
+        <a class="text-signal hover:underline" href="/telemetry/?tab=ss7">Monitor Hub</a>
+        · brand <span class="text-slate-300">Digicom-ET USSDGW</span>
+      </p>
+    </div>
+
   </main>
 </body>
 </html>

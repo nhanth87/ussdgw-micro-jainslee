@@ -1,6 +1,5 @@
 package et.restlink.ussdgw.admin;
 
-import et.restlink.ussdgw.admin.smpp.SmppAdminController;
 import et.restlink.ussdgw.ra.smpp.SmppEndpointRegistry;
 
 import com.microjainslee.ra.diameter.DiameterRaEndpoint;
@@ -145,6 +144,9 @@ public class LinkStatusService {
         m.put("smpp.boundSessions", smppBoundSessions());
         m.put("smpp.clients", smppRegistry == null ? 0 : smppRegistry.clients().size());
         m.put("smpp.detail", smppDetail);
+        int bound = smppBoundSessions();
+        int clients = smppRegistry == null ? 0 : smppRegistry.clients().size();
+        m.put("smpp.live", bound > 0 || clients > 0);
         boolean diamLive = diameterLive();
         m.put("diameter.live", diamLive);
         m.put("diameter.peerConnected", diameterEp != null && diameterEp.isPeerConnected());
@@ -173,63 +175,77 @@ public class LinkStatusService {
             boolean live = Boolean.TRUE.equals(s.get("ss7.live"));
             sb.append(planeCard("SS7", live,
                     "raActive=" + s.get("ss7.raActive") + " · " + s.get("ss7.detail"),
-                    "/telemetry/?tab=ss7"));
+                    "/admin/ss7", "/telemetry/?tab=ss7"));
         }
         if (wantHttp) {
             boolean listen = Boolean.TRUE.equals(s.get("http.listen"));
             sb.append(planeCard("HTTP", listen,
                     String.valueOf(s.get("http.detail")),
-                    "/telemetry/?tab=http"));
+                    "/admin/http", "/telemetry/?tab=http"));
         }
         if (wantGrpc) {
             boolean listen = Boolean.TRUE.equals(s.get("grpc.listen"));
             sb.append(planeCard("gRPC", listen,
                     String.valueOf(s.get("grpc.detail")),
-                    "/admin/grpc"));
+                    "/admin/grpc", "/telemetry/?tab=http"));
         }
         if (wantDiam) {
             boolean live = Boolean.TRUE.equals(s.get("diameter.live"));
             sb.append(planeCard("Diameter", live,
                     String.valueOf(s.get("diameter.detail")),
-                    "/admin/diameter"));
+                    "/admin/diameter", "/telemetry/?tab=ss7"));
         }
         if (wantSip) {
             boolean live = Boolean.TRUE.equals(s.get("sip.live"));
             sb.append(planeCard("SIP", live,
                     String.valueOf(s.get("sip.detail")),
-                    "/admin/sip"));
+                    "/admin/sip", "/telemetry/?tab=ss7"));
+        }
+        if (wantSmpp) {
+            int bound = s.get("smpp.boundSessions") instanceof Number n ? n.intValue() : 0;
+            int clients = s.get("smpp.clients") instanceof Number n ? n.intValue() : 0;
+            boolean live = Boolean.TRUE.equals(s.get("smpp.live"))
+                    || bound > 0 || clients > 0;
+            sb.append(planeCard("SMPP", live,
+                    "server=" + s.get("smpp.server")
+                            + " · bound=" + bound
+                            + " · clients=" + clients
+                            + " · " + s.get("smpp.detail"),
+                    "/admin/smpp", "/telemetry/?tab=smpp"));
         }
         sb.append("</div>");
-        if (wantSmpp) {
-            sb.append("<div class=\"mt-3\">");
-            try {
-                sb.append(new SmppAdminController().statusHtml(null).bodyAsString());
-            } catch (RuntimeException ex) {
-                int bound = s.get("smpp.boundSessions") instanceof Number n ? n.intValue() : 0;
-                int clients = s.get("smpp.clients") instanceof Number n ? n.intValue() : 0;
-                boolean live = bound > 0 || clients > 0;
-                sb.append(planeCard("SMPP", live,
-                        "server=" + s.get("smpp.server")
-                                + " · bound=" + bound
-                                + " · clients=" + clients
-                                + " · " + s.get("smpp.detail"),
-                        "/telemetry/?tab=smpp"));
-            }
-            sb.append("</div>");
-        }
         return sb.toString();
     }
 
-    private static String planeCard(String name, boolean live, String detail, String href) {
+    /** Dashboard plane card — Open → config form; secondary Monitor Hub. */
+    private static String planeCard(String name, boolean live, String detail,
+                                    String configHref, String hubHref) {
         String badge = live
                 ? "<span class=\"link-status-badge link-status-badge--ok\">LIVE</span>"
                 : "<span class=\"link-status-badge link-status-badge--mute\">DOWN</span>";
-        return "<div class=\"link-status-panel\">"
-                + "<div class=\"link-status-head\"><h3>" + esc(name) + "</h3>" + badge + "</div>"
-                + "<p class=\"link-status-detail\">" + esc(detail) + "</p>"
-                + "<p class=\"mt-2 text-xs\"><a class=\"text-signal hover:underline\" href=\""
-                + esc(href) + "\">Open</a></p>"
+        return "<div class=\"form-card rounded-lg border border-ink-line bg-ink-panel/80 p-4 link-status-panel\">"
+                + "<div class=\"link-status-head\"><h3 class=\"text-sm font-semibold tracking-wide text-slate-100\">"
+                + esc(name) + "</h3>" + badge + "</div>"
+                + "<p class=\"link-status-detail mt-2\">" + esc(detail) + "</p>"
+                + planeOpenLinks(configHref, hubHref)
                 + "</div>";
+    }
+
+    private static String planeOpenLinks(String configHref, String hubHref) {
+        StringBuilder b = new StringBuilder("<p class=\"mt-3 text-xs\">");
+        if (configHref != null && !configHref.isBlank()) {
+            b.append("<a class=\"text-signal hover:underline\" href=\"")
+                    .append(esc(configHref)).append("\">Open</a>");
+        }
+        if (hubHref != null && !hubHref.isBlank()) {
+            if (configHref != null && !configHref.isBlank()) {
+                b.append(" · ");
+            }
+            b.append("<a class=\"text-ink-mute hover:text-signal hover:underline\" href=\"")
+                    .append(esc(hubHref)).append("\">Monitor Hub</a>");
+        }
+        b.append("</p>");
+        return b.toString();
     }
 
     private static String esc(Object o) {

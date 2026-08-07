@@ -38,7 +38,7 @@ class SipUssiNiLiveTest {
             }
         };
         set(sip, "config", cfg);
-        set(sip, "requestUriTemplate", "sip:{msisdn}@ussd.restlink.local");
+        set(cfg, "sipRequestUriProp", "sip:{msisdn}@ussd.restlink.local");
         set(sip, "cdr", new CdrService() {
             @Override
             public void write(String correlationId, CdrPhase phase,
@@ -48,7 +48,8 @@ class SipUssiNiLiveTest {
             }
         });
         SipApplyService apply = new SipApplyService();
-        set(apply, "fromUri", "sip:ussdgw@restlink.local");
+        set(apply, "config", cfg);
+        set(cfg, "sipFromUriProp", "sip:ussdgw@restlink.local");
         set(sip, "sipApply", apply);
     }
 

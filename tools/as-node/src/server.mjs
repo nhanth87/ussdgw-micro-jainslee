@@ -1,13 +1,17 @@
 import Fastify from 'fastify';
 import { encodeResponse, parsePullRequest, sleep } from './dialog.mjs';
 import { postCallback } from './callback.mjs';
+import { listMenus, nextMenuResponse } from './menus.mjs';
 
 /**
  * PULL Application Server — GW POSTs MO/continue to /ussd/pull (and /ussd).
  *
  * Env / opts:
  *   PORT, HOST, DELAY_MS, MODE=sync|async_ack, WIRE=xml|json|auto,
- *   ACTION=CONTINUE|END|ABORT, MENU_TEXT, END_TEXT,
+ *   ACTION=CONTINUE|END|ABORT (END/ABORT bypass interactive menus),
+ *   INTERACTIVE=true|false (default true when ACTION=CONTINUE),
+ *   MENU_PICK=hash|random|rotate|main|lang|promo|help,
+ *   MENU_TEXT / END_TEXT — used only when INTERACTIVE=false,
  *   GW_CALLBACK, CALLBACK_DELAY_MS, API_KEY
  */
 export async function startPullServer(opts = {}) {
@@ -17,6 +21,12 @@ export async function startPullServer(opts = {}) {
   const mode = String(opts.mode ?? process.env.MODE ?? 'sync').toLowerCase();
   const wirePref = String(opts.wire ?? process.env.WIRE ?? 'auto').toLowerCase();
   const action = String(opts.action ?? process.env.ACTION ?? 'CONTINUE').toUpperCase();
+  const interactive =
+    opts.interactive != null
+      ? !!opts.interactive
+      : String(process.env.INTERACTIVE ?? (action === 'CONTINUE' ? 'true' : 'false'))
+          .toLowerCase() !== 'false';
+  const menuPick = opts.menuPick ?? process.env.MENU_PICK ?? 'hash';
   const menuText =
     opts.menuText ??
     process.env.MENU_TEXT ??
@@ -52,6 +62,19 @@ export async function startPullServer(opts = {}) {
     (_req, body, done) => done(null, body),
   );
 
+  const resolveTurn = (parsed) => {
+    if (action === 'ABORT') {
+      return { text: '', action: 'ABORT', menuId: '-', screen: 'abort' };
+    }
+    if (action === 'END') {
+      return { text: endText, action: 'END', menuId: '-', screen: 'end' };
+    }
+    if (!interactive) {
+      return { text: menuText, action: 'CONTINUE', menuId: 'static', screen: 'root' };
+    }
+    return nextMenuResponse(parsed, { menuPick });
+  };
+
   const handlePull = async (request, reply) => {
     const raw =
       typeof request.body === 'string'
@@ -72,8 +95,9 @@ export async function startPullServer(opts = {}) {
     const virtualBridgeId = parsed.virtualBridgeId || corr;
     const adaptiveTimeoutMs = parsed.adaptiveTimeoutMs;
 
-    const textForAction =
-      action === 'END' ? endText : action === 'ABORT' ? '' : menuText;
+    const turn = resolveTurn({ ...parsed, correlationId: corr });
+    const textForAction = turn.text;
+    const responseAction = turn.action;
 
     request.log.info(
       {
@@ -81,6 +105,9 @@ export async function startPullServer(opts = {}) {
         wire,
         mode,
         delayMs,
+        interactive,
+        menuId: turn.menuId,
+        screen: turn.screen,
         corr,
         sessionId,
         virtualBridgeId,
@@ -89,6 +116,7 @@ export async function startPullServer(opts = {}) {
         msisdn: parsed.msisdn,
         ussd: parsed.ussdString,
         generation: parsed.generation,
+        responseAction,
       },
       'pull inbound',
     );
@@ -132,7 +160,7 @@ export async function startPullServer(opts = {}) {
         requestId: reqId,
         generation,
         text: textForAction,
-        action: action === 'ABORT' ? 'ABORT' : action === 'END' ? 'END' : 'CONTINUE',
+        action: responseAction,
         async: false,
         ...meta,
       };
@@ -167,7 +195,7 @@ export async function startPullServer(opts = {}) {
       requestId: reqId,
       generation,
       text: textForAction,
-      action,
+      action: responseAction,
       async: false,
       ...meta,
     });
@@ -179,6 +207,9 @@ export async function startPullServer(opts = {}) {
     mode,
     delayMs,
     wire: wirePref,
+    interactive,
+    menuPick,
+    menus: listMenus(),
     gwCallback,
   }));
 
@@ -188,7 +219,7 @@ export async function startPullServer(opts = {}) {
   await app.listen({ port, host });
   app.log.info(
     `AS pull sim listening http://${host}:${port}/ussd/pull ` +
-      `(mode=${mode} delayMs=${delayMs} wire=${wirePref})`,
+      `(mode=${mode} delayMs=${delayMs} wire=${wirePref} interactive=${interactive} menuPick=${menuPick})`,
   );
   return app;
 }

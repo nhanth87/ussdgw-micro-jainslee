@@ -19,6 +19,7 @@ import org.eclipse.microprofile.config.inject.ConfigProperty;
 /**
  * Wire {@code ra-diameter} when {@code ussd.diameter.enabled}.
  * Link truth = {@link DiameterRaEndpoint#isPeerReady()} (CER/CEA), never LISTEN alone.
+ * Listen/peer props overlay boot {@code @ConfigProperty} via {@link UssdConfigService}.
  */
 @ApplicationScoped
 public class DiameterApplyService {
@@ -29,14 +30,6 @@ public class DiameterApplyService {
     @Inject UssdConfigService config;
     @Inject DiameterLocationClient diameterLocation;
 
-    @ConfigProperty(name = "ussd.diameter.host", defaultValue = "0.0.0.0")
-    String host;
-    @ConfigProperty(name = "ussd.diameter.port", defaultValue = "3868")
-    int port;
-    @ConfigProperty(name = "ussd.diameter.realm", defaultValue = "restlink.local")
-    String realm;
-    @ConfigProperty(name = "ussd.diameter.origin-host", defaultValue = "ussdgw.restlink.local")
-    String originHost;
     @ConfigProperty(name = "ussd.diameter.auto-apply-on-boot", defaultValue = "true")
     boolean autoApplyOnBoot;
 
@@ -44,6 +37,22 @@ public class DiameterApplyService {
 
     public boolean autoApplyOnBoot() {
         return autoApplyOnBoot;
+    }
+
+    public String host() {
+        return config.diameterHost();
+    }
+
+    public int port() {
+        return config.diameterPort();
+    }
+
+    public String realm() {
+        return config.diameterRealm();
+    }
+
+    public String originHost() {
+        return config.diameterOriginHost();
     }
 
     public String apply() {
@@ -83,6 +92,10 @@ public class DiameterApplyService {
             diameterLocation.setDiameterPortSupplier(() -> null);
             return "diameter=off";
         }
+        String host = config.diameterHost();
+        int port = config.diameterPort();
+        String realm = config.diameterRealm();
+        String originHost = config.diameterOriginHost();
         DiameterResourceAdaptor ra = new DiameterResourceAdaptor();
         DiameterRaConfig cfg = new DiameterRaConfig();
         cfg.setHost(host);

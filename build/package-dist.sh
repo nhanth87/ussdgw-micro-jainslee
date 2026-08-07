@@ -208,9 +208,14 @@ rm -rf "$DIST_ROOT/app"
 mkdir -p "$DIST_ROOT/app/html"
 cp -a "$APP_DIR/app/html/." "$DIST_ROOT/app/html/"
 
-cp -f "$APP_DIR/build/application.properties" "$DIST_ROOT/configs/application.properties"
+# NEVER clobber configs/ — that is the operator's live DB/secret config on the server.
+"$SCRIPT_DIR/install-config.sh" \
+  "$APP_DIR/build/application.properties" \
+  "$DIST_ROOT/configs/application.properties"
 if [[ -f "$APP_DIR/build/ss7-lab.json" ]]; then
-  cp -f "$APP_DIR/build/ss7-lab.json" "$DIST_ROOT/configs/ss7-lab.json"
+  "$SCRIPT_DIR/install-config.sh" \
+    "$APP_DIR/build/ss7-lab.json" \
+    "$DIST_ROOT/configs/ss7-lab.json"
 fi
 rm -f "$DIST_ROOT/application.properties"
 cp -f "$APP_DIR/build/run-dist.sh" "$DIST_ROOT/run.sh"

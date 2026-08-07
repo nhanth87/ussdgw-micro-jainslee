@@ -31,6 +31,13 @@ import org.eclipse.microprofile.config.inject.ConfigProperty;
 public class UssdFirstRunSeeder {
 
     private static final Logger LOG = LogManager.getLogger(UssdFirstRunSeeder.class);
+
+    /**
+     * Console-only logger (log4j2.xml routes {@code USSD_FIRST_RUN} to CONSOLE with
+     * {@code additivity="false"}). A generated ADMIN password must not be written into
+     * {@code dist/logs/ussdgw.log}, which is rotated but kept for days.
+     */
+    private static final Logger CONSOLE = LogManager.getLogger("USSD_FIRST_RUN");
     private static final SecureRandom RNG = new SecureRandom();
 
     static final String ADMIN_USERNAME = "admin";
@@ -76,12 +83,15 @@ public class UssdFirstRunSeeder {
             users.create(ADMIN_USERNAME, password, "ADMIN", null, "Platform Admin", true);
         }
         if (firstRunPassword == null || firstRunPassword.isBlank()) {
-            LOG.warn("[first-run] admin user '{}' has a NEW RANDOM password: {} — "
-                            + "log in at /admin/login and change it; this line is not printed again "
-                            + "once an ADMIN password exists.",
+            CONSOLE.warn("[first-run] admin user '{}' has a NEW RANDOM password: {} — "
+                            + "log in at /admin/login and change it now. Printed to the console "
+                            + "only (never to dist/logs/) and not printed again once an ADMIN "
+                            + "password exists.",
                     ADMIN_USERNAME, password);
+            LOG.warn("[first-run] seeded admin user '{}' with a random password — "
+                    + "see the console output of this boot for the value.", ADMIN_USERNAME);
         } else {
-            LOG.warn("[first-run] seeded admin user '{}' with configured lab password "
+            LOG.warn("[first-run] seeded admin user '{}' with the configured lab password "
                             + "(ussd.admin.first-run-password) — change it outside lab.",
                     ADMIN_USERNAME);
         }

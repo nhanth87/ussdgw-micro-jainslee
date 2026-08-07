@@ -1,11 +1,30 @@
-/* USSD admin shell — Alpine.store('ussd') + HTMX ?key= forwarding. Replaces admin.js. */
+/* USSD admin shell — Alpine.store('ussd') + CSRF header + HTMX auth forwarding.
+ *
+ * The server no longer accepts ?key= (it leaks a full-ADMIN credential into access logs,
+ * nginx logs and browser history). Authenticate with the X-USSD-Admin-Key header, or log in
+ * at /admin/login for a session cookie. A ?key= still present in the URL is forwarded as the
+ * header for backwards compatibility, but nothing here adds it to a URL any more.
+ */
 (function () {
   const THEME_KEY = 'ussd-theme';
+  const CSRF_COOKIE = 'ussd_admin_csrf';
 
   function adminKeyFromUrl() {
     try {
       const v = new URLSearchParams(location.search).get('key');
       return (v && v.trim()) ? v.trim() : '';
+    } catch (e) {
+      return '';
+    }
+  }
+
+  /** Double-submit CSRF: echo the (non-HttpOnly) session-derived cookie back as a header. */
+  function csrfToken() {
+    try {
+      const hit = document.cookie.split(';')
+        .map((c) => c.trim())
+        .find((c) => c.startsWith(CSRF_COOKIE + '='));
+      return hit ? decodeURIComponent(hit.substring(CSRF_COOKIE.length + 1)) : '';
     } catch (e) {
       return '';
     }
@@ -17,21 +36,36 @@
     if (key) {
       headers['X-USSD-Admin-Key'] = key;
     }
+    const csrf = csrfToken();
+    if (csrf) {
+      headers['X-USSD-CSRF'] = csrf;
+    }
     return headers;
   }
 
+  /** Kept so old bookmarks still work; never appends a key that is not already in the URL. */
   function withKeyQuery(path) {
-    const key = adminKeyFromUrl();
-    if (!key) return path;
-    return path + (path.includes('?') ? '&' : '?') + 'key=' + encodeURIComponent(key);
+    return path;
   }
 
-  /** HTMX polls/forms inherit auth when the shell was opened with ?key=. */
+  /** HTMX polls/forms inherit auth + CSRF from the shell. */
   document.addEventListener('htmx:configRequest', (ev) => {
+    if (!ev.detail || !ev.detail.headers) return;
     const key = adminKeyFromUrl();
-    if (key && ev.detail && ev.detail.headers) {
+    if (key) {
       ev.detail.headers['X-USSD-Admin-Key'] = key;
     }
+    const csrf = csrfToken();
+    if (csrf) {
+      ev.detail.headers['X-USSD-CSRF'] = csrf;
+    }
+  });
+
+  /** Server HX-Trigger: {"ussdToast":{"message":"...","kind":"ok|error|info"}} */
+  document.addEventListener('ussdToast', (ev) => {
+    const d = ev && ev.detail;
+    if (!d || !d.message) return;
+    toast(String(d.message), d.kind || 'ok');
   });
 
   function applyTheme(theme) {

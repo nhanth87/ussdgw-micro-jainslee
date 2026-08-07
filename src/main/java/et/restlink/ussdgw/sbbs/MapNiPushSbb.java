@@ -3,6 +3,7 @@ package et.restlink.ussdgw.sbbs;
 import et.restlink.ussdgw.bridge.VirtualSessionState;
 import et.restlink.ussdgw.cdr.CdrPhase;
 import et.restlink.ussdgw.events.NiPushReadyEvent;
+import et.restlink.ussdgw.logging.Pii;
 import et.restlink.ussdgw.logging.SleeEventTrace;
 import et.restlink.ussdgw.service.MapDialogHelper;
 import et.restlink.ussdgw.service.SbbServices;
@@ -33,7 +34,7 @@ public final class MapNiPushSbb implements Sbb, SleeEventHandler {
     @Override
     public void onEvent(SleeEvent event, ActivityContextInterface aci) {
         if (!(event instanceof NiPushReadyEvent ni)) return;
-        SleeEventTrace.inSbb("MapNiPushSbb", event, "msisdn=" + ni.msisdn());
+        SleeEventTrace.inSbb("MapNiPushSbb", event, Pii.msisdnDetail(ni.msisdn()));
         String detail;
         try {
             detail = push(ni);
@@ -97,6 +98,7 @@ public final class MapNiPushSbb implements Sbb, SleeEventHandler {
         });
         svc().cdr().write(ni.correlationId(), CdrPhase.COMPLETED, ni.msisdn(),
                 null, "BRIDGED_DONE", null);
-        return "ni-sent msc=" + mscGt;
+        // mscGt falls back to the MSISDN when no session GT is known — mask either way.
+        return "ni-sent msc=" + Pii.maskMsisdn(mscGt);
     }
 }

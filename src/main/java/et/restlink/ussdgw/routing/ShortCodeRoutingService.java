@@ -53,22 +53,22 @@ public class ShortCodeRoutingService {
             }
             rules.put(normalize(e.shortCode),
                     new ShortCodeRule(e.shortCode, type, e.asUrl, e.enabled,
-                            e.tenantId, e.networkId));
+                            e.tenantId, e.networkId, e.mark));
         }
         LOG.info("Loaded {} short-code rules from DB", rules.size());
     }
 
     @Transactional
     public void seedDefaults() {
-        putAndPersist(new ShortCodeRule("*123#", RuleType.HTTP, seedHttpUrl, true, null, 0));
+        putAndPersist(new ShortCodeRule("*123#", RuleType.HTTP, seedHttpUrl, true, null, 0, false));
         putAndPersist(new ShortCodeRule("*456#", RuleType.GRPC,
-                seedGrpcTarget + "|" + seedGrpcMethod, true, null, 0));
+                seedGrpcTarget + "|" + seedGrpcMethod, true, null, 0, false));
     }
 
     private void seedDefaultsInMemory() {
-        put(new ShortCodeRule("*123#", RuleType.HTTP, seedHttpUrl, true, null, 0));
+        put(new ShortCodeRule("*123#", RuleType.HTTP, seedHttpUrl, true, null, 0, false));
         put(new ShortCodeRule("*456#", RuleType.GRPC,
-                seedGrpcTarget + "|" + seedGrpcMethod, true, null, 0));
+                seedGrpcTarget + "|" + seedGrpcMethod, true, null, 0, false));
     }
 
     public void put(ShortCodeRule rule) {
@@ -88,6 +88,7 @@ public class ShortCodeRoutingService {
         e.enabled = rule.enabled();
         e.tenantId = blankToNull(rule.tenantId());
         e.networkId = rule.networkId();
+        e.mark = rule.mark();
         e.persist();
     }
 
@@ -97,10 +98,42 @@ public class ShortCodeRoutingService {
         return ShortCodeEntity.delete("shortCode", shortCode) > 0;
     }
 
+    /**
+     * Resolve AS rule for a dialed USSD string (after {@link #extractShortCode}).
+     * Exact (non-mark) rules win on equality; otherwise longest enabled mark prefix
+     * (classic {@code exactMatch=false} / {@code startsWith}).
+     */
     public Optional<ShortCodeRule> find(String shortCode) {
-        ShortCodeRule r = rules.get(normalize(shortCode));
-        if (r == null || !r.enabled()) return Optional.empty();
-        return Optional.of(r);
+        String sc = normalize(shortCode);
+        if (sc.isEmpty()) {
+            return Optional.empty();
+        }
+        ShortCodeRule exact = rules.get(sc);
+        if (exact != null && exact.enabled() && !exact.mark()) {
+            return Optional.of(exact);
+        }
+        ShortCodeRule bestMark = null;
+        int bestLen = -1;
+        for (ShortCodeRule r : rules.values()) {
+            if (!r.enabled() || !r.mark()) {
+                continue;
+            }
+            String prefix = normalize(r.shortCode());
+            if (prefix.isEmpty() || !sc.startsWith(prefix)) {
+                continue;
+            }
+            if (prefix.length() > bestLen) {
+                bestMark = r;
+                bestLen = prefix.length();
+            }
+        }
+        if (bestMark != null) {
+            return Optional.of(bestMark);
+        }
+        if (exact != null && exact.enabled()) {
+            return Optional.of(exact);
+        }
+        return Optional.empty();
     }
 
     public Collection<ShortCodeRule> list() { return rules.values(); }

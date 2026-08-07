@@ -45,4 +45,6 @@ mvn test -Dlab-ss7=true -Dgroups=lab-ss7
 
 ## Admin
 
-jSS7 plane → **HLR face** fields: mode, fake IMSI/MSC, upper GT, Diameter host/realm.
+Dedicated **`/admin/hlr`** (not SS7 JSON): mode, fake IMSI/MSC, upper GT, Diameter host/realm.
+Outbound SRI-SM (NI `SriSbb` + PROXY_MAP face) CalledParty = resolved `ussd.hlr.upper-gt`
+(admin overlay when non-blank, else `application.properties`). Empty admin field → props default.

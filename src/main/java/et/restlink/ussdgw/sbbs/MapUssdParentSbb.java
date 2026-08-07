@@ -5,6 +5,7 @@ import et.restlink.ussdgw.api.AsRequest;
 import et.restlink.ussdgw.bridge.VirtualSession;
 import et.restlink.ussdgw.cdr.CdrPhase;
 import et.restlink.ussdgw.events.InboundSriSmEvent;
+import et.restlink.ussdgw.hlr.PendingHlrProxyRegistry;
 import et.restlink.ussdgw.logging.SleeEventTrace;
 import et.restlink.ussdgw.routing.RuleType;
 import et.restlink.ussdgw.routing.ShortCodeRule;
@@ -24,6 +25,7 @@ import com.microjainslee.ra.jss7.event.Ss7MapEvent;
 import java.util.Optional;
 import java.util.UUID;
 
+import org.restcomm.protocols.ss7.map.api.MAPMessage;
 import org.restcomm.protocols.ss7.map.api.MAPMessageType;
 import org.restcomm.protocols.ss7.map.api.primitives.IMSI;
 import org.restcomm.protocols.ss7.map.api.service.sms.LocationInfoWithLMSI;
@@ -56,7 +58,7 @@ public final class MapUssdParentSbb implements Sbb, SleeEventHandler {
             try {
                 handleDialog(d);
             } catch (Throwable t) {
-                detail = "error=" + t.getClass().getSimpleName();
+                detail = "error=" + t.getClass().getSimpleName() + " " + endDialogOnFailure(d);
             }
             SleeEventTrace.outSbb("MapUssdParentSbb", event, detail);
             return;
@@ -67,9 +69,90 @@ public final class MapUssdParentSbb implements Sbb, SleeEventHandler {
         try {
             detail = handleService(svc);
         } catch (Throwable t) {
-            detail = "error=" + t.getClass().getSimpleName();
+            detail = "error=" + t.getClass().getSimpleName() + " " + endDialogOnFailure(svc);
         }
         SleeEventTrace.outSbb("MapUssdParentSbb", event, detail);
+    }
+
+    /**
+     * A handler that threw leaves the dialog open: the handset waits for the network timer and the
+     * dialog leaks. End the MS-facing leg with the hard-fail text, abort anything else.
+     */
+    private String endDialogOnFailure(Ss7MapEvent.Service svc) {
+        String dialogId = svc.dialogId();
+        if (dialogId == null || dialogId.isBlank()) return "no-dialog";
+        try {
+            long invokeId = msFacingInvokeId(svc);
+            if (invokeId >= 0) {
+                MapDialogHelper.replyAndEnd(ss7, dialogId, invokeId, hardFailMessage());
+                return "dialog-ended";
+            }
+            MapDialogHelper.abort(ss7, dialogId);
+            return "dialog-aborted";
+        } catch (Throwable t) {
+            return "dialog-end-failed=" + t.getClass().getSimpleName();
+        } finally {
+            markDialogDead(dialogId);
+        }
+    }
+
+    /**
+     * A terminal dialog event (abort/close/release/timeout) means the peer already tore the dialog
+     * down — sending an abort back would itself break the MAP state machine.
+     */
+    private String endDialogOnFailure(Ss7MapEvent.Dialog d) {
+        String dialogId = d.dialogId();
+        if (dialogId == null || dialogId.isBlank()) return "no-dialog";
+        try {
+            if (isTerminal(d.kind())) {
+                return "dialog-already-terminal";
+            }
+            MapDialogHelper.abort(ss7, dialogId);
+            return "dialog-aborted";
+        } catch (Throwable t) {
+            return "dialog-end-failed=" + t.getClass().getSimpleName();
+        } finally {
+            markDialogDead(dialogId);
+        }
+    }
+
+    private static boolean isTerminal(Ss7MapEvent.Kind kind) {
+        return switch (kind) {
+            case USER_ABORT, PROVIDER_ABORT, TIMEOUT, CLOSE, RELEASE -> true;
+            default -> false;
+        };
+    }
+
+    /** InvokeId of a leg the handset is waiting on, or {@code -1} when there is none. */
+    private static long msFacingInvokeId(Ss7MapEvent.Service svc) {
+        MAPMessageType type = svc.type();
+        if (type != MAPMessageType.processUnstructuredSSRequest_Request
+                && type != MAPMessageType.unstructuredSSRequest_Response) {
+            return -1L;
+        }
+        try {
+            MAPMessage msg = svc.message();
+            return msg == null ? -1L : msg.getInvokeId();
+        } catch (Throwable ignored) {
+            return -1L;
+        }
+    }
+
+    private String hardFailMessage() {
+        try {
+            String msg = svc().config().asyncHardFailMessage();
+            if (msg != null && !msg.isBlank()) return msg;
+        } catch (Throwable ignored) { }
+        return "Service temporarily unavailable. Please try again.";
+    }
+
+    private void markDialogDead(String dialogId) {
+        try {
+            svc().store().byDialogId(dialogId).ifPresent(s -> {
+                s.setDialogAlive(false);
+                svc().store().put(s);
+            });
+        } catch (Throwable ignored) { }
     }
 
     private void handleDialog(Ss7MapEvent.Dialog d) {
@@ -212,14 +295,19 @@ public final class MapUssdParentSbb implements Sbb, SleeEventHandler {
         return svc().asPullRouter().route(r, asReq, s.correlationId()) + " continue gen=" + s.generation();
     }
 
+    /**
+     * Strictly correlated: an SRI-SM Response is matched to the outbound leg that asked for it.
+     * With no match there is no session to resolve — the TTL sweep on either registry fails the
+     * corresponding saga. Guessing a pending entry here cross-wires subscribers.
+     */
     private String onSriResponse(Ss7MapEvent.Service svc) {
-        var proxyExact = svc().pendingHlrProxy().take(svc.dialogId());
-        if (proxyExact.isPresent()) {
-            svc().pendingHlrProxy().put(svc.dialogId(), proxyExact.get());
-            return relayHlrProxy(svc, svc.dialogId());
+        String corr = svc.dialogId();
+        var proxy = svc().pendingHlrProxy().take(corr);
+        if (proxy.isPresent()) {
+            return relayHlrProxy(svc, proxy.get());
         }
 
-        var niOpt = svc().pendingSri().take(svc.dialogId());
+        var niOpt = svc().pendingSri().take(corr);
         if (niOpt.isPresent()) {
             var ni = niOpt.get();
             if (svc.message() instanceof SendRoutingInfoForSMResponse) {
@@ -233,14 +321,10 @@ public final class MapUssdParentSbb implements Sbb, SleeEventHandler {
             } catch (Throwable ignored) { }
             return "sri-fail";
         }
-
-        if (svc().pendingHlrProxy().size() > 0) {
-            return relayHlrProxy(svc, svc.dialogId());
-        }
-        return "sri-no-pending";
+        return "sri-no-pending corr=" + corr;
     }
 
-    private String relayHlrProxy(Ss7MapEvent.Service svc, String corr) {
+    private String relayHlrProxy(Ss7MapEvent.Service svc, PendingHlrProxyRegistry.Pending pending) {
         String imsi = null;
         String msc = null;
         byte[] lmsi = null;
@@ -255,6 +339,6 @@ public final class MapUssdParentSbb implements Sbb, SleeEventHandler {
                 lmsi = loc.getLMSI().getData();
             }
         }
-        return svc().hlrFace().relayUpperResponse(corr, imsi, msc, lmsi, ss7);
+        return svc().hlrFace().relayUpperResponse(pending, imsi, msc, lmsi, ss7);
     }
 }

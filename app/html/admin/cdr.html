@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
-  <title>CDR — RestLink USSD</title>
+  <title>CDR — Digicom-ET USSDGW</title>
   <script>
     (function () {
       try {
@@ -38,29 +38,67 @@
   <script defer src="/admin/static/alpine.min.js"></script>
 </head>
 <body x-data class="min-h-full bg-ink font-display text-slate-200 antialiased"
-      style="background-image:radial-gradient(ellipse 80% 50% at 10% -10%,rgba(232,163,23,0.10),transparent),radial-gradient(ellipse 60% 40% at 100% 0%,rgba(56,100,160,0.12),transparent)">
+      style="background-image:radial-gradient(ellipse 80% 50% at 10% -10%,rgba(232,163,23,0.08),transparent),radial-gradient(ellipse 60% 40% at 100% 0%,rgba(56,100,160,0.12),transparent)">
   <header class="sticky top-0 z-40 border-b border-ink-line/80 bg-ink/90 backdrop-blur">
     <div class="mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-3 px-4 py-3">
       <div class="flex items-center gap-3">
         <span class="h-8 w-1 rounded-full bg-signal" aria-hidden="true"></span>
-        <a href="/admin" class="text-lg font-semibold tracking-wide text-slate-100">RestLink USSD</a>
-        <span class="hidden text-xs uppercase tracking-[0.2em] text-ink-mute sm:inline">ops</span>
-      </div>
-      <nav class="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-ink-mute">
-        {{NAV_LINKS}}
-      </nav>
+        <h1 class="text-lg font-semibold text-slate-100">CDR</h1>
+        </div>
+      <nav class="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-ink-mute">{{NAV_LINKS}}</nav>
     </div>
   </header>
   <main class="mx-auto max-w-6xl px-4 py-8">
     {{NOTICE}}
-    <p class="text-xs uppercase tracking-[0.25em] text-signal">Call detail</p>
-    <h1 class="mt-1 text-2xl font-semibold text-slate-50">CDR</h1>
-    <p class="mt-1 text-sm text-ink-mute">Recent CDR rows (tenant-scoped for TENANT).</p>
-    <div id="panel" class="mt-6 min-h-[12rem] rounded-lg border border-ink-line/60 bg-ink-panel/40 p-4"
-         hx-get="/admin/cdr"
-         hx-trigger="load"
-         hx-swap="innerHTML">
-      <p class="text-sm text-ink-mute">loading…</p>
+    <p class="text-xs uppercase tracking-[0.25em] text-signal">CDR · live filter</p>
+    <div class="ops-section-indent">
+      <div class="mb-2 flex flex-wrap items-end justify-between gap-3">
+        <div>
+          <h2 class="mt-1 text-xl font-semibold text-slate-50">Call detail records</h2>
+          <p class="mt-1 mb-2 text-sm text-ink-mute">Optional MSISDN filter (exact match). Shows latest
+            <span class="font-mono text-signal">{{LIMIT}}</span> rows (max 100) — Search swaps the table via
+            <code class="font-mono text-slate-300">/admin/cdr/partial</code>.</p>
+        </div>
+        <span id="cdr-ind" class="htmx-indicator text-xs font-mono text-ink-mute">filtering…</span>
+      </div>
+      <form method="get" action="/admin/cdr"
+            class="filter-bar mb-6 flex flex-wrap items-end gap-3"
+            hx-get="/admin/cdr/partial"
+            hx-target="#cdr-rows"
+            hx-swap="innerHTML"
+            hx-indicator="#cdr-ind"
+            hx-push-url="true">
+        <div>
+          <label class="block text-xs uppercase tracking-wider text-ink-mute">MSISDN</label>
+          <input name="msisdn" value="{{MSISDN}}" placeholder="Filter…"
+                 class="mt-1 rounded-md border border-ink-line bg-ink-panel px-3 py-2 text-sm text-slate-100 focus:border-signal focus:outline-none focus:ring-1 focus:ring-signal/40"/>
+        </div>
+        <div>
+          <label class="block text-xs uppercase tracking-wider text-ink-mute">Limit</label>
+          <input name="limit" value="{{LIMIT}}" type="number" min="1" max="100"
+                 class="mt-1 w-24 rounded-md border border-ink-line bg-ink-panel px-3 py-2 text-sm text-slate-100 focus:border-signal focus:outline-none focus:ring-1 focus:ring-signal/40"/>
+        </div>
+        <button type="submit"
+                class="rounded-md bg-signal px-4 py-2 text-sm font-semibold text-ink hover:bg-signal-dim">
+          Search
+        </button>
+      </form>
+      <div class="table-wrap overflow-x-auto rounded-lg border border-ink-line">
+        <table class="w-full text-left text-sm">
+          <thead class="bg-ink-panel text-xs uppercase tracking-wider text-ink-mute">
+            <tr>
+              <th class="px-3 py-2.5 font-medium">When</th>
+              <th class="px-3 py-2.5 font-medium">Corr</th>
+              <th class="px-3 py-2.5 font-medium">Phase</th>
+              <th class="px-3 py-2.5 font-medium">MSISDN</th>
+              <th class="px-3 py-2.5 font-medium">Short code</th>
+              <th class="px-3 py-2.5 font-medium">Status</th>
+            </tr>
+          </thead>
+          <tbody id="cdr-rows"
+                 class="hx-table-live divide-y divide-ink-line font-mono text-xs [&_td]:px-3 [&_td]:py-2">{{ROWS}}</tbody>
+        </table>
+      </div>
     </div>
   </main>
 </body>

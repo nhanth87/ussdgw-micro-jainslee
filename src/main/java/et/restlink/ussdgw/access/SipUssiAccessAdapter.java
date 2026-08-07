@@ -21,7 +21,6 @@ import java.util.function.Supplier;
 
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
-import org.eclipse.microprofile.config.inject.ConfigProperty;
 
 /**
  * SIP/USSI (TS 24.390) — MO via MESSAGE ingress; NI live when RA active.
@@ -36,10 +35,6 @@ public class SipUssiAccessAdapter implements UssdAccessPort {
     @Inject UssdConfigService config;
     @Inject TenantGuard tenantGuard;
     @Inject SipApplyService sipApply;
-
-    @ConfigProperty(name = "ussd.sip.request-uri-template",
-            defaultValue = "sip:{msisdn}@ussd.restlink.local")
-    String requestUriTemplate;
 
     private final AtomicLong moCount = new AtomicLong();
     private final AtomicLong niCount = new AtomicLong();
@@ -75,7 +70,7 @@ public class SipUssiAccessAdapter implements UssdAccessPort {
         try {
             String callId = "ussi-" + (session.correlationId() == null
                     ? UUID.randomUUID() : session.correlationId());
-            String toUri = requestUriTemplate.replace("{msisdn}",
+            String toUri = config.sipRequestUriTemplate().replace("{msisdn}",
                     session.msisdn() == null ? "" : session.msisdn());
             String fromUri = sipApply == null ? "sip:ussdgw@restlink.local" : sipApply.fromUri();
             sendMessage(port, new SendMessage(

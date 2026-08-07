@@ -32,19 +32,32 @@ public class HlrResolvePolicy {
         return config.hlrFakeMscGt();
     }
 
+    /**
+     * Resolved upper HLR GT for outbound SRI-SM CalledParty.
+     * Non-blank admin KV overlay wins; blank/missing overlay falls back to
+     * {@code application.properties} / {@code @ConfigProperty ussd.hlr.upper-gt}.
+     */
     public String upperHlrGt() {
         return config.hlrUpperGt();
     }
 
-    /** True when upper GT is blank or equals our own USSD/HLR GTs (loop risk). */
+    /**
+     * True when the <em>resolved</em> upper GT is blank/unusable or equals local USSD GT
+     * (or configured fake MSC) — loop risk. Empty admin overlay alone is not a fail if props
+     * supply a usable default.
+     */
     public boolean upperWouldLoop(String upperGt) {
         if (upperGt == null || upperGt.isBlank()) {
             return true;
         }
         String u = digits(upperGt);
+        if (u.isEmpty()) {
+            return true;
+        }
         String local = digits(config.ussdGt());
         String fakeMsc = digits(fakeMscGt());
-        return u.equals(local) || (!fakeMsc.isEmpty() && u.equals(fakeMsc));
+        return (!local.isEmpty() && u.equals(local))
+                || (!fakeMsc.isEmpty() && u.equals(fakeMsc));
     }
 
     public boolean canFake() {

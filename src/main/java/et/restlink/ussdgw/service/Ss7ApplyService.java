@@ -5,6 +5,7 @@ import et.restlink.ussdgw.bridge.UssdSagaCoordinator;
 import et.restlink.ussdgw.bridge.VirtualSessionBridge;
 import et.restlink.ussdgw.config.RuntimeConfigStore;
 import et.restlink.ussdgw.config.Ss7PersistDirs;
+import et.restlink.ussdgw.hlr.PendingHlrProxyRegistry;
 
 import com.microjainslee.core.MicroSleeContainer;
 import com.microjainslee.ra.jss7.Ss7RaConfig;
@@ -33,6 +34,7 @@ public class Ss7ApplyService {
     @Inject LinkStatusService linkStatus;
     @Inject VirtualSessionBridge bridge;
     @Inject UssdSagaCoordinator saga;
+    @Inject PendingHlrProxyRegistry pendingHlrProxy;
     @Inject RuntimeConfigStore store;
 
     @ConfigProperty(name = "ussd.map.enabled", defaultValue = "false")
@@ -77,6 +79,7 @@ public class Ss7ApplyService {
         linkStatus.clearSs7();
         bridge.bindSs7(() -> null);
         saga.bindSs7(() -> null);
+        pendingHlrProxy.bindSs7(() -> null);
         if (ss7Endpoint == null) return "ss7-drained=noop";
         try {
             ss7Endpoint.deactivate();
@@ -164,6 +167,7 @@ public class Ss7ApplyService {
         linkStatus.bindSs7(ra);
         bridge.bindSs7(this::endpoint);
         saga.bindSs7(this::endpoint);
+        pendingHlrProxy.bindSs7(this::endpoint);
         Ss7AdminBindings.bind(ss7Endpoint);
     }
 

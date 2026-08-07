@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
-  <title>Routing — RestLink USSD</title>
+  <title>Routing — Digicom-ET USSDGW</title>
   <script>
     (function () {
       try {
@@ -38,29 +38,124 @@
   <script defer src="/admin/static/alpine.min.js"></script>
 </head>
 <body x-data class="min-h-full bg-ink font-display text-slate-200 antialiased"
-      style="background-image:radial-gradient(ellipse 80% 50% at 10% -10%,rgba(232,163,23,0.10),transparent),radial-gradient(ellipse 60% 40% at 100% 0%,rgba(56,100,160,0.12),transparent)">
+      style="background-image:radial-gradient(ellipse 80% 50% at 10% -10%,rgba(232,163,23,0.08),transparent),radial-gradient(ellipse 60% 40% at 100% 0%,rgba(56,100,160,0.12),transparent)">
   <header class="sticky top-0 z-40 border-b border-ink-line/80 bg-ink/90 backdrop-blur">
     <div class="mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-3 px-4 py-3">
       <div class="flex items-center gap-3">
         <span class="h-8 w-1 rounded-full bg-signal" aria-hidden="true"></span>
-        <a href="/admin" class="text-lg font-semibold tracking-wide text-slate-100">RestLink USSD</a>
-        <span class="hidden text-xs uppercase tracking-[0.2em] text-ink-mute sm:inline">ops</span>
-      </div>
-      <nav class="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-ink-mute">
-        {{NAV_LINKS}}
-      </nav>
+        <h1 class="text-lg font-semibold text-slate-100">Routing</h1>
+        </div>
+      <nav class="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-ink-mute">{{NAV_LINKS}}</nav>
     </div>
   </header>
   <main class="mx-auto max-w-6xl px-4 py-8">
     {{NOTICE}}
-    <p class="text-xs uppercase tracking-[0.25em] text-signal">Short codes</p>
-    <h1 class="mt-1 text-2xl font-semibold text-slate-50">Routing</h1>
-    <p class="mt-1 text-sm text-ink-mute">AS routing rules by short code / tenant.</p>
-    <div id="panel" class="mt-6 min-h-[12rem] rounded-lg border border-ink-line/60 bg-ink-panel/40 p-4"
-         hx-get="/admin/routing"
-         hx-trigger="load"
-         hx-swap="innerHTML">
-      <p class="text-sm text-ink-mute">loading…</p>
+    <p class="text-xs uppercase tracking-[0.25em] text-signal">Create / update</p>
+    <div class="ops-section-indent">
+      <section class="form-card mb-10 rounded-lg border border-ink-line bg-ink-panel/80 p-5">
+        <h2 class="mt-1 text-xl font-semibold text-slate-50">Short-code rule</h2>
+        <p class="mt-1 mb-4 text-sm text-slate-300">
+          Bind short code → HTTP/gRPC AS URL. Optional tenantId / networkId (inherits networkId from tenant when left 0).
+          <strong>Mark=true</strong> = prefix key (classic exactMatch=false): e.g. code <code class="font-mono text-signal">*100*</code>
+          matches <code class="font-mono text-signal">*100*123456#</code> and any longer dial. Save updates the live map immediately.
+        </p>
+        <form method="post" action="/admin/routing" class="mb-4"
+              hx-post="/admin/routing"
+              hx-target="#rule-rows"
+              hx-swap="innerHTML"
+              hx-indicator="#rule-ind">
+          <input type="hidden" name="action" value="reload"/>
+          <button type="submit"
+                  class="rounded-md border border-ink-line px-3 py-1.5 text-xs text-ink-mute hover:border-signal hover:text-signal">
+            Reload from DB
+          </button>
+        </form>
+        <form method="post" action="/admin/routing" class="space-y-3"
+              hx-post="/admin/routing"
+              hx-target="#rule-rows"
+              hx-swap="innerHTML"
+              hx-indicator="#rule-ind">
+          <div>
+            <label class="block text-xs uppercase tracking-wider text-ink-mute">Short code</label>
+            <input name="shortCode" required placeholder="*123#"
+                   class="mt-1 w-full rounded-md border border-ink-line bg-ink px-3 py-2 font-mono text-sm focus:border-signal focus:outline-none focus:ring-1 focus:ring-signal/40"/>
+          </div>
+          <div>
+            <label class="block text-xs uppercase tracking-wider text-ink-mute">Type</label>
+            <select name="ruleType" class="mt-1 w-full rounded-md border border-ink-line bg-ink px-3 py-2 text-sm focus:border-signal focus:outline-none">
+              <option value="HTTP">HTTP</option>
+              <option value="GRPC">GRPC</option>
+            </select>
+          </div>
+          <div>
+            <label class="block text-xs uppercase tracking-wider text-ink-mute">AS URL</label>
+            <input name="asUrl" required placeholder="http://as.example/ussd/pull"
+                   class="mt-1 w-full rounded-md border border-ink-line bg-ink px-3 py-2 font-mono text-sm focus:border-signal focus:outline-none focus:ring-1 focus:ring-signal/40"/>
+          </div>
+          {{TENANT_FIELD}}
+          <div>
+            <label class="block text-xs uppercase tracking-wider text-ink-mute">networkId</label>
+            <input name="networkId" type="number" min="0" value="0"
+                   class="mt-1 w-full rounded-md border border-ink-line bg-ink px-3 py-2 text-sm focus:border-signal focus:outline-none focus:ring-1 focus:ring-signal/40"/>
+          </div>
+          <div>
+            <label class="block text-xs uppercase tracking-wider text-ink-mute">Mark (prefix)</label>
+            <select name="mark" class="mt-1 w-full rounded-md border border-ink-line bg-ink px-3 py-2 text-sm focus:border-signal focus:outline-none">
+              <option value="false">false — exact match</option>
+              <option value="true">true — prefix (*100* → *100*…)</option>
+            </select>
+          </div>
+          <div>
+            <label class="block text-xs uppercase tracking-wider text-ink-mute">enabled</label>
+            <select name="enabled" class="mt-1 w-full rounded-md border border-ink-line bg-ink px-3 py-2 text-sm focus:border-signal focus:outline-none">
+              <option value="true">true</option>
+              <option value="false">false</option>
+            </select>
+          </div>
+          <input type="hidden" name="action" value="save"/>
+          <button type="submit" class="w-full rounded-md bg-signal py-2.5 text-sm font-semibold text-ink hover:bg-signal-dim">
+            Save rule
+          </button>
+        </form>
+      </section>
+    </div>
+
+    <div class="table-wrap">
+      <p class="text-xs uppercase tracking-[0.25em] text-signal">Directory</p>
+      <div class="ops-section-indent">
+        <div class="mb-3 flex flex-wrap items-end justify-between gap-3">
+          <h2 class="mt-1 text-xl font-semibold text-slate-50">Live rules</h2>
+          <div class="flex items-center gap-3">
+            <span id="rule-ind" class="htmx-indicator text-xs font-mono text-ink-mute">saving…</span>
+            <button type="button"
+                    class="rounded-md border border-ink-line px-3 py-1.5 text-xs text-ink-mute hover:border-signal hover:text-signal"
+                    hx-get="/admin/routing/partial"
+                    hx-target="#rule-rows"
+                    hx-swap="innerHTML"
+                    hx-indicator="#rule-ind">
+              Refresh table
+            </button>
+          </div>
+        </div>
+        <div class="overflow-x-auto rounded-lg border border-ink-line">
+          <table class="w-full text-left text-sm">
+            <thead class="bg-ink-panel text-xs uppercase tracking-wider text-ink-mute">
+              <tr>
+                <th class="px-3 py-2.5 font-medium">Code</th>
+                <th class="px-3 py-2.5 font-medium">Type</th>
+                <th class="px-3 py-2.5 font-medium">URL</th>
+                <th class="px-3 py-2.5 font-medium">tenant</th>
+                <th class="px-3 py-2.5 font-medium">net</th>
+                <th class="px-3 py-2.5 font-medium">mark</th>
+                <th class="px-3 py-2.5 font-medium">on</th>
+                <th class="px-3 py-2.5 font-medium"></th>
+              </tr>
+            </thead>
+            <tbody id="rule-rows"
+                   class="hx-table-live divide-y divide-ink-line font-mono text-xs [&_td]:px-3 [&_td]:py-2">{{ROWS}}</tbody>
+          </table>
+        </div>
+      </div>
     </div>
   </main>
 </body>

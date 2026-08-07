@@ -5,6 +5,7 @@ import et.restlink.ussdgw.cdr.CdrService;
 import et.restlink.ussdgw.config.RuntimeConfigStore;
 import et.restlink.ussdgw.config.UssdConfigService;
 import et.restlink.ussdgw.events.InboundSriSmEvent;
+import et.restlink.ussdgw.sbbs.SriSbb;
 
 import com.microjainslee.api.OutboundCommand;
 import com.microjainslee.api.RaCommandPort;
@@ -43,9 +44,9 @@ class HlrFaceServiceTest {
         set(config, "ussdSsnProp", 8);
         set(config, "hlrSsnProp", 6);
         set(config, "hlrModeProp", "PROXY_MAP");
-        set(config, "hlrFakeImsiProp", "636010000000001");
-        set(config, "hlrFakeMscGtProp", "251911000099");
-        set(config, "hlrUpperGtProp", "251900000006");
+        set(config, "hlrFakeImsiProp", java.util.Optional.of("636010000000001"));
+        set(config, "hlrFakeMscGtProp", java.util.Optional.of("251911000099"));
+        set(config, "hlrUpperGtProp", java.util.Optional.of("251900000006"));
         set(config, "diameterEnabledProp", false);
 
         HlrResolvePolicy policy = new HlrResolvePolicy();
@@ -67,6 +68,7 @@ class HlrFaceServiceTest {
         face = new HlrFaceService();
         set(face, "policy", policy);
         set(face, "pendingProxy", pending);
+        set(face, "locationCache", new HlrLocationCache());
         set(face, "diameter", diameter);
         set(face, "config", config);
         set(face, "cdr", cdr);
@@ -109,6 +111,7 @@ class HlrFaceServiceTest {
         assertThat(port.cmds.get(0)).isInstanceOf(Ss7Command.MapSendRoutingInfoForSm.class);
         var sri = (Ss7Command.MapSendRoutingInfoForSm) port.cmds.get(0);
         assertThat(sri.targetAddress().globalTitle()).isEqualTo("251900000006");
+        assertThat(sri.targetAddress().globalTitle()).isNotEqualTo(ev.msisdn());
         assertThat(pending.size()).isEqualTo(1);
 
         port.cmds.clear();
@@ -118,6 +121,41 @@ class HlrFaceServiceTest {
         var rsp = (Ss7Command.MapSendRoutingInfoForSmResponse) port.cmds.get(0);
         assertThat(rsp.dialogId()).isEqualTo("99");
         assertThat(rsp.imsi()).isEqualTo("63601999");
+    }
+
+    @Test
+    void upperGtAdminOverlayWinsOverProps() throws Exception {
+        set(config, "hlrUpperGtProp", java.util.Optional.of("251900000006"));
+        injectCache(store, RuntimeConfigStore.Keys.HLR_UPPER_GT, "251911111111");
+
+        HlrResolvePolicy policy = new HlrResolvePolicy();
+        set(policy, "config", config);
+        assertThat(policy.upperHlrGt()).isEqualTo("251911111111");
+        assertThat(policy.upperWouldLoop(policy.upperHlrGt())).isFalse();
+    }
+
+    @Test
+    void upperGtBlankOverlayFallsBackToProps() throws Exception {
+        set(config, "hlrUpperGtProp", java.util.Optional.of("251900000006"));
+        injectCache(store, RuntimeConfigStore.Keys.HLR_UPPER_GT, "");
+
+        HlrResolvePolicy policy = new HlrResolvePolicy();
+        set(policy, "config", config);
+        assertThat(policy.upperHlrGt()).isEqualTo("251900000006");
+        assertThat(SriSbb.resolveUpperHlrGt(config, policy)).isEqualTo("251900000006");
+        assertThat(SriSbb.isUnusableUpperHlrGt(config, policy, policy.upperHlrGt())).isFalse();
+    }
+
+    @Test
+    void upperGtBlankResolvedFailsClosed() throws Exception {
+        set(config, "hlrUpperGtProp", java.util.Optional.empty());
+        clearStore(store);
+
+        HlrResolvePolicy policy = new HlrResolvePolicy();
+        set(policy, "config", config);
+        assertThat(policy.upperHlrGt()).isBlank();
+        assertThat(policy.upperWouldLoop(policy.upperHlrGt())).isTrue();
+        assertThat(SriSbb.isUnusableUpperHlrGt(config, policy, policy.upperHlrGt())).isTrue();
     }
 
     @Test

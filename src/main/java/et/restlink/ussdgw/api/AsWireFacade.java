@@ -77,7 +77,7 @@ public class AsWireFacade {
         try {
             AsRequest req = AsWireCodec.decodeRequest(body.getBytes(java.nio.charset.StandardCharsets.UTF_8));
             return new ClassicNiIngress(req.msisdn(), req.ussdString(), req.correlationId(),
-                    false, AsHttpWireFormat.JSON);
+                    false, AsHttpWireFormat.JSON, req.networkId());
         } catch (Exception ignored) {
             AsResponse resp = AsWireCodec.decodeResponse(body, null);
             return new ClassicNiIngress(null, resp.text(), resp.correlationId(), false, AsHttpWireFormat.JSON);

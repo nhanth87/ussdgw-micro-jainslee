@@ -61,10 +61,22 @@ Peer: OTA [`docs/agents/packaging.md`](../../../../ota-service/ota-sim-push/docs
 
 ## Admin UX (OTA shell → USSD)
 
-- Disk templates under `app/html/admin/` + `partials/` + `static/` via `AdminPageRenderer` (`ussd.admin.ui-dir`).
-- Copy **shell** from ota-sim-push (Alpine theme, login, nav, mustache `{{TOKEN}}`) — rebrand RestLink USSD.
-- **USSD pages only:** routing, bridge, campaigns, CDR, tenants, users, lab-mo, http sync/async/callback, grpc, diameter, sip — **no** fleet/CAP/sendota.
+- **UI brand:** Digicom-ET USSDGW (titles, headers, login, nav). Package names stay `et.restlink.*`.
+- Disk templates under `app/html/admin/` + `partials/` + `static/` via `AdminPageRenderer` (`ussd.admin.ui-dir`). Sync to `dist/app/html/admin/` when editing.
+- Copy **shell** from ota-sim-push (Alpine theme, ink/signal amber `#e8a317`, DM Sans / JetBrains Mono) — never invent purple/cream skins.
+- **Plane pages = Routing shell:** header title (**no** `hx-live-badge` / visible HTMX chrome); progressive `form-card` + `hx-post` → `#plane-notice` where editable; Directory / live status below uses **ink-panel** surfaces (never nested pure-black `bg-ink` status holes).
+- **No hub redirect:** `/admin/ss7|hlr|smpp|http|grpc|diameter|sip` serve the plane shell directly. `/admin/*/config` aliases the same panel for POST/HTMX. Monitor Hub (`/telemetry/`) = metrics only.
+- **SS7 / SMPP = JSON only:** no host/port/OPC/systemId field grids. SS7 = `mapEnabled` + `configFile` + `stackJson` textarea (ADMIN/OPS); TENANT = LIVE/DOWN. SMPP = single `smppJson` via `SmppConfigSupport.activeJsonOrLab()` + Save/Apply/Start/Stop.
+- **HLR face:** `/admin/hlr` form (mode, fake IMSI/MSC GT, upper GT, Diameter dest host/realm) — **not** on SS7 JSON page. Persist `ussd.hlr.*` KV; hot-read at SRI time. Outbound SRI-SM CalledParty = resolved `ussd.hlr.upper-gt` (admin overlay, else props); blank overlay ≠ fail if props set; fail-closed only if resolved GT blank or == local USSD GT. ADMIN/OPS edit; TENANT read-only. Default PROXY_MAP fail-closed.
+- **HTTP / gRPC = status only:** live badges/cards + read-only NI push URL / callback path on HTTP; no Apply config forms. Poll `/admin/links*` / plane status endpoints.
+- **Diameter / SIP = form + status:** enabled + host/port/realm/origin (Diameter) or tcp/udp/fromUri/requestUri (SIP); Persist KV in `RuntimeConfigStore` then Apply via `DiameterApplyService` / `SipApplyService`.
+- **SS7 role gate:** `stackJson` + Apply editable for **ADMIN/OPS** only (`Principal.isAdminOrOps`). TENANT sees LIVE/DOWN (`linkStatus`) — not editable stack fields.
+- **HTTP:** show **Push USSD NI** clearly — read-only `POST {{NI_PUSH_URL}}` from `ussd.http.ni-path` (default `/ussd`) + listen host:port; also callback path.
+- **Bridge:** `asyncWaitMessage` / `asyncHardFailMessage` are UTF-8 textareas (no alphabet dropdown); parseForm UTF-8; `VirtualSessionBridge.onGateExpired` → `MapDialogHelper.replyAndEnd` (AUTO→UCS-2).
+- **Dashboard Planes:** status-first `form-card` rows (`bg-ink-panel`); Open → `/admin/ss7|hlr|smpp|http|grpc|diameter|sip|lab-mo`; secondary Monitor Hub link.
+- **USSD pages only:** routing, bridge, campaigns, CDR, tenants, users, lab-mo, http sync/async/callback, grpc, diameter, sip, hlr, ss7/smpp/http — **no** fleet/CAP/sendota.
 - Always seed `{{NAV_LINKS}}`, `{{NOTICE}}`, banners; never leave raw mustache. → [lessons.md](lessons.md)
+- Keep `htmx.min.js` for AJAX; **remove** all visible `hx-live-badge` / “HTMX” badges.
 
 ## Compress — remember these
 
@@ -74,8 +86,15 @@ Peer: OTA [`docs/agents/packaging.md`](../../../../ota-service/ota-sim-push/docs
 - **`AGENTS.md` stays thin** — durable rules live here / linked docs.
 - **HTTP AS modes:** Sync / Async / Callback = admin HTMX + Monitor Hub hooks; TENANT lab only. Pull carries `correlationId` (push-back key), `sessionId`/`virtualBridgeId`, `adaptiveTimeoutMs` — same JSON fields on gRPC.
 - **AS HTTP wire (dual-mode):** default **XML** (`text/xml`, classic `<dialog>`) + opt-in **JSON**; per-tenant `http_as_wire_format` / `ussd.as.http.wire-format`. NI sync path `/ussd` + `JSESSIONID`; park with `AdaptiveTimeout`, never `Thread.sleep`. → [classic-xml.md](../as-contract/classic-xml.md)
-- **HLR face:** inbound SRI-SM → `HlrResponderSbb`. Default PROXY_MAP fail-closed. → [ss7-lab-pair.md](ss7-lab-pair.md)
+- **Routing Mark:** `ussd_short_code.mark=true` = prefix key (classic `exactMatch=false`): `*100*` matches `*100*123456#`. Exact non-mark rules win on equality; else longest mark prefix. Admin `/admin/routing` field **Mark**.
+- **HLR face:** inbound SRI-SM → `HlrResponderSbb`; NI/PROXY_MAP outbound SRI CalledParty = resolved `ussd.hlr.upper-gt` (overlay→props). Admin `/admin/hlr`. Default PROXY_MAP fail-closed. → [ss7-lab-pair.md](ss7-lab-pair.md)
 - **Diameter / SIP:** live MO/NI when RA peer ready; stub only when down.
 - **AS pull:** raw body (XML or JSON) — never `CallbackRequest` envelope for pull.
+- **Bridge idempotency (non-negotiable):** every path that emits a MAP reply or an NI push must first win a **CAS**, never a read-only inspection. `VirtualSessionStore.claimForAsResponse` takes `AWAITING_AS|S1_RELEASED → RESPONDING` (classic `BridgeReconciler` `BRIDGED → PUSH_PENDING`); `onGateExpired` takes `AWAITING_AS → S1_RELEASED|COMPLETED` and returns `false` when it loses. `acceptAsResponse` is a **read-only** pre-check — never act on it alone.
+- **CAS ≠ then rewrite the row:** after a successful `compareAndSetField`, never `get()`+`put()`. `UssdTxProfileMapper.write` republishes all CMP fields from a detached snapshot and silently reverts concurrent single-field writes (resurrecting `dialogAlive` on a dead dialog). Use `VirtualSessionStore.setDialogAlive` / `ProfileFacility.updateField` for caller-owned fields.
+- **Gate tick:** `BridgeGateScheduler.tickGates` is `ConcurrentExecution.SKIP` with per-session `catch (Throwable)`. The due list is deadline-ordered, so one throwing session would otherwise sit first on every tick and **no gate would ever fire again** — every parked MAP dialog hangs to MSC timeout. Gate discovery walks an in-memory deadline index (O(due), not a full deserialize of every `AWAITING_AS` row at 10 Hz); the Profile table stays the source of truth and every index hit is re-validated.
+- **Store reads never throw:** a row removed mid-read invalidates its `ProfileLocalObject` (micro-jainslee C8). `VirtualSessionStore.get` answers `Optional.empty()`; `put` retries once. Nothing may propagate out of a SLEE event handler.
+- **Adaptive EWMA:** keyed by **`networkId`** (never MSISDN — unbounded cardinality), shared pull+push. Samples clamped to `[FLOOR_MS, dialogTimeoutMs]`, decayed back toward the configured gate while idle, dropped when stale, and resettable (`reset` / `resetAll`) after an AS redeploy. Durations use `System.nanoTime()`; wall clock is only for the durable gate deadline and CDR timestamps.
+- **Bridge CDR:** `gate_ms` + `observed_ewma_ms` are real `ussd_cdr` columns (Flyway **V5**, registered in `UssdSchemaInitializer.MIGRATIONS`) — not free-text `detail`. Never edit V1–V4 (checksum break).
 - **Logging:** Log4j2 → `ussd.log.dir` / `dist/logs/`; SLEE boundary = `SleeEventTrace` only.
 - **Commits:** nhanth87 / Tran Nhan only — no AI co-author trailers.

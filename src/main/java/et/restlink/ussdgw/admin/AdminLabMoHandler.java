@@ -9,6 +9,7 @@ import et.restlink.ussdgw.tenant.TenantService;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 
+import java.util.LinkedHashMap;
 import java.util.Map;
 
 /**
@@ -21,7 +22,19 @@ public class AdminLabMoHandler {
     @Inject UssdConfigService config;
 
     public AdminHttpHandler.HttpReply get(AdminAuthService.Principal who) {
-        return AdminHttpHandler.HttpReply.html(html(null, who));
+        return AdminHttpHandler.HttpReply.html("<p class=\"text-ink-mute\">Ready — use the form above.</p>")
+                .withHeader("Vary", "HX-Request");
+    }
+
+    /** Disk-template seed for {@code lab-mo.html}. */
+    public Map<String, String> pageVars(AdminAuthService.Principal who) {
+        Map<String, String> m = new LinkedHashMap<>();
+        m.put("{{DIAM_ON}}", String.valueOf(config.diameterEnabled()));
+        m.put("{{SMPP_ON}}", String.valueOf(config.smppUssdEnabled()));
+        m.put("{{SIP_ON}}", String.valueOf(config.sipEnabled()));
+        m.put("{{LAST_RESULT}}", "Ready — inject an MO below.");
+        m.put("{{TENANT_DATALIST}}", tenantDatalist(who));
+        return m;
     }
 
     public AdminHttpHandler.HttpReply post(String body, AdminAuthService.Principal who) {
@@ -42,53 +55,46 @@ public class AdminLabMoHandler {
                     parseInt(f.get("networkId"), 0));
             String notice = "MO ok corr=" + r.session().correlationId()
                     + " " + r.routeDetail();
-            return AdminHttpHandler.HttpReply.html(html(notice, who));
+            return noticeReply(notice, "ok");
         } catch (RuntimeException ex) {
-            return AdminHttpHandler.HttpReply.html(html("error: " + esc(ex.getMessage()), who));
+            return noticeReply("error: " + nullToEmpty(ex.getMessage()), "error");
         }
     }
 
-    private String html(String notice, AdminAuthService.Principal who) {
-        StringBuilder sb = new StringBuilder();
-        sb.append("<div class=\"catalog lab-mo-panel\">");
-        if (notice != null) sb.append("<p class=\"notice\">").append(esc(notice)).append("</p>");
-        sb.append("<h2>Lab MO inject</h2>");
-        sb.append("<p class=\"hint\">Starts a stub MO session on Diameter/SMPP/SIP, arms AS await, ")
-                .append("and routes PullHttp/PullGrpc like MAP. Plane must be enabled in config. ")
-                .append("Diameter=").append(config.diameterEnabled())
-                .append(" SMPP=").append(config.smppUssdEnabled())
-                .append(" SIP=").append(config.sipEnabled()).append(".</p>");
-        sb.append("<form hx-post=\"/admin/lab/mo\" hx-target=\"#panel\" hx-swap=\"innerHTML\" ")
-                .append("hx-headers='{\"X-USSD-Admin-Key\":\"ussd-admin\"}' class=\"grid-form\">");
-        sb.append("<label>plane <select name=\"plane\">")
-                .append("<option>SMPP</option><option>DIAMETER</option><option>SIP</option>")
-                .append("</select></label>");
-        sb.append("<label>msisdn <input name=\"msisdn\" required placeholder=\"251911000000\"/></label>");
-        sb.append("<label>shortCode <input name=\"shortCode\" placeholder=\"*123#\"/></label>");
-        sb.append("<label style=\"flex:1 1 100%\">ussd text <input name=\"ussd\" size=\"40\" ")
-                .append("placeholder=\"*123#\"/></label>");
+    private static AdminHttpHandler.HttpReply noticeReply(String message, String kind) {
+        String html = "<p class=\"admin-notice\">" + esc(message) + "</p>";
+        return AdminHttpHandler.HttpReply.html(html)
+                .withHeader("HX-Trigger",
+                        "{\"ussdToast\":{\"message\":" + jsonStr(message)
+                                + ",\"kind\":" + jsonStr(kind) + "}}")
+                .withHeader("Vary", "HX-Request");
+    }
+
+    private String tenantDatalist(AdminAuthService.Principal who) {
         if (who != null && who.isTenantScoped()) {
-            sb.append("<input type=\"hidden\" name=\"tenantId\" value=\"")
-                    .append(esc(who.tenantId())).append("\"/>");
-        } else {
-            sb.append("<label>tenantId <input name=\"tenantId\" list=\"lab-tenant-ids\"/></label>");
+            return "";
         }
-        sb.append("<label>networkId <input name=\"networkId\" type=\"number\" value=\"0\" min=\"0\"/></label>");
-        sb.append("<button type=\"submit\">Inject MO</button></form>");
-        if (who == null || !who.isTenantScoped()) {
-            sb.append("<datalist id=\"lab-tenant-ids\">");
-            for (TenantEntity t : tenants.list()) {
-                sb.append("<option value=\"").append(esc(t.tenantId)).append("\"/>");
-            }
-            sb.append("</datalist>");
+        StringBuilder sb = new StringBuilder("<datalist id=\"lab-tenant-ids\">");
+        for (TenantEntity t : tenants.list()) {
+            sb.append("<option value=\"").append(esc(t.tenantId)).append("\"/>");
         }
-        sb.append("</div>");
+        sb.append("</datalist>");
         return sb.toString();
     }
 
     private static int parseInt(String s, int def) {
         if (s == null || s.isBlank()) return def;
         try { return Integer.parseInt(s.trim()); } catch (NumberFormatException e) { return def; }
+    }
+
+    private static String nullToEmpty(String s) {
+        return s == null ? "" : s;
+    }
+
+    private static String jsonStr(String s) {
+        if (s == null) return "\"\"";
+        return "\"" + s.replace("\\", "\\\\").replace("\"", "\\\"")
+                .replace("\n", "\\n").replace("\r", "") + "\"";
     }
 
     private static String esc(String s) {

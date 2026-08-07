@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="en" class="h-full">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>HLR Face — Digicom-ET USSDGW</title>
+  <script>
+    (function () {
+      try {
+        var t = localStorage.getItem('ussd-theme');
+        if (t === 'light' || t === 'dark') document.documentElement.setAttribute('data-theme', t);
+      } catch (e) { /* ignore */ }
+    })();
+  </script>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            ink: { DEFAULT: '#0c1220', panel: '#141c2b', line: '#243044', mute: '#7a8ba3' },
+            signal: { DEFAULT: '#e8a317', dim: '#b87f0f' }
+          },
+          fontFamily: {
+            display: ['"DM Sans"', 'system-ui', 'sans-serif'],
+            mono: ['"JetBrains Mono"', 'ui-monospace', 'monospace']
+          }
+        }
+      }
+    };
+  </script>
+  <link rel="preconnect" href="https://fonts.googleapis.com"/>
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin/>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600;9..40,700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet"/>
+  <script src="/admin/static/htmx.min.js"></script>
+  <link rel="stylesheet" href="/admin/static/admin.css"/>
+  <script defer src="/admin/static/ussd-shell.js"></script>
+  <script defer src="/admin/static/alpine.min.js"></script>
+</head>
+<body x-data class="min-h-full bg-ink font-display text-slate-200 antialiased"
+      style="background-image:radial-gradient(ellipse 80% 50% at 10% -10%,rgba(232,163,23,0.08),transparent),radial-gradient(ellipse 60% 40% at 100% 0%,rgba(56,100,160,0.12),transparent)">
+  <header class="sticky top-0 z-40 border-b border-ink-line/80 bg-ink/90 backdrop-blur">
+    <div class="mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-3 px-4 py-3">
+      <div class="flex items-center gap-3">
+        <span class="h-8 w-1 rounded-full bg-signal" aria-hidden="true"></span>
+        <h1 class="text-lg font-semibold text-slate-100">HLR Face</h1>
+      </div>
+      <nav class="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-ink-mute">{{NAV_LINKS}}</nav>
+    </div>
+  </header>
+  <main class="mx-auto max-w-6xl px-4 py-8">
+    {{NOTICE}}
+    <div id="plane-notice"></div>
+    {{TENANT_BANNER}}
+
+    <p class="text-xs uppercase tracking-[0.25em] text-signal">Create / update</p>
+    <div class="ops-section-indent">
+      <section class="form-card mb-10 rounded-lg border border-ink-line bg-ink-panel/80 p-5 {{EDIT_CLASS}}" style="max-width:40rem;margin-inline:auto">
+        <h2 class="mt-1 text-xl font-semibold text-slate-50">HLR Face</h2>
+        <p class="mt-1 mb-4 text-sm text-slate-300">
+          Inbound SRI-SM face (<code class="font-mono">HlrResponderSbb</code>) — separate from SS7 stack JSON.
+          Default <strong class="text-slate-100">PROXY_MAP</strong> is fail-closed (no silent FAKE).
+          KV is hot-read at request time via <code class="font-mono">RuntimeConfigStore</code>.
+        </p>
+        <form method="post" action="/admin/hlr" accept-charset="UTF-8" class="space-y-3"
+              hx-post="/admin/hlr" hx-target="#plane-notice" hx-swap="innerHTML" hx-indicator="#hlr-ind">
+          <div>
+            <label class="block text-xs uppercase tracking-wider text-ink-mute">mode</label>
+            <select name="mode" class="mt-1 w-full rounded-md border border-ink-line bg-ink-panel px-3 py-2 text-sm focus:border-signal focus:outline-none">
+              <option value="PROXY_MAP" {{MODE_PROXY_MAP}}>PROXY_MAP (default, fail-closed)</option>
+              <option value="FAKE" {{MODE_FAKE}}>FAKE</option>
+              <option value="PROXY_DIAMETER" {{MODE_PROXY_DIAMETER}}>PROXY_DIAMETER</option>
+              <option value="FAKE_THEN_RESOLVE" {{MODE_FAKE_THEN_RESOLVE}}>FAKE_THEN_RESOLVE</option>
+            </select>
+            <p class="mt-1 text-xs text-ink-mute">
+              PROXY_* never falls back to FAKE. FAKE / FAKE_THEN_RESOLVE need fake IMSI + MSC GT.
+            </p>
+          </div>
+          <div>
+            <label class="block text-xs uppercase tracking-wider text-ink-mute">fake IMSI</label>
+            <input name="fakeImsi" value="{{FAKE_IMSI}}" type="text"
+                   class="mt-1 w-full rounded-md border border-ink-line bg-ink-panel px-3 py-2 font-mono text-sm focus:border-signal focus:outline-none focus:ring-1 focus:ring-signal/40"/>
+            <p class="mt-1 text-xs text-ink-mute"><code class="font-mono">ussd.hlr.fake.imsi</code></p>
+          </div>
+          <div>
+            <label class="block text-xs uppercase tracking-wider text-ink-mute">fake MSC GT</label>
+            <input name="fakeMscGt" value="{{FAKE_MSC_GT}}" type="text"
+                   class="mt-1 w-full rounded-md border border-ink-line bg-ink-panel px-3 py-2 font-mono text-sm focus:border-signal focus:outline-none focus:ring-1 focus:ring-signal/40"/>
+            <p class="mt-1 text-xs text-ink-mute"><code class="font-mono">ussd.hlr.fake.msc-gt</code></p>
+          </div>
+          <div>
+            <label class="block text-xs uppercase tracking-wider text-ink-mute">upper HLR GT</label>
+            <input name="upperGt" value="{{UPPER_GT}}" type="text"
+                   class="mt-1 w-full rounded-md border border-ink-line bg-ink-panel px-3 py-2 font-mono text-sm focus:border-signal focus:outline-none focus:ring-1 focus:ring-signal/40"/>
+            <p class="mt-1 text-xs text-ink-mute">
+              <code class="font-mono">ussd.hlr.upper-gt</code> — Outbound SRI-SM CalledParty = this HLR GT
+              (NI push + PROXY_MAP). Empty field → <code class="font-mono">application.properties</code> default.
+              Fail-closed only if resolved GT is blank or equals local USSD GT (loop).
+            </p>
+          </div>
+          <div>
+            <label class="block text-xs uppercase tracking-wider text-ink-mute">Diameter destinationHost</label>
+            <input name="diameterDestinationHost" value="{{DIAM_DEST_HOST}}" type="text"
+                   class="mt-1 w-full rounded-md border border-ink-line bg-ink-panel px-3 py-2 font-mono text-sm focus:border-signal focus:outline-none focus:ring-1 focus:ring-signal/40"/>
+            <p class="mt-1 text-xs text-ink-mute"><code class="font-mono">ussd.hlr.diameter.destination-host</code> (PROXY_DIAMETER)</p>
+          </div>
+          <div>
+            <label class="block text-xs uppercase tracking-wider text-ink-mute">Diameter destinationRealm</label>
+            <input name="diameterDestinationRealm" value="{{DIAM_DEST_REALM}}" type="text"
+                   class="mt-1 w-full rounded-md border border-ink-line bg-ink-panel px-3 py-2 font-mono text-sm focus:border-signal focus:outline-none focus:ring-1 focus:ring-signal/40"/>
+            <p class="mt-1 text-xs text-ink-mute"><code class="font-mono">ussd.hlr.diameter.destination-realm</code></p>
+          </div>
+          <div class="plane-actions flex flex-wrap gap-2 pt-2">
+            <button type="submit" name="action" value="save"
+                    class="rounded-md border border-ink-line px-3 py-2 text-sm text-ink-mute hover:border-signal hover:text-signal">Save</button>
+            <button type="submit" name="action" value="saveApply"
+                    class="rounded-md bg-signal px-3 py-2 text-sm font-semibold text-ink hover:bg-signal-dim">Save &amp; Apply</button>
+            <span id="hlr-ind" class="htmx-indicator text-xs font-mono text-ink-mute self-center">saving…</span>
+          </div>
+        </form>
+      </section>
+    </div>
+
+    <p class="text-xs uppercase tracking-[0.25em] text-signal">Policy / help</p>
+    <div class="ops-section-indent">
+      <div class="rounded-lg border border-ink-line bg-ink-panel/60 p-4 space-y-2 text-sm text-slate-300">
+        <p>Active mode: <span class="font-mono text-signal">{{MODE_LABEL}}</span></p>
+        <p>Outbound <code class="font-mono">SendRoutingInfoForSM</code> CalledParty = resolved upper HLR GT
+          (admin overlay, else props) — never subscriber MSISDN. FAKE mode answers locally (no outbound SRI).</p>
+        <p>SS7 peer LIVE gates PROXY_MAP / NI SRI delivery — same truth as NI push (not listen-alone).</p>
+        <p class="text-ink-mute">
+          Per-network override keys: <code class="font-mono">ussd.hlr.network.&lt;id&gt;.mode</code>
+          (KV only; not on this form). SS7 page is stack JSON only —
+          <a class="text-signal hover:underline" href="/admin/ss7">/admin/ss7</a>.
+        </p>
+        <p class="text-ink-mute">
+          <a class="text-signal hover:underline" href="/telemetry/?tab=ss7">Monitor Hub</a>
+          · brand <span class="text-slate-300">Digicom-ET USSDGW</span>
+        </p>
+      </div>
+    </div>
+
+  </main>
+</body>
+</html>

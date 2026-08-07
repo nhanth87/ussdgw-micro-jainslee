@@ -17,6 +17,7 @@ import et.restlink.ussdgw.tenant.TenantGuard;
 import et.restlink.ussdgw.campaign.CampaignService;
 import et.restlink.ussdgw.hlr.DiameterLocationClient;
 import et.restlink.ussdgw.hlr.HlrFaceService;
+import et.restlink.ussdgw.hlr.HlrResolvePolicy;
 import et.restlink.ussdgw.hlr.PendingHlrProxyRegistry;
 import et.restlink.ussdgw.access.DiameterUssdAccessAdapter;
 import et.restlink.ussdgw.access.SipUssiAccessAdapter;
@@ -43,12 +44,14 @@ public class SbbServices {
     @Inject PendingSriRegistry pendingSri;
     @Inject PendingHlrProxyRegistry pendingHlrProxy;
     @Inject HlrFaceService hlrFace;
+    @Inject HlrResolvePolicy hlrPolicy;
     @Inject DiameterLocationClient diameterLocation;
     @Inject DiameterUssdAccessAdapter diameterAccess;
     @Inject SipUssiAccessAdapter sipAccess;
     @Inject et.restlink.ussdgw.ra.smpp.SmppEndpointRegistry smppRegistry;
     @Inject TenantGuard tenantGuard;
     @Inject AsPullClient asPull;
+    @Inject AsPullStateRegistry asPullState;
     @Inject UssdSagaCoordinator saga;
     @Inject CallbackAuthService callbackAuth;
     @Inject CampaignService campaigns;
@@ -78,12 +81,14 @@ public class SbbServices {
     public PendingSriRegistry pendingSri() { return pendingSri; }
     public PendingHlrProxyRegistry pendingHlrProxy() { return pendingHlrProxy; }
     public HlrFaceService hlrFace() { return hlrFace; }
+    public HlrResolvePolicy hlrPolicy() { return hlrPolicy; }
     public DiameterLocationClient diameterLocation() { return diameterLocation; }
     public DiameterUssdAccessAdapter diameterAccess() { return diameterAccess; }
     public SipUssiAccessAdapter sipAccess() { return sipAccess; }
     public et.restlink.ussdgw.ra.smpp.SmppEndpointRegistry smppRegistry() { return smppRegistry; }
     public TenantGuard tenantGuard() { return tenantGuard; }
     public AsPullClient asPull() { return asPull; }
+    public AsPullStateRegistry asPullState() { return asPullState; }
     public UssdSagaCoordinator saga() { return saga; }
     public CallbackAuthService callbackAuth() { return callbackAuth; }
     public CampaignService campaigns() { return campaigns; }
