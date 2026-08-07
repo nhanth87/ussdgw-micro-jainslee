@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
-  <title>Dashboard — RestLink USSD</title>
+  <title>Dashboard — Digicom-ET USSDGW</title>
   <script>
     (function () {
       try {
@@ -43,10 +43,9 @@
     <div class="mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-3 px-4 py-3">
       <div class="flex items-center gap-3">
         <span class="h-8 w-1 rounded-full bg-signal" aria-hidden="true"></span>
-        <a href="/admin" class="text-lg font-semibold tracking-wide text-slate-100">RestLink USSD</a>
+        <a href="/admin" class="text-lg font-semibold tracking-wide text-slate-100">Digicom-ET USSDGW</a>
         <span class="hidden text-xs uppercase tracking-[0.2em] text-ink-mute sm:inline">ops</span>
-        <span class="hx-live-badge" title="Dashboard metrics poll via HTMX">HTMX</span>
-      </div>
+        </div>
       <nav class="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-ink-mute">
         {{NAV_LINKS}}
       </nav>
@@ -69,7 +68,7 @@
            hx-trigger="load, every 5s"
            hx-swap="innerHTML"
            hx-indicator="#status-ind">
-        <p class="text-sm text-ink-mute">loading…</p>
+        <p class="text-sm text-ink-mute">loading metrics…</p>
       </div>
     </div>
 

@@ -1,21 +1,26 @@
 package et.restlink.ussdgw.tenant;
 
 import et.restlink.ussdgw.persist.AdminUserEntity;
+import et.restlink.ussdgw.security.PasswordHasher;
 
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.transaction.Transactional;
 
-import java.nio.charset.StandardCharsets;
-import java.security.MessageDigest;
-import java.security.SecureRandom;
 import java.time.Instant;
-import java.util.HexFormat;
 import java.util.List;
 import java.util.Optional;
 
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
+import org.eclipse.microprofile.config.inject.ConfigProperty;
+
 @ApplicationScoped
 public class AdminUserService {
-    private static final SecureRandom RNG = new SecureRandom();
+    private static final Logger LOG = LogManager.getLogger(AdminUserService.class);
+
+    /** Field initialiser mirrors {@code defaultValue} for non-CDI construction in tests. */
+    @ConfigProperty(name = "ussd.admin.password.bcrypt-cost", defaultValue = "10")
+    int bcryptCost = PasswordHasher.DEFAULT_COST;
 
     @Transactional
     public List<AdminUserEntity> list() {
@@ -72,20 +77,39 @@ public class AdminUserService {
         return AdminUserEntity.deleteById(username);
     }
 
+    /**
+     * Verifies a password and transparently upgrades pre-bcrypt (unsalted SHA-256) rows to
+     * bcrypt on the way through, so no operator action is needed to migrate existing users.
+     */
     public boolean authenticate(String username, String password) {
         Optional<AdminUserEntity> opt = byUsername(username);
-        if (opt.isEmpty() || !opt.get().enabled) return false;
-        return constantTimeEquals(opt.get().passwordHash, hashPassword(password));
+        if (opt.isEmpty() || !opt.get().enabled || password == null) return false;
+        String stored = opt.get().passwordHash;
+        if (!PasswordHasher.matches(password, stored)) return false;
+        if (PasswordHasher.needsRehash(stored)) {
+            rehash(opt.get().username, password);
+        }
+        return true;
     }
 
-    public static String hashPassword(String password) {
+    /** Rewrites a verified legacy hash as bcrypt. Never throws into the login path. */
+    @Transactional
+    public void rehash(String username, String password) {
         try {
-            MessageDigest md = MessageDigest.getInstance("SHA-256");
-            byte[] dig = md.digest(password.getBytes(StandardCharsets.UTF_8));
-            return HexFormat.of().formatHex(dig);
-        } catch (Exception e) {
-            throw new IllegalStateException("hash failed", e);
+            AdminUserEntity e = AdminUserEntity.findById(username);
+            if (e == null) return;
+            e.passwordHash = hashPassword(password);
+            e.updatedAt = Instant.now();
+            LOG.info("[admin-user] migrated legacy password hash to bcrypt for username={}",
+                    username);
+        } catch (RuntimeException ex) {
+            LOG.warn("[admin-user] bcrypt rehash failed for username={}: {}", username,
+                    ex.toString());
         }
+    }
+
+    public String hashPassword(String password) {
+        return PasswordHasher.hash(password, bcryptCost);
     }
 
     private static String normalizeRole(String role) {
@@ -112,12 +136,5 @@ public class AdminUserService {
 
     private static String blank(String s) {
         return s == null || s.isBlank() ? null : s.trim();
-    }
-
-    private static boolean constantTimeEquals(String a, String b) {
-        if (a == null || b == null) return false;
-        return MessageDigest.isEqual(
-                a.getBytes(StandardCharsets.UTF_8),
-                b.getBytes(StandardCharsets.UTF_8));
     }
 }

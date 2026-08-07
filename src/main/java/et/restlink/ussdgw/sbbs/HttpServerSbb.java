@@ -14,6 +14,8 @@ import et.restlink.ussdgw.bridge.VirtualSessionState;
 import et.restlink.ussdgw.events.NiPushRequestEvent;
 import et.restlink.ussdgw.logging.SleeEventTrace;
 import et.restlink.ussdgw.service.SbbServices;
+import et.restlink.ussdgw.tenant.CallbackAuthService;
+import et.restlink.ussdgw.tenant.TenantGuard;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.microjainslee.api.ActivityContextInterface;
@@ -128,22 +130,64 @@ public final class HttpServerSbb implements Sbb, SleeEventHandler {
         String body = req.getBody() == null ? "" : req.getBody();
         AsHttpWireFormat format = detectWireFormat(contentType(req), body);
         ClassicNiIngress ingress = svc().wireFacade().decodeNiRequest(body, format);
-        String jsession = resolveJsession(req);
 
+        // An unauthenticated POST here would trigger a real UnstructuredSS-Request to any MSISDN.
+        CallbackAuthService.NiAuth auth = svc().callbackAuth().authorizeNi(
+                req.getHeaders(), svc().config().httpNiAuthRequired());
+        if (!auth.ok()) {
+            replyNiError(req, format, 401, "unauthorized");
+            return "ni-401";
+        }
+        TenantGuard.Decision admit = svc().tenantGuard().admit(auth.tenantId());
+        if (!admit.allowed()) {
+            boolean rateLimited = admit.reason() == TenantGuard.Reason.RATE_LIMITED;
+            replyNiError(req, format, rateLimited ? 429 : 403,
+                    rateLimited ? "rate limited" : "tenant unavailable");
+            return "ni-tenant-reject reason=" + admit.reason();
+        }
+
+        String jsession = resolveJsession(req);
         if (jsession != null && !jsession.isBlank()) {
             return handleNiContinue(req, ingress, format, jsession.trim());
         }
-        return handleNiFirst(req, ingress, format);
+        return handleNiFirst(req, ingress, format, auth);
     }
 
-    private String handleNiFirst(HttpWebRequestEvent req, ClassicNiIngress ingress, AsHttpWireFormat format) {
+    /**
+     * networkId for this push, in classic's order of authority: the {@code networkId} the AS put on
+     * the dialog first (classic read {@code xmlMAPDialog.getNetworkId()}), then the authenticated
+     * tenant's network, then the configured default. Never an implicit 0.
+     */
+    private int resolveNiNetworkId(ClassicNiIngress ingress, CallbackAuthService.NiAuth auth) {
+        if (ingress != null && ingress.networkId() != null) {
+            return ingress.networkId();
+        }
+        if (auth != null && auth.networkId() != null) {
+            return auth.networkId();
+        }
+        return svc().config().httpNiDefaultNetworkId();
+    }
+
+    private void replyNiError(HttpWebRequestEvent req, AsHttpWireFormat format,
+                              int status, String message) {
+        if (format == AsHttpWireFormat.XML) {
+            replyEx(req.getSessionId(), status, format.contentType(),
+                    svc().wireFacade().encodeNiResponse(null, message, AsAction.ABORT, false, format),
+                    Map.of());
+        } else {
+            replyJson(req.getSessionId(), status, Map.of("error", message));
+        }
+    }
+
+    private String handleNiFirst(HttpWebRequestEvent req, ClassicNiIngress ingress,
+                                 AsHttpWireFormat format, CallbackAuthService.NiAuth auth) {
         String jsessionId = UUID.randomUUID().toString();
         String corr = (ingress.correlationId() != null && !ingress.correlationId().isBlank())
                 ? ingress.correlationId().trim()
                 : UUID.randomUUID().toString();
         String msisdn = ingress.msisdn() == null ? "" : ingress.msisdn().trim();
         String text = ingress.text() == null ? "" : ingress.text();
-        int networkId = 0;
+        int networkId = resolveNiNetworkId(ingress, auth);
 
         // dialogId == correlationId so MapUssdParent (MAP NI dialog id) can resolve the session.
         VirtualSession session = new VirtualSession(
@@ -153,6 +197,7 @@ public final class HttpServerSbb implements Sbb, SleeEventHandler {
         session.setState(VirtualSessionState.ACTIVE);
         session.setPendingText(text);
         session.setDialogAlive(true);
+        session.setTenantId(auth.tenantId());
         svc().store().put(session);
 
         ClassicNiHttpPark park = svc().niHttpPark();

@@ -133,6 +133,15 @@ public class RuntimeConfigStore {
         public static final String AS_HTTP_WIRE_FORMAT = "ussd.as.http.wire-format";
         /** HTTP NI push path appended to AS base URL. */
         public static final String HTTP_NI_PATH = "ussd.http.ni-path";
+        /** Classic NI ingress requires a tenant/admin API key (default true — prod safety). */
+        public static final String HTTP_NI_AUTH_REQUIRED = "ussd.http.ni.auth-required";
+        /** networkId used for NI ingress when the authenticated principal carries none. */
+        public static final String HTTP_NI_DEFAULT_NETWORK_ID = "ussd.http.ni.default-network-id";
+
+        /** TTL for NI pushes awaiting their own SRI-SM Response. */
+        public static final String SRI_PENDING_TTL_MS = "ussd.sri.pending-ttl-ms";
+        /** TTL for inbound HLR dialogs awaiting an upper SRI-SM resolve. */
+        public static final String HLR_PROXY_PENDING_TTL_MS = "ussd.hlr.proxy.pending-ttl-ms";
 
         public static final String GRPC_CLIENT_ENABLED = "ussd.grpc.client.enabled";
         public static final String GRPC_SERVER_ENABLED = "ussd.grpc.server.enabled";
@@ -155,9 +164,20 @@ public class RuntimeConfigStore {
         /** Optional SS7 hub JSON (props form mirrored); apply still uses KV / config-file. */
         public static final String SS7_JSON = "ss7.json";
 
-        /** Feature flags only — peer/listen config belongs to micro-jainslee RAs. */
         public static final String DIAMETER_ENABLED = "ussd.diameter.enabled";
+        public static final String DIAMETER_HOST = "ussd.diameter.host";
+        public static final String DIAMETER_PORT = "ussd.diameter.port";
+        public static final String DIAMETER_REALM = "ussd.diameter.realm";
+        public static final String DIAMETER_ORIGIN_HOST = "ussd.diameter.origin-host";
+        public static final String DIAMETER_DEST_REALM = "ussd.diameter.destination-realm";
+        public static final String DIAMETER_DEST_HOST = "ussd.diameter.destination-host";
+
         public static final String SIP_ENABLED = "ussd.sip.enabled";
+        public static final String SIP_HOST = "ussd.sip.host";
+        public static final String SIP_TCP_PORT = "ussd.sip.tcp-port";
+        public static final String SIP_UDP_PORT = "ussd.sip.udp-port";
+        public static final String SIP_FROM_URI = "ussd.sip.from-uri";
+        public static final String SIP_REQUEST_URI = "ussd.sip.request-uri-template";
 
         /** HLR face (inbound SRI-SM): FAKE | PROXY_MAP | PROXY_DIAMETER | FAKE_THEN_RESOLVE */
         public static final String HLR_MODE = "ussd.hlr.mode";

@@ -55,50 +55,54 @@ public class VirtualSessionBridge {
         long gate = adaptive.effectiveGateMs(
                 session.networkId(), config.asyncGateTimeoutMs(), config.dialogTimeoutMs());
         session.setGateMs(gate);
+        // Wall clock only for the durable deadline (must survive a restart) and the CDR;
+        // the latency sample that feeds the EWMA is taken from the monotonic clock.
         session.setPullStartedAtMs(System.currentTimeMillis());
+        session.setPullStartedAtNanos(System.nanoTime());
         session.setGateDeadlineMs(session.pullStartedAtMs() + gate);
         session.setState(VirtualSessionState.AWAITING_AS);
         persist(session);
         cdrWrite(session, CdrPhase.S1_ACTIVE, "AWAITING_AS", "gateMs=" + gate);
     }
 
+    /**
+     * Deliver an AS response. Content responses take an exclusive CAS claim on the session
+     * (classic {@code BridgeReconciler} parity) so the pull channel, the {@code /as/callback}
+     * channel and the gate scheduler can never both act on one correlation.
+     */
     public void onAsResponse(AsResponse response, long latencyMs) {
         String pushBackId = response == null ? null : response.resolvePushBackId();
-        Optional<VirtualSession> opt = pushBackId == null
-                ? Optional.empty()
-                : store.acceptAsResponse(pushBackId, response.generation());
-        if (opt.isEmpty()) {
-            zombieDrop.incrementAndGet();
-            LOG.info("Drop late/zombie AS response corr={} gen={}",
-                    pushBackId, response == null ? -1 : response.generation());
+        if (pushBackId == null) {
+            dropLate(null, response);
             return;
-        }
-        VirtualSession s = opt.get();
-        // Feed EWMA only for content responses (not ASYNC_ACK). When caller
-        // passes latencyMs<=0 (HTTP/gRPC callback ingress), derive from pull start.
-        if (!response.async()) {
-            long sample = latencyMs;
-            if (sample <= 0 && s.pullStartedAtMs() > 0) {
-                sample = System.currentTimeMillis() - s.pullStartedAtMs();
-            }
-            if (sample > 0) {
-                adaptive.recordLatency(s.networkId(), sample);
-            }
         }
         if (response.async()) {
+            // ASYNC_ACK carries no content: it neither replies on MAP nor pushes over NI, and
+            // must not feed the EWMA. Validate only — the real callback still owns the session.
+            if (store.acceptAsResponse(pushBackId, response.generation()).isEmpty()) {
+                dropLate(pushBackId, response);
+            }
             return;
         }
-        if (s.dialogAlive() && s.state() == VirtualSessionState.AWAITING_AS) {
+
+        Optional<VirtualSessionStore.AsResponseClaim> claimed =
+                store.claimForAsResponse(pushBackId, response.generation());
+        if (claimed.isEmpty()) {
+            dropLate(pushBackId, response);
+            return;
+        }
+        VirtualSession s = claimed.get().session();
+        VirtualSessionState previous = claimed.get().previous();
+        recordLatency(s, latencyMs);
+
+        if (previous == VirtualSessionState.AWAITING_AS && s.dialogAlive()) {
             applyToLiveDialog(s, response);
             return;
         }
-        if (s.state() == VirtualSessionState.S1_RELEASED
-                || (!s.dialogAlive() && s.state() == VirtualSessionState.AWAITING_AS
-                    && s.originationType() != OriginationType.MAP)) {
-            if (s.originationType() != OriginationType.MAP
-                    && s.state() == VirtualSessionState.AWAITING_AS) {
-                s.setState(VirtualSessionState.S1_RELEASED);
-            }
+        boolean bridged = previous == VirtualSessionState.S1_RELEASED;
+        boolean offMapLegGone = previous == VirtualSessionState.AWAITING_AS
+                && s.originationType() != OriginationType.MAP;
+        if (bridged || offMapLegGone) {
             recoverCount.incrementAndGet();
             s.setPendingText(response.text());
             s.setPendingAlphabet(response.alphabet());
@@ -106,24 +110,35 @@ public class VirtualSessionBridge {
             persist(s);
             accessNi.requestNiPush(s, response.text());
             cdrWrite(s, CdrPhase.S2_PUSH, "QUEUED", "late AS reconcile");
+            return;
         }
+        // MAP leg died while parked and no abort was observed: nothing is deliverable. Retire
+        // the claim rather than leaving the row stranded in RESPONDING.
+        zombieDrop.incrementAndGet();
+        s.setState(VirtualSessionState.ZOMBIE);
+        persist(s);
+        cdrWrite(s, CdrPhase.FAILED, "ZOMBIE", "AS response on dead MAP leg");
     }
 
-    public void onGateExpired(VirtualSession s) {
-        if (s.state() != VirtualSessionState.AWAITING_AS) return;
-        // Re-load + CAS so concurrent ticks do not double-bridge
+    /**
+     * Adaptive gate fired for {@code s}.
+     *
+     * @return {@code true} when this call actually expired the gate; {@code false} when the
+     *         CAS was lost (an AS response got there first) so no dialog action was taken
+     */
+    public boolean onGateExpired(VirtualSession s) {
+        if (s == null || s.state() != VirtualSessionState.AWAITING_AS) return false;
+        boolean arm = config.bridgeEnabled() && s.adaptiveBridgeArm();
+        // Re-load + CAS so concurrent ticks and AS responses do not double-bridge.
         Optional<VirtualSession> cas = store.compareAndTransition(
                 s.correlationId(),
                 VirtualSessionState.AWAITING_AS,
-                config.bridgeEnabled() && s.adaptiveBridgeArm()
-                        ? VirtualSessionState.S1_RELEASED
-                        : VirtualSessionState.COMPLETED);
-        if (cas.isEmpty()) return;
+                arm ? VirtualSessionState.S1_RELEASED : VirtualSessionState.COMPLETED);
+        if (cas.isEmpty()) return false;
         VirtualSession cur = cas.get();
         boolean mapPlane = cur.originationType() == OriginationType.MAP;
         RaCommandPort port = mapPlane ? ss7() : null;
-        boolean doBridge = cur.state() == VirtualSessionState.S1_RELEASED;
-        if (!doBridge) {
+        if (!arm) {
             if (mapPlane && cur.dialogAlive()) {
                 MapDialogHelper.replyAndEnd(port, cur.dialogId(), cur.invokeId(),
                         config.asyncHardFailMessage());
@@ -131,24 +146,31 @@ public class VirtualSessionBridge {
             }
             persist(cur);
             cdrWrite(cur, CdrPhase.FAILED, "GATE_NO_BRIDGE", null);
-            return;
+            return true;
         }
         bridgeCount.incrementAndGet();
         if (mapPlane && cur.dialogAlive()) {
             MapDialogHelper.replyAndEnd(port, cur.dialogId(), cur.invokeId(),
                     config.asyncWaitMessage());
             cur.setDialogAlive(false);
+            // Single-field write: the CAS already published S1_RELEASED, and a full-row put
+            // from this detached snapshot would revert a concurrent claim.
+            store.setDialogAlive(cur.correlationId(), false);
         }
-        persist(cur);
         cdrWrite(cur, CdrPhase.S1_RELEASED, "BRIDGED", "asyncWait");
         LOG.info("Bridging slow AS corr={} dialogId={} orig={}",
                 cur.correlationId(), cur.dialogId(), cur.originationType());
+        return true;
     }
 
     public void onNetworkAbort(String dialogId) {
         store.byDialogId(dialogId).ifPresent(s -> {
+            // Publish the dead leg atomically first, so a concurrent AS claim cannot reply
+            // on a torn-down dialog even if it read the row before this snapshot was written.
+            store.setDialogAlive(s.correlationId(), false);
             s.setDialogAlive(false);
             if (s.state() == VirtualSessionState.AWAITING_AS
+                    || s.state() == VirtualSessionState.RESPONDING
                     || s.state() == VirtualSessionState.S1_RELEASED
                     || s.state() == VirtualSessionState.PUSH_PENDING) {
                 s.setState(VirtualSessionState.ZOMBIE);
@@ -160,6 +182,31 @@ public class VirtualSessionBridge {
                 persist(s);
             }
         });
+    }
+
+    private void dropLate(String correlationId, AsResponse response) {
+        zombieDrop.incrementAndGet();
+        LOG.info("Drop late/zombie AS response corr={} gen={}",
+                correlationId, response == null ? -1 : response.generation());
+    }
+
+    /**
+     * Feed the EWMA. When the caller cannot measure the round trip (HTTP/gRPC callback
+     * ingress passes {@code latencyMs <= 0}) the sample is derived from the monotonic pull
+     * start, so an NTP step cannot inject a nonsense sample.
+     */
+    private void recordLatency(VirtualSession s, long latencyMs) {
+        long sample = latencyMs;
+        if (sample <= 0) {
+            if (s.pullStartedAtNanos() > 0) {
+                sample = Math.max(1L, (System.nanoTime() - s.pullStartedAtNanos()) / 1_000_000L);
+            } else if (s.pullStartedAtMs() > 0) {
+                sample = System.currentTimeMillis() - s.pullStartedAtMs();
+            }
+        }
+        if (sample > 0) {
+            adaptive.recordLatency(s.networkId(), sample, config.dialogTimeoutMs());
+        }
     }
 
     private void applyToLiveDialog(VirtualSession s, AsResponse response) {
@@ -215,14 +262,10 @@ public class VirtualSessionBridge {
         cdrWrite(s, phase, action.name(), httpNi ? "http-ni" : "sync");
     }
 
-    /** Write Profile row; remove when terminal (COMPLETED/ABORTED/ZOMBIE). */
+    /** Write Profile row; remove when terminal (COMPLETED/ABORTED/FAILED/ZOMBIE). */
     private void persist(VirtualSession s) {
         if (s == null) return;
-        VirtualSessionState st = s.state();
-        if (st == VirtualSessionState.COMPLETED
-                || st == VirtualSessionState.ABORTED
-                || st == VirtualSessionState.FAILED
-                || st == VirtualSessionState.ZOMBIE) {
+        if (s.state().terminal()) {
             store.put(s); // final snapshot
             store.remove(s.correlationId());
             return;
@@ -232,7 +275,14 @@ public class VirtualSessionBridge {
 
     private void cdrWrite(VirtualSession s, CdrPhase phase, String status, String detail) {
         cdr.write(s.correlationId(), phase, s.msisdn(), s.shortCode(), status, detail,
-                s.networkId(), s.tenantId(), s.originationType().name());
+                s.networkId(), s.tenantId(), s.originationType().name(),
+                s.gateMs() > 0 ? s.gateMs() : null,
+                observedEwmaMs(s.networkId()));
+    }
+
+    private Long observedEwmaMs(int networkId) {
+        double v = adaptive == null ? 0d : adaptive.observedLatencyMs(networkId);
+        return v > 0d ? Math.round(v) : null;
     }
 
     public long bridgeCount() { return bridgeCount.get(); }

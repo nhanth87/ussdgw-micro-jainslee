@@ -3,6 +3,7 @@ package et.restlink.ussdgw.admin;
 import et.restlink.ussdgw.config.UssdConfigService;
 import et.restlink.ussdgw.persist.AdminUserEntity;
 import et.restlink.ussdgw.persist.TenantEntity;
+import et.restlink.ussdgw.security.DefaultSecrets;
 import et.restlink.ussdgw.tenant.AdminUserService;
 import et.restlink.ussdgw.tenant.TenantGuard;
 
@@ -16,15 +17,24 @@ import java.util.Base64;
 import java.util.Map;
 import java.util.Optional;
 
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 import org.eclipse.microprofile.config.inject.ConfigProperty;
 
 /**
  * Resolves admin principal for data scoping.
- * Global {@code ussd.admin.api-key} → full access.
+ * Global {@code ussd.admin.api-key} → full access, header {@code X-USSD-Admin-Key} only.
  * Session cookie (login) / Basic auth / tenant {@code httpApiKey}.
  */
 @ApplicationScoped
 public class AdminAuthService {
+    private static final Logger LOG = LogManager.getLogger(AdminAuthService.class);
+
+    /**
+     * The only accepted transport for the admin key. A query parameter would land in access
+     * logs, nginx logs, upstream proxy logs and browser history.
+     */
+    public static final String ADMIN_KEY_HEADER = "X-USSD-Admin-Key";
     public record Principal(String role, String tenantId, String username, boolean fromSession) {
         public Principal(String role, String tenantId) {
             this(role, tenantId, null, false);
@@ -32,21 +42,33 @@ public class AdminAuthService {
         public boolean isTenantScoped() {
             return "TENANT".equals(role) && tenantId != null && !tenantId.isBlank();
         }
+
+        /** Plane stack editors (SS7 SCTP/SCCP, Apply) — ADMIN or OPS only. */
+        public boolean isAdminOrOps() {
+            return "ADMIN".equals(role) || "OPS".equals(role);
+        }
     }
 
     @Inject UssdConfigService config;
     @Inject TenantGuard tenantGuard;
     @Inject AdminUserService users;
 
-    @ConfigProperty(name = "ussd.admin.session-hmac-secret",
-            defaultValue = "ussd-dev-session-hmac-change-me")
+    @ConfigProperty(name = DefaultSecrets.PROP_SESSION_HMAC_SECRET,
+            defaultValue = DefaultSecrets.SESSION_HMAC_SECRET)
     String sessionHmacSecret;
 
+    /**
+     * @param query kept for call-site compatibility and deliberately ignored — the admin key is
+     *              never read from the query string (see {@link #ADMIN_KEY_HEADER}).
+     */
     public Optional<Principal> authenticate(Map<String, String> headers, Map<String, String> query) {
         try {
-            return authenticate0(headers, query);
+            return authenticate0(headers);
         } catch (RuntimeException ex) {
-            // SLEE thread may lack request context — never turn auth into 500
+            // SLEE thread may lack request context — never turn auth into 500. Log it, or a DB
+            // outage is indistinguishable from a wrong password.
+            LOG.error("[admin] authentication aborted ({}: {}) — treating as anonymous",
+                    ex.getClass().getSimpleName(), ex.getMessage(), ex);
             return Optional.empty();
         }
     }
@@ -70,7 +92,7 @@ public class AdminAuthService {
         return sessionHmacSecret;
     }
 
-    private Optional<Principal> authenticate0(Map<String, String> headers, Map<String, String> query) {
+    private Optional<Principal> authenticate0(Map<String, String> headers) {
         Optional<String> cookieTok = SignedSessionCookie.extractFromCookieHeader(
                 header(headers, "Cookie"));
         if (cookieTok.isPresent()) {
@@ -81,8 +103,7 @@ public class AdminAuthService {
                 return Optional.of(new Principal(c.role(), c.tenantId(), c.username(), true));
             }
         }
-        String key = header(headers, "X-USSD-Admin-Key");
-        if (key == null && query != null) key = query.get("key");
+        String key = header(headers, ADMIN_KEY_HEADER);
         if (key != null && config.adminKeyOk(key)) {
             return Optional.of(new Principal("ADMIN", null));
         }

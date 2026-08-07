@@ -133,6 +133,14 @@ public final class UssdTxProfile extends ProfileAbstractCmp {
         set(s("pullStartedAtMs", Long.class), v);
     }
 
+    public Long getPullStartedAtNanos() {
+        return (Long) ProfileAccessorInvoker.getValue(this, g("pullStartedAtNanos"));
+    }
+
+    public void setPullStartedAtNanos(Long v) {
+        set(s("pullStartedAtNanos", Long.class), v);
+    }
+
     public Long getInvokeId() {
         return (Long) ProfileAccessorInvoker.getValue(this, g("invokeId"));
     }

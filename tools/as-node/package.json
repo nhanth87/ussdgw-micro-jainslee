@@ -9,10 +9,11 @@
   },
   "scripts": {
     "start": "node src/index.mjs pull",
-    "pull:fast": "DELAY_MS=0 MODE=sync node src/index.mjs pull",
-    "pull:bridge": "DELAY_MS=8000 MODE=sync node src/index.mjs pull",
-    "pull:async": "MODE=async_ack CALLBACK_DELAY_MS=8000 WIRE=json node src/index.mjs pull",
-    "push:ni": "node src/index.mjs ni"
+    "pull:fast": "DELAY_MS=0 MODE=sync INTERACTIVE=true node src/index.mjs pull",
+    "pull:bridge": "DELAY_MS=8000 MODE=sync INTERACTIVE=true node src/index.mjs pull",
+    "pull:async": "MODE=async_ack CALLBACK_DELAY_MS=8000 WIRE=json INTERACTIVE=true node src/index.mjs pull",
+    "push:ni": "INTERACTIVE=true node src/index.mjs ni",
+    "push:ni:static": "INTERACTIVE=false node src/index.mjs ni"
   },
   "dependencies": {
     "fastify": "^5.2.1"

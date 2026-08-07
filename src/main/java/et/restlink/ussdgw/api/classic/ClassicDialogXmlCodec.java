@@ -169,8 +169,10 @@ public final class ClassicDialogXmlCodec {
                     extractNamedString(root, "processUnstructuredSSRequest_Request"),
                     "");
             String msisdn = extractMsisdn(root);
+            Integer networkId = parseInt(firstNonBlank(attr(root, "networkId"),
+                    textChild(root, "networkId")));
             return new ClassicNiIngress(msisdn, text == null ? "" : text, corr, handshake,
-                    et.restlink.ussdgw.api.AsHttpWireFormat.XML);
+                    et.restlink.ussdgw.api.AsHttpWireFormat.XML, networkId);
         } catch (Exception e) {
             throw new IllegalArgumentException("decode classic NI dialog XML", e);
         }
@@ -219,6 +221,17 @@ public final class ClassicDialogXmlCodec {
         }
         if (notBlank(asMode)) {
             sb.append(" asMode=\"").append(xmlAttr(asMode)).append('"');
+        }
+    }
+
+    private static Integer parseInt(String s) {
+        if (!notBlank(s)) {
+            return null;
+        }
+        try {
+            return Integer.valueOf(s.trim());
+        } catch (NumberFormatException e) {
+            return null;
         }
     }
 
@@ -295,6 +308,20 @@ public final class ClassicDialogXmlCodec {
             if (notBlank(num)) {
                 return num;
             }
+        }
+        // Classic XmlMAPDialog carries the subscriber as destinationReference AddressString
+        // (number=…). NI AS bodies often omit a nested <msisdn> and rely on this alone.
+        JsonNode destRef = root.get("destinationReference");
+        if (destRef != null && !destRef.isNull()) {
+            String num = firstNonBlank(attr(destRef, "number"), textChild(destRef, "number"),
+                    destRef.isTextual() ? destRef.asText() : null);
+            if (notBlank(num)) {
+                return num;
+            }
+        }
+        String destAttr = attr(root, "destinationReference");
+        if (notBlank(destAttr)) {
+            return destAttr;
         }
         for (String el : new String[] {
                 "unstructuredSSNotify_Request",

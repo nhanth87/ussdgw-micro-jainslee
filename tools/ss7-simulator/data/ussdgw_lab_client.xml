@@ -1,0 +1,318 @@
+<?xml version='1.1' encoding='UTF-8'?>
+<!--
+  Digicom-ET USSDGW lab peer (USSD_TEST_CLIENT) — Jackson ConfigurationData format.
+  Pairs with ussdgw configs/ss7-lab.json:
+    GW  = SCTP server 127.0.0.1:8013  PC=1
+    sim = SCTP client 127.0.0.1:8014  PC=2  SSN=8
+  Auto digits: autoResponseOnUnstructuredSSRequests + autoResponseString 1,2,3,4
+  Override: -Dussd.sim.autoResponseSequence=1,2,3,4 -Dussd.sim.autoResponseDelayMs=400
+-->
+<ConfigurationData>
+  <instance_L1>M3UA</instance_L1>
+  <instance_L2>SCCP</instance_L2>
+  <instance_L3>TCAP+MAP</instance_L3>
+  <instance_TestTask>USSD_TEST_CLIENT</instance_TestTask>
+  <m3uaConfigurationData>
+    <storePcapTrace>false</storePcapTrace>
+    <isSctpServer>false</isSctpServer>
+    <localHost>127.0.0.1</localHost>
+    <localPort>8014</localPort>
+    <remoteHost>127.0.0.1</remoteHost>
+    <remotePort>8013</remotePort>
+    <localHost2></localHost2>
+    <localPort2>0</localPort2>
+    <remoteHost2></remoteHost2>
+    <remotePort2>0</remotePort2>
+    <ipChannelType>SCTP</ipChannelType>
+    <dpc>1</dpc>
+    <opc>2</opc>
+    <dpc2>0</dpc2>
+    <opc2>0</opc2>
+    <si>3</si>
+    <routingContext>0</routingContext>
+    <networkAppearance>0</networkAppearance>
+    <trafficModeType>2</trafficModeType>
+    <m3uaFunctionality>IPSP</m3uaFunctionality>
+    <m3uaExchangeType>SE</m3uaExchangeType>
+    <m3uaIPSPType>CLIENT</m3uaIPSPType>
+    <routingLabelFormat>ITU</routingLabelFormat>
+    <sctpExtraHostAddresses></sctpExtraHostAddresses>
+  </m3uaConfigurationData>
+  <dialogicConfigurationData>
+    <sourceModuleId>0</sourceModuleId>
+    <destinationModuleId>0</destinationModuleId>
+  </dialogicConfigurationData>
+  <sccpConfigurationData>
+    <routeOnGtMode>true</routeOnGtMode>
+    <remoteSpc>1</remoteSpc>
+    <remoteSpc2>0</remoteSpc2>
+    <localSpc>2</localSpc>
+    <localSsn>8</localSsn>
+    <localSsn2>6</localSsn2>
+    <remoteSsn>8</remoteSsn>
+    <ni>2</ni>
+    <globalTitleType>Translation type, numbering plan, encoding scheme and NOA ind</globalTitleType>
+    <natureOfAddress>INTERNATIONAL</natureOfAddress>
+    <numberingPlan>ISDN_TELEPHONY</numberingPlan>
+    <translationType>0</translationType>
+    <callingPartyAddressDigits>251900000200</callingPartyAddressDigits>
+    <sccpProtocolVersion>ITU</sccpProtocolVersion>
+  </sccpConfigurationData>
+  <mapConfigurationData>
+    <remoteAddressDigits>251900000100</remoteAddressDigits>
+    <origReference>251900000200</origReference>
+    <origReferenceAddressNature>international_number</origReferenceAddressNature>
+    <origReferenceNumberingPlan>ISDN</origReferenceNumberingPlan>
+    <destReference>251900000100</destReference>
+    <destReferenceAddressNature>international_number</destReferenceAddressNature>
+    <destReferenceNumberingPlan>ISDN</destReferenceNumberingPlan>
+  </mapConfigurationData>
+  <capConfigurationData>
+    <remoteAddressDigits></remoteAddressDigits>
+  </capConfigurationData>
+  <testSmsClientConfigurationData>
+    <addressNature>international_number</addressNature>
+    <numberingPlan>ISDN</numberingPlan>
+    <serviceCenterAddress>251911000001</serviceCenterAddress>
+    <mapProtocolVersion>MAP protocol version 3</mapProtocolVersion>
+    <sriResponseImsi>555667</sriResponseImsi>
+    <sriResponseVlr>251911000000</sriResponseVlr>
+    <smscSsn>8</smscSsn>
+    <typeOfNumber>Unknown</typeOfNumber>
+    <numberingPlanIdentification>ISDNTelephoneNumberingPlan</numberingPlanIdentification>
+    <smsCodingType>GSM7</smsCodingType>
+    <nationalLanguageCode>0</nationalLanguageCode>
+    <statusReportRequest>false</statusReportRequest>
+    <mtFSMReaction>Return success</mtFSMReaction>
+    <reportSMDeliveryStatusReaction>Return success</reportSMDeliveryStatusReaction>
+    <oneNotificationFor100Dialogs>false</oneNotificationFor100Dialogs>
+    <return20PersDeliveryErrors>false</return20PersDeliveryErrors>
+    <continueDialog>false</continueDialog>
+    <SRIScAddressNotIncluded>false</SRIScAddressNotIncluded>
+    <SRIReaction>Return success</SRIReaction>
+    <SRIInformServiceCenter>No data in MWD file</SRIInformServiceCenter>
+  </testSmsClientConfigurationData>
+  <testSmsServerConfigurationData>
+    <addressNature>international_number</addressNature>
+    <numberingPlan>ISDN</numberingPlan>
+    <serviceCenterAddress></serviceCenterAddress>
+    <mapProtocolVersion>MAP protocol version 3</mapProtocolVersion>
+    <hlrSsn>6</hlrSsn>
+    <vlrSsn>8</vlrSsn>
+    <typeOfNumber>InternationalNumber</typeOfNumber>
+    <numberingPlanIdentification>ISDNTelephoneNumberingPlan</numberingPlanIdentification>
+    <smsCodingType>GSM7</smsCodingType>
+    <sendSrsmdsIfError>false</sendSrsmdsIfError>
+    <gprsSupportIndicator>false</gprsSupportIndicator>
+  </testSmsServerConfigurationData>
+  <testUssdClientConfigurationData>
+    <msisdnAddress>251911000001</msisdnAddress>
+    <msisdnAddressNature>international_number</msisdnAddressNature>
+    <msisdnNumberingPlan>ISDN</msisdnNumberingPlan>
+    <dataCodingScheme>15</dataCodingScheme>
+    <alertingPattern>-1</alertingPattern>
+    <sriResponseImsi>251011000000001</sriResponseImsi>
+    <sriResponseVlr>251900000200</sriResponseVlr>
+    <return20PersDeliveryErrors>false</return20PersDeliveryErrors>
+    <ussdClientAction>Manual operation</ussdClientAction>
+    <autoRequestString>*100#</autoRequestString>
+    <autoResponseString>1,2,3,4</autoResponseString>
+    <maxConcurrentDialogs>10</maxConcurrentDialogs>
+    <oneNotificationFor100Dialogs>false</oneNotificationFor100Dialogs>
+    <autoResponseOnUnstructuredSSRequests>true</autoResponseOnUnstructuredSSRequests>
+    <SRIReaction>Return success</SRIReaction>
+  </testUssdClientConfigurationData>
+  <testUssdServerConfigurationData>
+    <msisdnAddress></msisdnAddress>
+    <msisdnAddressNature>international_number</msisdnAddressNature>
+    <msisdnNumberingPlan>ISDN</msisdnNumberingPlan>
+    <dataCodingScheme>15</dataCodingScheme>
+    <alertingPattern>-1</alertingPattern>
+    <processSsRequestAction>Manual response</processSsRequestAction>
+    <autoResponseString></autoResponseString>
+    <autoUnstructured_SS_RequestString></autoUnstructured_SS_RequestString>
+    <oneNotificationFor100Dialogs>false</oneNotificationFor100Dialogs>
+  </testUssdServerConfigurationData>
+  <testCapScfConfigurationData>
+    <capApplicationContext>CAP_V4_capscf_ssfGeneric 23.3.8</capApplicationContext>
+    <conDestRouteAddrAddress>77777777</conDestRouteAddrAddress>
+    <conDestRouteAddrNatureOfAddress>internationalNumber</conDestRouteAddrNatureOfAddress>
+    <conDestRouteAddrNumberingPlan>ISDN</conDestRouteAddrNumberingPlan>
+    <relCauseValue>normalUnspecified</relCauseValue>
+    <relCodingStandardInd>ITUT</relCodingStandardInd>
+    <relLocationInd>internationalNetwork</relLocationInd>
+  </testCapScfConfigurationData>
+  <testCapSsfConfigurationData>
+    <capApplicationContext>CAP_V1_gsmSSF_to_gsmSCF 0.50.0</capApplicationContext>
+    <serviceKey>10</serviceKey>
+    <idpEventTypeBCSM>collectedInfo</idpEventTypeBCSM>
+    <useCldInsteadOfCldBCDNumber>false</useCldInsteadOfCldBCDNumber>
+    <callingPartyNumberAddress>11111111</callingPartyNumberAddress>
+    <callingPartyNumberNatureOfAddress>internationalNumber</callingPartyNumberNatureOfAddress>
+    <callingPartyNumberNumberingPlan>ISDN</callingPartyNumberNumberingPlan>
+    <calledPartyBCDNumberAddress>22222222</calledPartyBCDNumberAddress>
+    <calledPartyBCDNumberAddressNature>international_number</calledPartyBCDNumberAddressNature>
+    <calledPartyBCDNumberNumberingPlan>ISDN</calledPartyBCDNumberNumberingPlan>
+    <calledPartyNumberAddress>33333333</calledPartyNumberAddress>
+    <calledPartyNumberNatureOfAddress>internationalNumber</calledPartyNumberNatureOfAddress>
+    <calledPartyNumberNumberingPlan>ISDN</calledPartyNumberNumberingPlan>
+    <mscAddressAddress>55555555</mscAddressAddress>
+    <mscAddressNatureOfAddress>international_number</mscAddressNatureOfAddress>
+    <mscAddressNumberingPlan>ISDN</mscAddressNumberingPlan>
+  </testCapSsfConfigurationData>
+  <testAtiClientConfigurationData>
+    <addressNature>international_number</addressNature>
+    <numberingPlan>ISDN</numberingPlan>
+    <subscriberIdentityTypeIsImsi>false</subscriberIdentityTypeIsImsi>
+    <getLocationInformation>false</getLocationInformation>
+    <getSubscriberState>false</getSubscriberState>
+    <getCurrentLocation>false</getCurrentLocation>
+    <getRequestedDomain/>
+    <getImei>false</getImei>
+    <getMsClassmark>false</getMsClassmark>
+    <getMnpRequestedInfo>false</getMnpRequestedInfo>
+    <getLocationInformationEPSSupported>false</getLocationInformationEPSSupported>
+    <gsmScfAddress>000</gsmScfAddress>
+  </testAtiClientConfigurationData>
+  <testAtiServerConfigurationData>
+    <ATIReaction>Return success</ATIReaction>
+  </testAtiServerConfigurationData>
+  <testCheckImeiClientConfigurationData>
+    <imei></imei>
+    <mapProtocolVersion>MAP protocol version 3</mapProtocolVersion>
+    <checkImeiClientAction>Manual operation</checkImeiClientAction>
+    <maxConcurrentDialogs>10</maxConcurrentDialogs>
+    <oneNotificationFor100Dialogs>false</oneNotificationFor100Dialogs>
+  </testCheckImeiClientConfigurationData>
+  <testCheckImeiServerConfigurationData>
+    <autoEquipmentStatus>whiteListed</autoEquipmentStatus>
+    <oneNotificationFor100Dialogs>false</oneNotificationFor100Dialogs>
+  </testCheckImeiServerConfigurationData>
+  <testLcsClientConfigurationData>
+    <networkNodeNumberAddress>598048</networkNodeNumberAddress>
+    <naESRDAddress>11114444</naESRDAddress>
+    <naESRKAddress>11114444</naESRKAddress>
+    <addressNature>international_number</addressNature>
+    <numberingPlanType>ISDN</numberingPlanType>
+    <cellId>222</cellId>
+    <ageOfLocationEstimate>1</ageOfLocationEstimate>
+    <IMEI>354449063537030</IMEI>
+    <HGMLCAddress>200.10.0.1</HGMLCAddress>
+    <MCC>748</MCC>
+    <MNC>1</MNC>
+    <LAC>79010</LAC>
+    <LCSReferenceNumber>111</LCSReferenceNumber>
+    <LCSEvent>emergencyCallOrigination</LCSEvent>
+    <MSISDN>59899077937</MSISDN>
+    <IMSI>748010192837465</IMSI>
+  </testLcsClientConfigurationData>
+  <testLcsServerConfigurationData>
+    <sriForLCSReaction>Return success</sriForLCSReaction>
+    <pslReaction>Return success</pslReaction>
+    <slrReaction>Return success</slrReaction>
+    <addressNature>international_number</addressNature>
+    <numberingPlanType>ISDN</numberingPlanType>
+    <numberingPlan>1</numberingPlan>
+    <mlcNumber>5980482910</mlcNumber>
+    <lmsi>2915</lmsi>
+    <networkNodeNumber>59899180071</networkNodeNumber>
+    <hgmlcAddress>200.10.0.1</hgmlcAddress>
+    <mcc>748</mcc>
+    <mnc>1</mnc>
+    <lac>10207</lac>
+    <cellId>222</cellId>
+    <lcsReferenceNumber>1</lcsReferenceNumber>
+    <lcsEvent>emergencyCallOrigination</lcsEvent>
+    <typeOfShape>EllipsoidPointWithAltitudeAndUncertaintyEllipsoid</typeOfShape>
+    <typeOfShapeEnumerated>EllipsoidPointWithAltitudeAndUncertaintyEllipsoid</typeOfShapeEnumerated>
+    <latitude>34.789123</latitude>
+    <longitude>-124.902033</longitude>
+    <uncertainty>50.0</uncertainty>
+    <uncertaintySemiMajorAxis>40.0</uncertaintySemiMajorAxis>
+    <uncertaintySemiMinorAxis>20.0</uncertaintySemiMinorAxis>
+    <angleOfMajorAxis>30.0</angleOfMajorAxis>
+    <confidence>0</confidence>
+    <altitude>1500</altitude>
+    <uncertaintyAltitude>500.0</uncertaintyAltitude>
+    <innerRadius>5</innerRadius>
+    <uncertaintyRadius>1.5</uncertaintyRadius>
+    <offsetAngle>20.0</offsetAngle>
+    <includedAngle>20.0</includedAngle>
+    <ageOfLocationEstimate>0</ageOfLocationEstimate>
+    <locationEstimateType>currentLocation</locationEstimateType>
+    <lcsServiceTypeID>0</lcsServiceTypeID>
+    <moLrShortCircuitIndicator>false</moLrShortCircuitIndicator>
+    <lcsClientType>emergencyServices</lcsClientType>
+    <codeWordUSSDString>3</codeWordUSSDString>
+    <callSessionUnrelated>allowedWithoutNotification</callSessionUnrelated>
+    <callSessionRelated>allowedWithoutNotification</callSessionRelated>
+    <areaType>countryCode</areaType>
+    <occurrenceInfo>oneTimeEvent</occurrenceInfo>
+    <intervalTime>60</intervalTime>
+    <reportingAmount>10</reportingAmount>
+    <reportingInterval>10</reportingInterval>
+    <dataCodingScheme>15</dataCodingScheme>
+    <naESRDAddress>51514948</naESRDAddress>
+    <LMSI>2915</LMSI>
+    <IMEI>354449063537030</IMEI>
+    <HGMLCAddress>200.10.0.1</HGMLCAddress>
+    <MCC>748</MCC>
+    <MNC>1</MNC>
+    <LAC>10207</LAC>
+    <LCSReferenceNumber>1</LCSReferenceNumber>
+    <LCSEvent>emergencyCallOrigination</LCSEvent>
+    <MSISDN>59899077937</MSISDN>
+    <IMSI>748026871012345</IMSI>
+  </testLcsServerConfigurationData>
+  <testPsiServerConfigurationData>
+    <sriForSMReaction>Return success</sriForSMReaction>
+    <psiReaction>Return success</psiReaction>
+    <addressNature>international_number</addressNature>
+    <numberingPlanType>ISDN</numberingPlanType>
+    <networkNodeNumber>59804800025</networkNodeNumber>
+    <imsi>748010192837465</imsi>
+    <lmsi>11121314</lmsi>
+    <mcc>748</mcc>
+    <mnc>1</mnc>
+    <lac>5</lac>
+    <ci>3479</ci>
+    <mscAddress>5982123007</mscAddress>
+    <vmscAddress>5982123007</vmscAddress>
+    <vlrAddress>5982123007</vlrAddress>
+    <sgsnAddress>5982133021</sgsnAddress>
+    <aol>1</aol>
+    <saiPresent>false</saiPresent>
+    <geographicalTypeOfShape>EllipsoidPointWithUncertaintyCircle</geographicalTypeOfShape>
+    <geographicalLatitude>-23.291032</geographicalLatitude>
+    <geographicalLongitude>109.97781</geographicalLongitude>
+    <geographicalUncertainty>50.0</geographicalUncertainty>
+    <screeningAndPresentationIndicators>3</screeningAndPresentationIndicators>
+    <geodeticTypeOfShape>EllipsoidPointWithUncertaintyCircle</geodeticTypeOfShape>
+    <geodeticLatitude>-24.01001</geodeticLatitude>
+    <geodeticLongitude>110.00987</geodeticLongitude>
+    <geodeticUncertainty>100.0</geodeticUncertainty>
+    <geodeticConfidence>1</geodeticConfidence>
+    <currentLocationRetrieved>true</currentLocationRetrieved>
+    <eUtranCgiString>eUtranCgiString</eUtranCgiString>
+    <taIdString>taIdString</taIdString>
+    <mmeNom>TU1FNzQ4MDAwMQ==</mmeNom>
+    <mmeNameString>mmeNameString</mmeNameString>
+    <subscriberStateChoice>assumedIdle</subscriberStateChoice>
+    <subscriberStateStr>assumedIdle</subscriberStateStr>
+    <notReachableReason>restrictedArea</notReachableReason>
+    <notReachableReasonStr>restrictedArea</notReachableReasonStr>
+    <psSubscriberStateChoice>psAttachedReachableForPaging</psSubscriberStateChoice>
+    <imei>01171400466105</imei>
+    <routeingNum>MNP598</routeingNum>
+    <msisdnStr>59899077937</msisdnStr>
+    <lsaIdString>lsaIdString</lsaIdString>
+    <raIdString>class [B</raIdString>
+    <natureOfAddressIndicator>4</natureOfAddressIndicator>
+    <locationNumberAddressDigits>819203961904</locationNumberAddressDigits>
+    <numberingPlanIndicator>1</numberingPlanIndicator>
+    <internalNetworkNumberIndicator>1</internalNetworkNumberIndicator>
+    <addressRepresentationRestrictedIndicator>1</addressRepresentationRestrictedIndicator>
+    <screeningIndicator>3</screeningIndicator>
+    <numberPortabilityStatus>ownNumberNotPortedOut</numberPortabilityStatus>
+  </testPsiServerConfigurationData>
+</ConfigurationData>

@@ -10,6 +10,7 @@ import et.restlink.ussdgw.tenant.TenantService;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 
+import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.UUID;
 
@@ -18,11 +19,22 @@ import java.util.UUID;
  */
 @ApplicationScoped
 public class AdminCampaignHandler {
+    private static final String DEL_BTN =
+            "rounded-md border border-ink-line px-2 py-1 text-xs text-ink-mute hover:border-signal hover:text-signal";
+
     @Inject CampaignService campaigns;
     @Inject TenantService tenants;
 
     public AdminHttpHandler.HttpReply get(AdminAuthService.Principal who) {
-        return AdminHttpHandler.HttpReply.html(html(null, who));
+        return AdminHttpHandler.HttpReply.html(rowsHtml(who)).withHeader("Vary", "HX-Request");
+    }
+
+    /** Disk-template seed for {@code campaigns.html}. */
+    public Map<String, String> pageVars(AdminAuthService.Principal who) {
+        Map<String, String> m = new LinkedHashMap<>();
+        m.put("{{ROWS}}", rowsHtml(who));
+        m.put("{{TENANT_DATALIST}}", tenantDatalist(who));
+        return m;
     }
 
     public AdminHttpHandler.HttpReply post(String body, AdminAuthService.Principal who) {
@@ -42,7 +54,7 @@ public class AdminCampaignHandler {
                         parseInt(f.get("networkId"), 0),
                         parseInt(f.get("maxTps"), 5),
                         f.get("msisdns"));
-                return AdminHttpHandler.HttpReply.html(html("created " + esc(c.id.toString()), who));
+                return rowsReply(who, "created " + c.id, "ok");
             }
             UUID id = UUID.fromString(f.getOrDefault("id", "").trim());
             if (who != null && who.isTenantScoped()) {
@@ -58,47 +70,24 @@ public class AdminCampaignHandler {
                 case "cancel" -> campaigns.cancel(id);
                 default -> throw new IllegalArgumentException("unknown action: " + action);
             }
-            return AdminHttpHandler.HttpReply.html(html(action + " ok", who));
+            return rowsReply(who, action + " ok", "ok");
         } catch (RuntimeException ex) {
-            return AdminHttpHandler.HttpReply.html(html("error: " + esc(ex.getMessage()), who));
+            return rowsReply(who, "error: " + nullToEmpty(ex.getMessage()), "error");
         }
     }
 
-    private String html(String notice, AdminAuthService.Principal who) {
+    private AdminHttpHandler.HttpReply rowsReply(AdminAuthService.Principal who,
+                                                 String message, String kind) {
+        return AdminHttpHandler.HttpReply.html(rowsHtml(who))
+                .withHeader("HX-Trigger",
+                        "{\"ussdToast\":{\"message\":" + jsonStr(message)
+                                + ",\"kind\":" + jsonStr(kind) + "}}")
+                .withHeader("Vary", "HX-Request");
+    }
+
+    private String rowsHtml(AdminAuthService.Principal who) {
         StringBuilder sb = new StringBuilder();
-        sb.append("<div class=\"catalog\">");
-        if (notice != null) sb.append("<p class=\"notice\">").append(esc(notice)).append("</p>");
-        sb.append("<h2>NI push campaigns</h2>");
-        sb.append("<p class=\"hint\">Blast USSD NI text to MSISDN list (SRI→MAP). ")
-                .append("Scheduler claims 1/s when SS7 live. One SENDING per MSISDN.</p>");
-        sb.append("<form hx-post=\"/admin/campaigns\" hx-target=\"#panel\" hx-swap=\"innerHTML\" ")
-                .append("hx-headers='{\"X-USSD-Admin-Key\":\"ussd-admin\"}' class=\"grid-form\">");
-        sb.append("<label>Name <input name=\"name\" required/></label>");
-        if (who != null && who.isTenantScoped()) {
-            sb.append("<input type=\"hidden\" name=\"tenantId\" value=\"")
-                    .append(esc(who.tenantId())).append("\"/>");
-        } else {
-            sb.append("<label>tenantId <input name=\"tenantId\" list=\"tenant-ids\"/></label>");
-        }
-        sb.append("<label>networkId <input name=\"networkId\" type=\"number\" value=\"0\" min=\"0\"/></label>");
-        sb.append("<label>maxTps <input name=\"maxTps\" type=\"number\" value=\"5\" min=\"1\" max=\"100\"/></label>");
-        sb.append("<label>alphabet <select name=\"alphabet\"><option>AUTO</option>")
-                .append("<option>UCS7</option><option>UCS8</option><option>UNICODE</option></select></label>");
-        sb.append("<label style=\"flex:1 1 100%\">Text <input name=\"text\" size=\"60\" maxlength=\"182\" required/></label>");
-        sb.append("<label style=\"flex:1 1 100%\">MSISDNs (newline/comma) ")
-                .append("<textarea name=\"msisdns\" rows=\"4\" cols=\"50\" required></textarea></label>");
-        sb.append("<input type=\"hidden\" name=\"action\" value=\"create\"/>");
-        sb.append("<button type=\"submit\">Create draft</button></form>");
-        if (who == null || !who.isTenantScoped()) {
-            sb.append("<datalist id=\"tenant-ids\">");
-            for (TenantEntity t : tenants.list()) {
-                sb.append("<option value=\"").append(esc(t.tenantId)).append("\"/>");
-            }
-            sb.append("</datalist>");
-        }
         String scope = who != null && who.isTenantScoped() ? who.tenantId() : null;
-        sb.append("<table><tr><th>Name</th><th>tenant</th><th>status</th><th>sent/fail</th>")
-                .append("<th>pending</th><th></th></tr>");
         for (CampaignEntity c : campaigns.list(scope)) {
             long pending = campaigns.targetCount(c.id, CampaignTargetStatus.PENDING.name());
             sb.append("<tr><td>").append(esc(c.name)).append("</td><td>")
@@ -118,21 +107,46 @@ public class AdminCampaignHandler {
             }
             sb.append("</td></tr>");
         }
-        sb.append("</table></div>");
+        if (sb.isEmpty()) {
+            sb.append("<tr><td colspan=\"6\" class=\"px-3 py-4 text-ink-mute\">No campaigns</td></tr>");
+        }
+        return sb.toString();
+    }
+
+    private String tenantDatalist(AdminAuthService.Principal who) {
+        if (who != null && who.isTenantScoped()) {
+            return "";
+        }
+        StringBuilder sb = new StringBuilder("<datalist id=\"tenant-ids\">");
+        for (TenantEntity t : tenants.list()) {
+            sb.append("<option value=\"").append(esc(t.tenantId)).append("\"/>");
+        }
+        sb.append("</datalist>");
         return sb.toString();
     }
 
     private static void actionBtn(StringBuilder sb, UUID id, String action, String label) {
-        sb.append("<form hx-post=\"/admin/campaigns\" hx-target=\"#panel\" hx-swap=\"innerHTML\" ")
-                .append("hx-headers='{\"X-USSD-Admin-Key\":\"ussd-admin\"}' class=\"inline\">")
+        sb.append("<form hx-post=\"/admin/campaigns\" hx-target=\"#campaign-rows\" hx-swap=\"innerHTML\" ")
+                .append("class=\"inline\">")
                 .append("<input type=\"hidden\" name=\"action\" value=\"").append(action).append("\"/>")
                 .append("<input type=\"hidden\" name=\"id\" value=\"").append(id).append("\"/>")
-                .append("<button type=\"submit\">").append(label).append("</button></form> ");
+                .append("<button type=\"submit\" class=\"").append(DEL_BTN).append("\">")
+                .append(label).append("</button></form> ");
     }
 
     private static int parseInt(String s, int def) {
         if (s == null || s.isBlank()) return def;
         try { return Integer.parseInt(s.trim()); } catch (NumberFormatException e) { return def; }
+    }
+
+    private static String nullToEmpty(String s) {
+        return s == null ? "" : s;
+    }
+
+    private static String jsonStr(String s) {
+        if (s == null) return "\"\"";
+        return "\"" + s.replace("\\", "\\\\").replace("\"", "\\\"")
+                .replace("\n", "\\n").replace("\r", "") + "\"";
     }
 
     private static String esc(String s) {

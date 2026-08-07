@@ -18,6 +18,7 @@ import org.eclipse.microprofile.config.inject.ConfigProperty;
 /**
  * Wire {@code ra-sip-servlet} when {@code ussd.sip.enabled}.
  * Link truth = RA active (listen) for lab; NI still requires active RA to send MESSAGE.
+ * Listen/from props overlay boot {@code @ConfigProperty} via {@link UssdConfigService}.
  */
 @ApplicationScoped
 public class SipApplyService {
@@ -27,14 +28,6 @@ public class SipApplyService {
     @Inject LinkStatusService linkStatus;
     @Inject UssdConfigService config;
 
-    @ConfigProperty(name = "ussd.sip.host", defaultValue = "0.0.0.0")
-    String host;
-    @ConfigProperty(name = "ussd.sip.tcp-port", defaultValue = "5060")
-    int tcpPort;
-    @ConfigProperty(name = "ussd.sip.udp-port", defaultValue = "5060")
-    int udpPort;
-    @ConfigProperty(name = "ussd.sip.from-uri", defaultValue = "sip:ussdgw@restlink.local")
-    String fromUri;
     @ConfigProperty(name = "ussd.sip.auto-apply-on-boot", defaultValue = "true")
     boolean autoApplyOnBoot;
 
@@ -44,8 +37,20 @@ public class SipApplyService {
         return autoApplyOnBoot;
     }
 
+    public String host() {
+        return config.sipHost();
+    }
+
+    public int tcpPort() {
+        return config.sipTcpPort();
+    }
+
+    public int udpPort() {
+        return config.sipUdpPort();
+    }
+
     public String fromUri() {
-        return fromUri;
+        return config.sipFromUri();
     }
 
     public String apply() {
@@ -82,6 +87,9 @@ public class SipApplyService {
             linkStatus.clearSip();
             return "sip=off";
         }
+        String host = config.sipHost();
+        int tcpPort = config.sipTcpPort();
+        int udpPort = config.sipUdpPort();
         SipServletResourceAdaptor ra = new SipServletResourceAdaptor();
         SipRaConfig cfg = new SipRaConfig();
         cfg.setHost(host);

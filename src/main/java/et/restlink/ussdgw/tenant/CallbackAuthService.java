@@ -55,6 +55,47 @@ public class CallbackAuthService {
         return authorizeCallback(correlationId, headers, null);
     }
 
+    /**
+     * Outcome of authorizing a classic NI push.
+     *
+     * @param tenantId  owning tenant, or null for the global admin key / disabled auth
+     * @param networkId the tenant's network, or null when no tenant was resolved
+     */
+    public record NiAuth(Result result, String tenantId, Integer networkId) {
+        public boolean ok() {
+            return result == Result.OK;
+        }
+
+        static NiAuth unauthorized() {
+            return new NiAuth(Result.UNAUTHORIZED, null, null);
+        }
+    }
+
+    /**
+     * Authorize a network-initiated push on the classic {@code /ussd} ingress.
+     *
+     * <p>Classic ran this servlet with no security constraint at all — it relied on sitting inside
+     * the operator VLAN. That is not a safe default here, so the API key is required by default and
+     * an operator must opt out explicitly ({@code ussd.http.ni.auth-required=false}) for lab use.
+     * The key resolves the tenant, exactly as the sibling {@code /as/callback} path does.
+     */
+    public NiAuth authorizeNi(Map<String, String> headers, boolean authRequired) {
+        String key = header(headers, HDR_API_KEY);
+        if (key == null) key = header(headers, HDR_API_KEY_ALT);
+        if (key != null && !key.isBlank()) {
+            if (config.adminKeyOk(key)) {
+                return new NiAuth(Result.OK, null, null);
+            }
+            Optional<et.restlink.ussdgw.persist.TenantEntity> tenant =
+                    tenantGuard.byHttpApiKey(key.trim());
+            if (tenant.isPresent()) {
+                return new NiAuth(Result.OK, tenant.get().tenantId, tenant.get().networkId);
+            }
+            return NiAuth.unauthorized();
+        }
+        return authRequired ? NiAuth.unauthorized() : new NiAuth(Result.OK, null, null);
+    }
+
     static String header(Map<String, String> headers, String name) {
         if (headers == null || name == null) return null;
         String v = headers.get(name);

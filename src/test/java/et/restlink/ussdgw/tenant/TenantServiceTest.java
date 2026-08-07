@@ -1,6 +1,7 @@
 package et.restlink.ussdgw.tenant;
 
 import et.restlink.ussdgw.persist.TenantEntity;
+import et.restlink.ussdgw.security.PasswordHasher;
 
 import org.junit.jupiter.api.Test;
 
@@ -15,10 +16,14 @@ class TenantServiceTest {
     }
 
     @Test
-    void passwordHashStable() {
-        String a = AdminUserService.hashPassword("secret");
-        String b = AdminUserService.hashPassword("secret");
-        assertThat(a).isEqualTo(b).hasSize(64);
-        assertThat(AdminUserService.hashPassword("other")).isNotEqualTo(a);
+    void passwordHashIsSaltedSoTwoHashesOfTheSamePasswordDiffer() {
+        AdminUserService users = new AdminUserService();
+        String a = users.hashPassword("secret");
+        String b = users.hashPassword("secret");
+        assertThat(a).startsWith("$2");
+        assertThat(a).isNotEqualTo(b);
+        assertThat(PasswordHasher.matches("secret", a)).isTrue();
+        assertThat(PasswordHasher.matches("secret", b)).isTrue();
+        assertThat(PasswordHasher.matches("other", a)).isFalse();
     }
 }

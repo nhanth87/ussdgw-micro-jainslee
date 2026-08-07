@@ -40,6 +40,7 @@
     ]
   },
   "services": [
-    { "name": "primary", "ssn": 8, "protocol": "map" }
+    { "name": "primary", "ssn": 8, "protocol": "map" },
+    { "name": "hlr", "ssn": 6, "protocol": "map" }
   ]
 }

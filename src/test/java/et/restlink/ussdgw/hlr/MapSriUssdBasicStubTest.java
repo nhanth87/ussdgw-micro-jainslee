@@ -22,10 +22,10 @@ class MapSriUssdBasicStubTest {
     @Test
     void pushPathSendsSriThenUnstructuredSs() {
         CapturingPort port = new CapturingPort();
-        // SRI toward HLR (NI push client)
+        // SRI toward configured HLR GT (not subscriber MSISDN)
         port.sendCommand(new Ss7Command.MapSendRoutingInfoForSm(
                 "ni-corr-1",
-                com.microjainslee.ra.jss7.Ss7Address.of("251911000001", 6),
+                com.microjainslee.ra.jss7.Ss7Address.of("251900000006", 6),
                 com.microjainslee.ra.jss7.Ss7Address.of("251900000100", 8),
                 "251911000001",
                 "251900000100",
@@ -35,6 +35,9 @@ class MapSriUssdBasicStubTest {
 
         assertThat(port.cmds).hasSize(2);
         assertThat(port.cmds.get(0)).isInstanceOf(Ss7Command.MapSendRoutingInfoForSm.class);
+        var sri = (Ss7Command.MapSendRoutingInfoForSm) port.cmds.get(0);
+        assertThat(sri.targetAddress().globalTitle()).isEqualTo("251900000006");
+        assertThat(sri.targetAddress().globalTitle()).isNotEqualTo("251911000001");
         assertThat(port.cmds.get(1)).isInstanceOf(Ss7Command.MapUnstructuredSsRequest.class);
     }
 

@@ -63,6 +63,19 @@ public class UssdConfigService {
     String asHttpWireFormatProp;
     @ConfigProperty(name = "ussd.http.ni-path", defaultValue = "/ussd")
     String httpNiPathProp;
+    /**
+     * Classic NI ingress auth. Field initialiser mirrors {@code defaultValue} so a non-CDI
+     * instantiation is fail-closed too.
+     */
+    @ConfigProperty(name = "ussd.http.ni.auth-required", defaultValue = "true")
+    boolean httpNiAuthRequiredProp = true;
+    @ConfigProperty(name = "ussd.http.ni.default-network-id", defaultValue = "0")
+    int httpNiDefaultNetworkIdProp;
+
+    @ConfigProperty(name = "ussd.sri.pending-ttl-ms", defaultValue = "30000")
+    long sriPendingTtlMsProp = 30_000L;
+    @ConfigProperty(name = "ussd.hlr.proxy.pending-ttl-ms", defaultValue = "15000")
+    long hlrProxyPendingTtlMsProp = 15_000L;
 
     @ConfigProperty(name = "ussd.grpc.client.enabled", defaultValue = "true")
     boolean grpcClientEnabledProp;
@@ -73,9 +86,32 @@ public class UssdConfigService {
 
     @ConfigProperty(name = "ussd.diameter.enabled", defaultValue = "false")
     boolean diameterEnabledProp;
+    @ConfigProperty(name = "ussd.diameter.host", defaultValue = "0.0.0.0")
+    String diameterHostProp;
+    @ConfigProperty(name = "ussd.diameter.port", defaultValue = "3868")
+    int diameterPortProp;
+    @ConfigProperty(name = "ussd.diameter.realm", defaultValue = "restlink.local")
+    String diameterRealmProp;
+    @ConfigProperty(name = "ussd.diameter.origin-host", defaultValue = "ussdgw.restlink.local")
+    String diameterOriginHostProp;
+    @ConfigProperty(name = "ussd.diameter.destination-realm", defaultValue = "restlink.local")
+    String diameterDestRealmProp;
+    @ConfigProperty(name = "ussd.diameter.destination-host")
+    java.util.Optional<String> diameterDestHostProp;
 
     @ConfigProperty(name = "ussd.sip.enabled", defaultValue = "false")
     boolean sipEnabledProp;
+    @ConfigProperty(name = "ussd.sip.host", defaultValue = "0.0.0.0")
+    String sipHostProp;
+    @ConfigProperty(name = "ussd.sip.tcp-port", defaultValue = "5060")
+    int sipTcpPortProp;
+    @ConfigProperty(name = "ussd.sip.udp-port", defaultValue = "5060")
+    int sipUdpPortProp;
+    @ConfigProperty(name = "ussd.sip.from-uri", defaultValue = "sip:ussdgw@restlink.local")
+    String sipFromUriProp;
+    @ConfigProperty(name = "ussd.sip.request-uri-template",
+            defaultValue = "sip:{msisdn}@ussd.restlink.local")
+    String sipRequestUriProp;
 
     @ConfigProperty(name = "ussd.smpp.ussd.enabled", defaultValue = "false")
     boolean smppUssdEnabledProp;
@@ -184,6 +220,30 @@ public class UssdConfigService {
         return str(RuntimeConfigStore.Keys.HTTP_NI_PATH, httpNiPathProp);
     }
 
+    /**
+     * Classic NI ingress ({@link #httpNiPath()}) requires a tenant {@code httpApiKey} or the
+     * global admin key. Default {@code true} — an open {@code /ussd} lets anyone push USSD at
+     * any subscriber.
+     */
+    public boolean httpNiAuthRequired() {
+        return bool(RuntimeConfigStore.Keys.HTTP_NI_AUTH_REQUIRED, httpNiAuthRequiredProp);
+    }
+
+    /** networkId for NI ingress when the authenticated principal carries none (admin key). */
+    public int httpNiDefaultNetworkId() {
+        return integer(RuntimeConfigStore.Keys.HTTP_NI_DEFAULT_NETWORK_ID, httpNiDefaultNetworkIdProp);
+    }
+
+    /** TTL for a NI push awaiting its own SRI-SM Response before the saga fails. */
+    public long sriPendingTtlMs() {
+        return lng(RuntimeConfigStore.Keys.SRI_PENDING_TTL_MS, sriPendingTtlMsProp);
+    }
+
+    /** TTL for an inbound HLR dialog awaiting an upper SRI-SM resolve before abort. */
+    public long hlrProxyPendingTtlMs() {
+        return lng(RuntimeConfigStore.Keys.HLR_PROXY_PENDING_TTL_MS, hlrProxyPendingTtlMsProp);
+    }
+
     /** MAP plane enabled (same key as SS7 apply {@code ussd.map.enabled}). */
     public boolean mapEnabled() {
         return bool(RuntimeConfigStore.Keys.MAP_ENABLED, false);
@@ -205,8 +265,52 @@ public class UssdConfigService {
         return bool(RuntimeConfigStore.Keys.DIAMETER_ENABLED, diameterEnabledProp);
     }
 
+    public String diameterHost() {
+        return str(RuntimeConfigStore.Keys.DIAMETER_HOST, diameterHostProp);
+    }
+
+    public int diameterPort() {
+        return integer(RuntimeConfigStore.Keys.DIAMETER_PORT, diameterPortProp);
+    }
+
+    public String diameterRealm() {
+        return str(RuntimeConfigStore.Keys.DIAMETER_REALM, diameterRealmProp);
+    }
+
+    public String diameterOriginHost() {
+        return str(RuntimeConfigStore.Keys.DIAMETER_ORIGIN_HOST, diameterOriginHostProp);
+    }
+
+    public String diameterDestinationRealm() {
+        return str(RuntimeConfigStore.Keys.DIAMETER_DEST_REALM, diameterDestRealmProp);
+    }
+
+    public String diameterDestinationHost() {
+        return str(RuntimeConfigStore.Keys.DIAMETER_DEST_HOST, opt(diameterDestHostProp));
+    }
+
     public boolean sipEnabled() {
         return bool(RuntimeConfigStore.Keys.SIP_ENABLED, sipEnabledProp);
+    }
+
+    public String sipHost() {
+        return str(RuntimeConfigStore.Keys.SIP_HOST, sipHostProp);
+    }
+
+    public int sipTcpPort() {
+        return integer(RuntimeConfigStore.Keys.SIP_TCP_PORT, sipTcpPortProp);
+    }
+
+    public int sipUdpPort() {
+        return integer(RuntimeConfigStore.Keys.SIP_UDP_PORT, sipUdpPortProp);
+    }
+
+    public String sipFromUri() {
+        return str(RuntimeConfigStore.Keys.SIP_FROM_URI, sipFromUriProp);
+    }
+
+    public String sipRequestUriTemplate() {
+        return str(RuntimeConfigStore.Keys.SIP_REQUEST_URI, sipRequestUriProp);
     }
 
     public boolean smppUssdEnabled() {
@@ -246,8 +350,14 @@ public class UssdConfigService {
         return UssdAlphabet.parse(alphabetDefault);
     }
 
+    /** Constant-time compare — {@code String.equals} short-circuits on the first differing byte. */
     public boolean adminKeyOk(String key) {
-        return key != null && !key.isBlank() && key.equals(adminApiKey);
+        if (key == null || key.isBlank() || adminApiKey == null) {
+            return false;
+        }
+        return java.security.MessageDigest.isEqual(
+                adminApiKey.getBytes(java.nio.charset.StandardCharsets.UTF_8),
+                key.getBytes(java.nio.charset.StandardCharsets.UTF_8));
     }
 
     private boolean bool(String key, boolean def) {

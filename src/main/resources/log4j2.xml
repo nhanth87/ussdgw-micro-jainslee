@@ -1,31 +1,87 @@
 <?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Log4j2 ONLY (see docs/agents/logging.md). Files land under ${ussd.log.dir} = dist/logs/.
+  Never quarkus.log.file*, never log4j2-jboss-logmanager, never /tmp.
+
+  Retention: time OR size trigger, capped file count, plus an age sweep. Without a size
+  trigger and a rollover max a single day of ussdgw-slee.log at the 10k TPS target fills
+  the disk and nothing is ever deleted.
+
+  Tunable at launch (run.sh -D...):
+    ussd.log.dir        directory           (default logs)
+    ussd.log.max-size   per-file roll size  (default 200MB)
+    ussd.log.max-files  kept per pattern    (default 30)
+    ussd.log.max-age    age sweep           (default 14d)
+-->
 <Configuration status="WARN">
   <Properties>
     <Property name="LOG_DIR">${sys:ussd.log.dir:-logs}</Property>
+    <Property name="MAX_SIZE">${sys:ussd.log.max-size:-200MB}</Property>
+    <Property name="MAX_FILES">${sys:ussd.log.max-files:-30}</Property>
+    <Property name="MAX_AGE">${sys:ussd.log.max-age:-14d}</Property>
   </Properties>
   <Appenders>
     <RollingFile name="APP" fileName="${LOG_DIR}/ussdgw.log"
-                 filePattern="${LOG_DIR}/ussdgw-%d{yyyy-MM-dd}.log.gz">
+                 filePattern="${LOG_DIR}/ussdgw-%d{yyyy-MM-dd}-%i.log.gz">
       <PatternLayout pattern="%d{yyyy-MM-dd HH:mm:ss.SSS} %-5p [%t] %c{1.} - %m%n"/>
-      <Policies><TimeBasedTriggeringPolicy/></Policies>
+      <Policies>
+        <TimeBasedTriggeringPolicy/>
+        <SizeBasedTriggeringPolicy size="${MAX_SIZE}"/>
+      </Policies>
+      <DefaultRolloverStrategy max="${MAX_FILES}">
+        <Delete basePath="${LOG_DIR}" maxDepth="1">
+          <IfFileName glob="ussdgw-*.log.gz"/>
+          <IfLastModified age="${MAX_AGE}"/>
+        </Delete>
+      </DefaultRolloverStrategy>
     </RollingFile>
     <RollingFile name="SLEE" fileName="${LOG_DIR}/ussdgw-slee.log"
-                 filePattern="${LOG_DIR}/ussdgw-slee-%d{yyyy-MM-dd}.log.gz">
+                 filePattern="${LOG_DIR}/ussdgw-slee-%d{yyyy-MM-dd}-%i.log.gz">
       <PatternLayout pattern="%d{yyyy-MM-dd HH:mm:ss.SSS} %-5p [%t] %m%n"/>
-      <Policies><TimeBasedTriggeringPolicy/></Policies>
+      <Policies>
+        <TimeBasedTriggeringPolicy/>
+        <SizeBasedTriggeringPolicy size="${MAX_SIZE}"/>
+      </Policies>
+      <DefaultRolloverStrategy max="${MAX_FILES}">
+        <Delete basePath="${LOG_DIR}" maxDepth="1">
+          <IfFileName glob="ussdgw-slee-*.log.gz"/>
+          <IfLastModified age="${MAX_AGE}"/>
+        </Delete>
+      </DefaultRolloverStrategy>
     </RollingFile>
     <RollingFile name="CDR" fileName="${LOG_DIR}/ussd-cdr.log"
-                 filePattern="${LOG_DIR}/ussd-cdr-%d{yyyy-MM-dd}.log.gz">
+                 filePattern="${LOG_DIR}/ussd-cdr-%d{yyyy-MM-dd}-%i.log.gz">
       <PatternLayout pattern="%d{yyyy-MM-dd HH:mm:ss.SSS} %m%n"/>
-      <Policies><TimeBasedTriggeringPolicy/></Policies>
+      <Policies>
+        <TimeBasedTriggeringPolicy/>
+        <SizeBasedTriggeringPolicy size="${MAX_SIZE}"/>
+      </Policies>
+      <DefaultRolloverStrategy max="${MAX_FILES}">
+        <Delete basePath="${LOG_DIR}" maxDepth="1">
+          <IfFileName glob="ussd-cdr-*.log.gz"/>
+          <IfLastModified age="${MAX_AGE}"/>
+        </Delete>
+      </DefaultRolloverStrategy>
     </RollingFile>
     <Console name="CONSOLE" target="SYSTEM_OUT">
       <PatternLayout pattern="%d{HH:mm:ss.SSS} %-5p %c{1.} - %m%n"/>
     </Console>
+
+    <!-- SLEE + CDR are the hot path: keep file IO off the SBB / flusher thread.
+         Blocking=false drops on a full ring rather than stalling MAP dialogs. -->
+    <Async name="SLEE_ASYNC" bufferSize="65536" blocking="false" includeLocation="false">
+      <AppenderRef ref="SLEE"/>
+      <AppenderRef ref="CONSOLE"/>
+    </Async>
+    <Async name="CDR_ASYNC" bufferSize="65536" blocking="false" includeLocation="false">
+      <AppenderRef ref="CDR"/>
+    </Async>
   </Appenders>
   <Loggers>
-    <Logger name="SLEE" level="INFO" additivity="false"><AppenderRef ref="SLEE"/><AppenderRef ref="CONSOLE"/></Logger>
-    <Logger name="USSD_CDR" level="INFO" additivity="false"><AppenderRef ref="CDR"/></Logger>
+    <Logger name="SLEE" level="INFO" additivity="false"><AppenderRef ref="SLEE_ASYNC"/></Logger>
+    <Logger name="USSD_CDR" level="INFO" additivity="false"><AppenderRef ref="CDR_ASYNC"/></Logger>
+    <!-- First-run credentials: console only, never a file with 14d retention. -->
+    <Logger name="USSD_FIRST_RUN" level="INFO" additivity="false"><AppenderRef ref="CONSOLE"/></Logger>
     <Root level="INFO"><AppenderRef ref="APP"/><AppenderRef ref="CONSOLE"/></Root>
   </Loggers>
 </Configuration>

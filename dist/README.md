@@ -1,4 +1,4 @@
-# RestLink Ussdgw — ship this folder
+# Digicom-ET USSDGW — ship this folder
 
 Self-contained Quarkus **fast-jar** runtime for **ussdgw-jainslee** (OTA parity).
 
@@ -21,4 +21,4 @@ Self-contained Quarkus **fast-jar** runtime for **ussdgw-jainslee** (OTA parity)
 Never `java -jar ussdgw-app.jar` alone. Never ship a single fat jar.
 
 - JDK 25 only
-- Admin: `http://HOST:8088/admin/?key=ussd-admin`
+- Admin: `http://HOST:8088/admin/login` (form login). Automation: header `X-USSD-Admin-Key: <ussd.admin.api-key>` — `?key=` is rejected.

@@ -30,3 +30,16 @@ dist/configs/
   application.properties
   ss7-persist/
 ```
+
+## Retention + async (hot path)
+
+`log4j2.xml` rolls on **time or size**, caps file count, and sweeps by age. Tunables at launch (`-D` / `run.sh`):
+
+| Property | Default | Role |
+|----------|---------|------|
+| `ussd.log.dir` | `logs` | Under APP_HOME → `dist/logs/` |
+| `ussd.log.max-size` | `200MB` | Size trigger per file |
+| `ussd.log.max-files` | `30` | `DefaultRolloverStrategy max` |
+| `ussd.log.max-age` | `14d` | Age sweep on `*.log.gz` |
+
+SLEE (`SLEE` → `SLEE_ASYNC`) and CDR (`USSD_CDR` → `CDR_ASYNC`) use **AsyncAppender** (`blocking=false`) so file IO does not stall MAP dialogs. First-run admin password logger `USSD_FIRST_RUN` is **console only** (never the 14d file set).

@@ -23,8 +23,8 @@ async function main() {
     return;
   }
   console.error(`Usage: node src/index.mjs <pull|ni>`);
-  console.error(`  pull  — listen :8090 /ussd/pull (DELAY_MS, MODE, WIRE, …)`);
-  console.error(`  ni    — POST classic NI dialog to GW /ussd (GW_NI, MSISDN, …)`);
+  console.error(`  pull  — listen :8090 /ussd/pull (menus; DELAY_MS, MODE, WIRE, MENU_PICK, …)`);
+  console.error(`  ni    — POST classic NI dialog to GW /ussd (interactive menus + JSESSIONID)`);
   process.exit(1);
 }
 

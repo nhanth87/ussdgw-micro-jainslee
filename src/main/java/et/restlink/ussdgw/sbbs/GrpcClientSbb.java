@@ -6,6 +6,8 @@ import et.restlink.ussdgw.api.AsWireCodec;
 import et.restlink.ussdgw.events.PullGrpcEvent;
 import et.restlink.ussdgw.logging.SleeEventTrace;
 import et.restlink.ussdgw.service.AsPullClient;
+import et.restlink.ussdgw.service.AsPullState;
+import et.restlink.ussdgw.service.AsPullTarget;
 import et.restlink.ussdgw.service.SbbServices;
 
 import com.microjainslee.api.ActivityContextInterface;
@@ -17,19 +19,16 @@ import com.microjainslee.api.annotations.InjectRa;
 import com.microjainslee.ra.grpc.command.InvokeGrpc;
 import com.microjainslee.ra.grpc.events.GrpcInvokeResponseEvent;
 
-import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.atomic.AtomicInteger;
-
 /**
  * gRPC pull toward AS — UTF-8 JSON bytes on InvokeGrpc (greenfield contract).
  * Completion via GrpcInvokeResponseEvent. FORBIDDEN: setTimer / 50ms poll.
+ *
+ * <p>Stateless like {@link HttpClientSbb}: the RA fires the completion on an activity named after
+ * the bare correlation id, which resolves to a different pooled instance than the one that
+ * submitted. Per-correlation state belongs to {@code AsPullStateRegistry}.
  */
 public final class GrpcClientSbb implements Sbb, SleeEventHandler {
     private final SbbServices services;
-    private final Map<String, Long> startedAt = new ConcurrentHashMap<>();
-    private final Map<String, AtomicInteger> attempts = new ConcurrentHashMap<>();
-    private final Map<String, PullGrpcEvent> pullByCorr = new ConcurrentHashMap<>();
 
     @InjectRa(name = "grpc-client-ra")
     private volatile RaCommandPort grpc;
@@ -65,68 +64,81 @@ public final class GrpcClientSbb implements Sbb, SleeEventHandler {
     private String sendPull(PullGrpcEvent pull) {
         AsRequest req = pull.request();
         String corr = req.correlationId();
-        String circuitKey = pull.target() + "|" + pull.fullMethod();
+        AsPullTarget.Grpc target =
+                new AsPullTarget.Grpc(pull.target(), pull.fullMethod(), req);
+        String circuitKey = target.circuitKey();
         AsPullClient.Admit admit = svc().asPull().tryAdmit(circuitKey);
         if (!admit.allow()) {
             svc().saga().onAsPullFailed(corr, admit.reason());
             return "circuit-open corr=" + corr;
         }
-        byte[] payload = AsWireCodec.encodeRequest(req);
-        startedAt.put(corr, System.currentTimeMillis());
-        attempts.put(corr, new AtomicInteger(0));
-        pullByCorr.put(corr, pull);
+        // Resolve the transport before registering state: an absent RA must not leave an entry
+        // (and a request payload) behind.
         RaCommandPort port = grpc;
         if (port == null) {
             svc().asPull().recordFailure(circuitKey);
             svc().saga().onAsPullFailed(corr, "NO_GRPC_RA");
             return "no-ra";
         }
-        port.sendCommand(new InvokeGrpc(
-                corr, pull.target(), pull.fullMethod(), payload,
-                svc().config().grpcInvokeTimeoutMs()));
+        if (svc().asPullState().open(corr, target, System.currentTimeMillis()).isEmpty()) {
+            svc().asPull().recordFailure(circuitKey);
+            svc().saga().onAsPullFailed(corr, "AS_PULL_STATE_SATURATED");
+            return "state-saturated corr=" + corr;
+        }
+        try {
+            invoke(port, corr, target);
+        } catch (RuntimeException e) {
+            svc().asPullState().close(corr);
+            throw e;
+        }
         return "submitted corr=" + corr;
     }
 
     private String onCompleted(GrpcInvokeResponseEvent done) {
         String corr = done.correlationId();
-        Long start = startedAt.get(corr);
-        long latency = start == null ? -1 : System.currentTimeMillis() - start;
-        PullGrpcEvent pull = pullByCorr.get(corr);
-        String circuitKey = pull == null ? "" : pull.target() + "|" + pull.fullMethod();
-        AtomicInteger att = attempts.getOrDefault(corr, new AtomicInteger(0));
-        int attempt = att.get();
+        AsPullState state = svc().asPullState().peek(corr).orElse(null);
+        AsPullTarget.Grpc target =
+                (state != null && state.target() instanceof AsPullTarget.Grpc g) ? g : null;
+        // No state → no latency sample and no breaker key (see HttpClientSbb).
+        long latency = state == null ? -1L : state.latencyMsAt(System.currentTimeMillis());
 
         if (!done.isOk() || done.payload() == null) {
             String err = done.statusDescription();
             int status = done.statusCode();
-            if (svc().asPull().shouldRetry(circuitKey, attempt, status <= 0 ? 0 : 500, err)
-                    && pull != null) {
-                att.incrementAndGet();
+            String reason = "AS_GRPC_" + (err == null ? status : err);
+            if (target != null) {
                 RaCommandPort port = grpc;
-                if (port != null) {
-                    startedAt.put(corr, System.currentTimeMillis());
-                    port.sendCommand(new InvokeGrpc(
-                            corr, pull.target(), pull.fullMethod(),
-                            AsWireCodec.encodeRequest(pull.request()),
-                            svc().config().grpcInvokeTimeoutMs()));
-                    return "retry attempt=" + att.get() + " corr=" + corr;
+                if (port != null && svc().asPull().shouldRetry(
+                        target.circuitKey(), state.attempt(), status <= 0 ? 0 : 500, err)) {
+                    AsPullState retry =
+                            svc().asPullState().beginRetry(corr, System.currentTimeMillis())
+                                    .orElse(null);
+                    if (retry != null) {
+                        invoke(port, corr, target);
+                        return "retry attempt=" + retry.attempt() + " corr=" + corr;
+                    }
                 }
+                svc().asPullState().close(corr);
+                svc().asPull().recordFailure(target.circuitKey());
+            } else {
+                svc().asPullState().close(corr);
             }
-            clear(corr);
-            svc().asPull().recordFailure(circuitKey);
-            svc().saga().onAsPullFailed(corr, "AS_GRPC_" + (err == null ? status : err));
+            svc().saga().onAsPullFailed(corr, reason);
             return "fail " + err;
         }
-        clear(corr);
-        svc().asPull().recordSuccess(circuitKey);
+        svc().asPullState().close(corr);
+        if (target != null) {
+            svc().asPull().recordSuccess(target.circuitKey());
+        }
         AsResponse resp = AsWireCodec.decodeResponse(done.payload(), corr);
         svc().bridge().onAsResponse(resp, latency);
         return "ok latencyMs=" + latency;
     }
 
-    private void clear(String corr) {
-        startedAt.remove(corr);
-        attempts.remove(corr);
-        pullByCorr.remove(corr);
+    private void invoke(RaCommandPort port, String corr, AsPullTarget.Grpc target) {
+        port.sendCommand(new InvokeGrpc(
+                corr, target.endpoint(), target.fullMethod(),
+                AsWireCodec.encodeRequest(target.request()),
+                svc().config().grpcInvokeTimeoutMs()));
     }
 }

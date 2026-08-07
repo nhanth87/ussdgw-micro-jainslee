@@ -5,6 +5,7 @@ import et.restlink.ussdgw.persist.TenantEntity;
 import et.restlink.ussdgw.routing.RuleType;
 import et.restlink.ussdgw.routing.ShortCodeRule;
 import et.restlink.ussdgw.routing.ShortCodeRoutingService;
+import et.restlink.ussdgw.security.AsUrlValidator;
 import et.restlink.ussdgw.tenant.AdminUserService;
 import et.restlink.ussdgw.tenant.TenantService;
 
@@ -15,22 +16,72 @@ import java.net.URLDecoder;
 import java.nio.charset.StandardCharsets;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.Optional;
 
 /**
  * HTMX admin panels for routing, tenants (networkId), and users — OTA-shaped CRUD.
+ * Full pages seed {@code {{ROWS}}} in disk templates; POST/partial returns table rows.
  */
 @ApplicationScoped
 public class AdminCatalogHandler {
+    private static final String TD = " class=\"px-3 py-2\"";
+    private static final String DEL_BTN =
+            "rounded-md border border-ink-line px-2 py-1 text-[0.65rem] uppercase tracking-wider "
+                    + "text-ink-mute hover:border-signal hover:text-signal";
+
     @Inject ShortCodeRoutingService routing;
     @Inject TenantService tenants;
     @Inject AdminUserService users;
+    @Inject AsUrlValidator asUrlValidator;
+
+    /** Tests construct this handler directly; fall back to the config-free defaults. */
+    private AsUrlValidator asUrls() {
+        AsUrlValidator v = asUrlValidator;
+        if (v == null) {
+            v = new AsUrlValidator();
+            asUrlValidator = v;
+        }
+        return v;
+    }
+
+    /** Identity CRUD is ADMIN-only — OPS must not be able to mint an ADMIN principal. */
+    private static boolean deniedForIdentityCrud(AdminAuthService.Principal who) {
+        return who != null && !"ADMIN".equals(who.role());
+    }
+
+    private static AdminHttpHandler.HttpReply identityForbidden(AdminAuthService.Principal who) {
+        return AdminHttpHandler.HttpReply.text(403,
+                "forbidden — requires role ADMIN (have "
+                        + (who == null ? "anonymous" : String.valueOf(who.role())) + ")");
+    }
 
     public AdminHttpHandler.HttpReply routingGet() {
         return routingGet(null);
     }
 
+    /** HTMX fragment or automation: table rows (+ legacy notice wrapper when notice set). */
     public AdminHttpHandler.HttpReply routingGet(AdminAuthService.Principal who) {
-        return AdminHttpHandler.HttpReply.html(routingHtml(null, who));
+        return AdminHttpHandler.HttpReply.html(routingRowsHtml(who));
+    }
+
+    public Map<String, String> routingPageVars(AdminAuthService.Principal who) {
+        Map<String, String> m = new LinkedHashMap<>();
+        m.put("{{ROWS}}", routingRowsHtml(who));
+        if (who != null && who.isTenantScoped()) {
+            m.put("{{TENANT_FIELD}}",
+                    "<input type=\"hidden\" name=\"tenantId\" value=\"" + esc(who.tenantId()) + "\"/>"
+                            + "<p class=\"text-xs text-ink-mute\">tenantId locked to "
+                            + "<code class=\"font-mono text-slate-300\">" + esc(who.tenantId())
+                            + "</code></p>");
+        } else {
+            m.put("{{TENANT_FIELD}}",
+                    "<div><label class=\"block text-xs uppercase tracking-wider text-ink-mute\">tenantId</label>"
+                            + "<input name=\"tenantId\" list=\"tenant-ids\" "
+                            + "class=\"mt-1 w-full rounded-md border border-ink-line bg-ink px-3 py-2 text-sm "
+                            + "focus:border-signal focus:outline-none focus:ring-1 focus:ring-signal/40\"/>"
+                            + tenantDatalistHtml() + "</div>");
+        }
+        return m;
     }
 
     public AdminHttpHandler.HttpReply tenantsGet() {
@@ -38,10 +89,14 @@ public class AdminCatalogHandler {
     }
 
     public AdminHttpHandler.HttpReply tenantsGet(AdminAuthService.Principal who) {
-        if (who != null && who.isTenantScoped()) {
-            return AdminHttpHandler.HttpReply.text(403, "forbidden for TENANT role");
+        if (deniedForIdentityCrud(who)) {
+            return identityForbidden(who);
         }
-        return AdminHttpHandler.HttpReply.html(tenantsHtml(null));
+        return AdminHttpHandler.HttpReply.html(tenantRowsHtml());
+    }
+
+    public Map<String, String> tenantsPageVars() {
+        return Map.of("{{ROWS}}", tenantRowsHtml());
     }
 
     public AdminHttpHandler.HttpReply usersGet() {
@@ -49,10 +104,16 @@ public class AdminCatalogHandler {
     }
 
     public AdminHttpHandler.HttpReply usersGet(AdminAuthService.Principal who) {
-        if (who != null && who.isTenantScoped()) {
-            return AdminHttpHandler.HttpReply.text(403, "forbidden for TENANT role");
+        if (deniedForIdentityCrud(who)) {
+            return identityForbidden(who);
         }
-        return AdminHttpHandler.HttpReply.html(usersHtml(null));
+        return AdminHttpHandler.HttpReply.html(userRowsHtml());
+    }
+
+    public Map<String, String> usersPageVars() {
+        return Map.of(
+                "{{ROWS}}", userRowsHtml(),
+                "{{TENANT_OPTS}}", tenantOptionsHtml());
     }
 
     public AdminHttpHandler.HttpReply routingPost(String body) {
@@ -66,7 +127,7 @@ public class AdminCatalogHandler {
             if ("reload".equalsIgnoreCase(action)) {
                 routing.reloadFromDb();
                 int n = routing.list().size();
-                return AdminHttpHandler.HttpReply.html(routingHtml("reloaded " + n + " rules — live", who));
+                return rowsOk(routingRowsHtml(who), "reloaded " + n + " rules — live");
             }
             if ("delete".equalsIgnoreCase(action)) {
                 String sc = f.getOrDefault("shortCode", "");
@@ -74,11 +135,11 @@ public class AdminCatalogHandler {
                     boolean owned = routing.listForTenant(who.tenantId()).stream()
                             .anyMatch(r -> sc.equals(r.shortCode()));
                     if (!owned) {
-                        return AdminHttpHandler.HttpReply.html(routingHtml("forbidden", who));
+                        return rowsErr(routingRowsHtml(who), "forbidden");
                     }
                 }
                 routing.delete(sc);
-                return AdminHttpHandler.HttpReply.html(routingHtml("deleted — live", who));
+                return rowsOk(routingRowsHtml(who), "deleted — live");
             }
             String code = f.getOrDefault("shortCode", "").trim();
             String type = f.getOrDefault("ruleType", "HTTP").trim();
@@ -86,22 +147,28 @@ public class AdminCatalogHandler {
             String tenantId = f.getOrDefault("tenantId", "").trim();
             int networkId = parseInt(f.get("networkId"), 0);
             boolean enabled = !"false".equalsIgnoreCase(f.getOrDefault("enabled", "true"));
+            boolean mark = "true".equalsIgnoreCase(f.getOrDefault("mark", "false"));
             if (code.isEmpty() || url.isEmpty()) {
-                return AdminHttpHandler.HttpReply.html(routingHtml("shortCode and asUrl required", who));
+                return rowsErr(routingRowsHtml(who), "shortCode and asUrl required");
+            }
+            if (RuleType.HTTP.name().equalsIgnoreCase(type)) {
+                Optional<String> ssrf = asUrls().reject(url);
+                if (ssrf.isPresent()) {
+                    return rowsErr(routingRowsHtml(who), ssrf.get());
+                }
             }
             if (who != null && who.isTenantScoped()) {
                 tenantId = who.tenantId();
             }
-            // Inherit networkId from tenant when set and network left at 0
             if (!tenantId.isEmpty() && networkId == 0) {
                 networkId = tenants.byId(tenantId).map(t -> t.networkId).orElse(0);
             }
             routing.putAndPersist(new ShortCodeRule(
                     code, RuleType.valueOf(type.toUpperCase()), url, enabled,
-                    tenantId.isEmpty() ? null : tenantId, networkId));
-            return AdminHttpHandler.HttpReply.html(routingHtml("saved " + esc(code) + " — live", who));
+                    tenantId.isEmpty() ? null : tenantId, networkId, mark));
+            return rowsOk(routingRowsHtml(who), "saved " + code + " — live");
         } catch (RuntimeException ex) {
-            return AdminHttpHandler.HttpReply.html(routingHtml("error: " + esc(ex.getMessage()), who));
+            return rowsErr(routingRowsHtml(who), "error: " + nullToEmpty(ex.getMessage()));
         }
     }
 
@@ -110,19 +177,19 @@ public class AdminCatalogHandler {
     }
 
     public AdminHttpHandler.HttpReply tenantsPost(String body, AdminAuthService.Principal who) {
-        if (who != null && who.isTenantScoped()) {
-            return AdminHttpHandler.HttpReply.text(403, "forbidden for TENANT role");
+        if (deniedForIdentityCrud(who)) {
+            return identityForbidden(who);
         }
         Map<String, String> f = parseForm(body);
         String action = f.getOrDefault("action", "save");
         try {
             if ("delete".equalsIgnoreCase(action)) {
                 tenants.delete(f.getOrDefault("tenantId", ""));
-                return AdminHttpHandler.HttpReply.html(tenantsHtml("deleted"));
+                return rowsOk(tenantRowsHtml(), "deleted");
             }
             String tenantId = f.getOrDefault("tenantId", "").trim();
             if (tenantId.isEmpty()) {
-                return AdminHttpHandler.HttpReply.html(tenantsHtml("tenantId required"));
+                return rowsErr(tenantRowsHtml(), "tenantId required");
             }
             TenantEntity e = tenants.upsert(
                     tenantId,
@@ -135,12 +202,12 @@ public class AdminCatalogHandler {
                     f.get("asCallbackBase"),
                     parseInt(f.get("maxTps"), 50),
                     f.get("httpAsWireFormat"));
-            String notice = "saved " + esc(e.tenantId) + " networkId=" + e.networkId
-                    + " wire=" + esc(e.httpAsWireFormat)
+            String notice = "saved " + e.tenantId + " networkId=" + e.networkId
+                    + " wire=" + nullToEmpty(e.httpAsWireFormat)
                     + " key=" + maskKey(e.httpApiKey);
-            return AdminHttpHandler.HttpReply.html(tenantsHtml(notice));
+            return rowsOk(tenantRowsHtml(), notice);
         } catch (RuntimeException ex) {
-            return AdminHttpHandler.HttpReply.html(tenantsHtml("error: " + esc(ex.getMessage())));
+            return rowsErr(tenantRowsHtml(), "error: " + nullToEmpty(ex.getMessage()));
         }
     }
 
@@ -149,15 +216,15 @@ public class AdminCatalogHandler {
     }
 
     public AdminHttpHandler.HttpReply usersPost(String body, AdminAuthService.Principal who) {
-        if (who != null && who.isTenantScoped()) {
-            return AdminHttpHandler.HttpReply.text(403, "forbidden for TENANT role");
+        if (deniedForIdentityCrud(who)) {
+            return identityForbidden(who);
         }
         Map<String, String> f = parseForm(body);
         String action = f.getOrDefault("action", "create");
         try {
             if ("delete".equalsIgnoreCase(action)) {
                 users.delete(f.getOrDefault("username", ""));
-                return AdminHttpHandler.HttpReply.html(usersHtml("deleted"));
+                return rowsOk(userRowsHtml(), "deleted");
             }
             String username = f.getOrDefault("username", "").trim();
             String password = f.getOrDefault("password", "");
@@ -166,153 +233,131 @@ public class AdminCatalogHandler {
             String display = f.getOrDefault("displayName", "");
             boolean enabled = !"false".equalsIgnoreCase(f.getOrDefault("enabled", "true"));
             if (username.isEmpty()) {
-                return AdminHttpHandler.HttpReply.html(usersHtml("username required"));
+                return rowsErr(userRowsHtml(), "username required");
             }
             if ("update".equalsIgnoreCase(action)) {
                 users.update(username, password, role, tenantId, display, enabled);
-                return AdminHttpHandler.HttpReply.html(usersHtml("updated " + esc(username)));
+                return rowsOk(userRowsHtml(), "updated " + username);
             }
             if (password.isBlank()) {
-                return AdminHttpHandler.HttpReply.html(usersHtml("password required for create"));
+                return rowsErr(userRowsHtml(), "password required for create");
             }
             users.create(username, password, role, tenantId, display, enabled);
-            return AdminHttpHandler.HttpReply.html(usersHtml("created " + esc(username)));
+            return rowsOk(userRowsHtml(), "created " + username);
         } catch (RuntimeException ex) {
-            return AdminHttpHandler.HttpReply.html(usersHtml("error: " + esc(ex.getMessage())));
+            return rowsErr(userRowsHtml(), "error: " + nullToEmpty(ex.getMessage()));
         }
     }
 
-    private String routingHtml(String notice, AdminAuthService.Principal who) {
+    String routingRowsHtml(AdminAuthService.Principal who) {
         StringBuilder sb = new StringBuilder();
-        sb.append("<div class=\"catalog\">");
-        if (notice != null) sb.append("<p class=\"notice\">").append(esc(notice)).append("</p>");
-        sb.append("<h2>Short-code routing</h2>");
-        sb.append("<p class=\"hint\">Bind short code → HTTP/gRPC AS URL. Optional tenantId / networkId ")
-                .append("(inherits networkId from tenant when left 0). Save updates the live map immediately ")
-                .append("(no restart). Use Reload from DB if rules were edited outside this UI.</p>");
-        sb.append("<form hx-post=\"/admin/routing\" hx-target=\"#panel\" hx-swap=\"innerHTML\" ")
-                .append("hx-headers='{\"X-USSD-Admin-Key\":\"ussd-admin\"}' class=\"inline reload-form\">")
-                .append("<input type=\"hidden\" name=\"action\" value=\"reload\"/>")
-                .append("<button type=\"submit\">Reload from DB</button></form>");
-        sb.append("<form hx-post=\"/admin/routing\" hx-target=\"#panel\" hx-swap=\"innerHTML\" ")
-                .append("hx-headers='{\"X-USSD-Admin-Key\":\"ussd-admin\"}' class=\"grid-form\">");
-        sb.append("<label>Code <input name=\"shortCode\" placeholder=\"*123#\" required/></label>");
-        sb.append("<label>Type <select name=\"ruleType\"><option>HTTP</option><option>GRPC</option></select></label>");
-        sb.append("<label>AS URL <input name=\"asUrl\" size=\"40\" required/></label>");
-        if (who != null && who.isTenantScoped()) {
-            sb.append("<input type=\"hidden\" name=\"tenantId\" value=\"").append(esc(who.tenantId())).append("\"/>");
-        } else {
-            sb.append("<label>tenantId <input name=\"tenantId\" list=\"tenant-ids\"/></label>");
-        }
-        sb.append("<label>networkId <input name=\"networkId\" type=\"number\" value=\"0\" min=\"0\"/></label>");
-        sb.append("<label>enabled <select name=\"enabled\"><option>true</option><option>false</option></select></label>");
-        sb.append("<input type=\"hidden\" name=\"action\" value=\"save\"/>");
-        sb.append("<button type=\"submit\">Save rule</button></form>");
-        if (who == null || !who.isTenantScoped()) {
-            tenantDatalist(sb);
-        }
-        sb.append("<table><tr><th>Code</th><th>Type</th><th>URL</th><th>tenant</th><th>net</th><th>on</th><th></th></tr>");
         var rules = who != null && who.isTenantScoped()
                 ? routing.listForTenant(who.tenantId()) : routing.list();
+        if (rules.isEmpty()) {
+            sb.append("<tr><td colspan=\"8\" class=\"px-3 py-4 text-ink-mute italic\">No short-code rules.</td></tr>");
+            return sb.toString();
+        }
         for (ShortCodeRule r : rules) {
-            sb.append("<tr><td>").append(esc(r.shortCode())).append("</td><td>")
-                    .append(r.ruleType()).append("</td><td>").append(esc(r.asUrl())).append("</td><td>")
-                    .append(esc(r.tenantId())).append("</td><td>").append(r.networkId()).append("</td><td>")
-                    .append(r.enabled()).append("</td><td>");
-            sb.append("<form hx-post=\"/admin/routing\" hx-target=\"#panel\" hx-swap=\"innerHTML\" ")
-                    .append("hx-headers='{\"X-USSD-Admin-Key\":\"ussd-admin\"}' class=\"inline\">")
+            sb.append("<tr><td").append(TD).append(">").append(esc(r.shortCode())).append("</td><td")
+                    .append(TD).append(">").append(esc(String.valueOf(r.ruleType()))).append("</td><td")
+                    .append(TD).append(">").append(esc(r.asUrl())).append("</td><td")
+                    .append(TD).append(">").append(esc(r.tenantId())).append("</td><td")
+                    .append(TD).append(">").append(r.networkId()).append("</td><td")
+                    .append(TD).append(">").append(r.mark()).append("</td><td")
+                    .append(TD).append(">").append(r.enabled()).append("</td><td").append(TD).append(">");
+            sb.append("<form hx-post=\"/admin/routing\" hx-target=\"#rule-rows\" hx-swap=\"innerHTML\" class=\"inline\">")
                     .append("<input type=\"hidden\" name=\"action\" value=\"delete\"/>")
                     .append("<input type=\"hidden\" name=\"shortCode\" value=\"").append(esc(r.shortCode())).append("\"/>")
-                    .append("<button type=\"submit\">Del</button></form></td></tr>");
+                    .append("<button type=\"submit\" class=\"").append(DEL_BTN).append("\">Del</button></form></td></tr>");
         }
-        sb.append("</table></div>");
         return sb.toString();
     }
 
-    private String tenantsHtml(String notice) {
+    String tenantRowsHtml() {
         StringBuilder sb = new StringBuilder();
-        sb.append("<div class=\"catalog\">");
-        if (notice != null) sb.append("<p class=\"notice\">").append(esc(notice)).append("</p>");
-        sb.append("<h2>Tenants (networkId)</h2>");
-        sb.append("<p class=\"hint\">tenantId ↔ networkId (jSS7 setNetworkId / CDR / short-code inherit). ")
-                .append("Blank HTTP key generates one. SMPP password is write-only. ")
-                .append("After smppSystemId, Apply SMPP allowlist.</p>");
-        sb.append("<form hx-post=\"/admin/tenants\" hx-target=\"#panel\" hx-swap=\"innerHTML\" ")
-                .append("hx-headers='{\"X-USSD-Admin-Key\":\"ussd-admin\"}' class=\"grid-form\">");
-        sb.append("<label>tenantId <input name=\"tenantId\" required placeholder=\"ethio-1\"/></label>");
-        sb.append("<label>Display <input name=\"displayName\"/></label>");
-        sb.append("<label>networkId <input name=\"networkId\" type=\"number\" value=\"0\" min=\"0\"/></label>");
-        sb.append("<label>HTTP API key <input name=\"httpApiKey\" placeholder=\"blank=generate\" autocomplete=\"off\"/></label>");
-        sb.append("<label>SMPP systemId <input name=\"smppSystemId\"/></label>");
-        sb.append("<label>SMPP password <input name=\"smppPassword\" type=\"password\" autocomplete=\"new-password\" placeholder=\"write-only\"/></label>");
-        sb.append("<label>AS callback base <input name=\"asCallbackBase\" size=\"40\"/></label>");
-        sb.append("<label>maxTps <input name=\"maxTps\" type=\"number\" value=\"50\" min=\"1\"/></label>");
-        sb.append("<label>HTTP AS wire <select name=\"httpAsWireFormat\">")
-                .append("<option value=\"XML\" selected>XML</option>")
-                .append("<option value=\"JSON\">JSON</option></select></label>");
-        sb.append("<label>enabled <select name=\"enabled\"><option>true</option><option>false</option></select></label>");
-        sb.append("<input type=\"hidden\" name=\"action\" value=\"save\"/>");
-        sb.append("<button type=\"submit\">Save tenant</button></form>");
-        sb.append("<table><tr><th>tenantId</th><th>name</th><th>networkId</th><th>wire</th>")
-                .append("<th>smpp</th><th>key</th><th>tps</th><th>on</th><th></th></tr>");
-        for (TenantEntity t : tenants.list()) {
-            sb.append("<tr><td>").append(esc(t.tenantId)).append("</td><td>")
-                    .append(esc(t.displayName)).append("</td><td>").append(t.networkId).append("</td><td>")
-                    .append(esc(t.httpAsWireFormat)).append("</td><td>")
-                    .append(esc(t.smppSystemId)).append("</td><td>").append(esc(maskKey(t.httpApiKey))).append("</td><td>")
-                    .append(t.maxTps).append("</td><td>").append(t.enabled).append("</td><td>");
-            sb.append("<form hx-post=\"/admin/tenants\" hx-target=\"#panel\" hx-swap=\"innerHTML\" ")
-                    .append("hx-headers='{\"X-USSD-Admin-Key\":\"ussd-admin\"}' class=\"inline\">")
+        var list = tenants.list();
+        if (list.isEmpty()) {
+            sb.append("<tr><td colspan=\"9\" class=\"px-3 py-4 text-ink-mute italic\">No tenants.</td></tr>");
+            return sb.toString();
+        }
+        for (TenantEntity t : list) {
+            sb.append("<tr><td").append(TD).append(">").append(esc(t.tenantId)).append("</td><td")
+                    .append(TD).append(">").append(esc(t.displayName)).append("</td><td")
+                    .append(TD).append(">").append(t.networkId).append("</td><td")
+                    .append(TD).append(">").append(esc(t.httpAsWireFormat)).append("</td><td")
+                    .append(TD).append(">").append(esc(t.smppSystemId)).append("</td><td")
+                    .append(TD).append(">").append(esc(maskKey(t.httpApiKey))).append("</td><td")
+                    .append(TD).append(">").append(t.maxTps).append("</td><td")
+                    .append(TD).append(">").append(t.enabled).append("</td><td").append(TD).append(">");
+            sb.append("<form hx-post=\"/admin/tenants\" hx-target=\"#tenant-rows\" hx-swap=\"innerHTML\" class=\"inline\">")
                     .append("<input type=\"hidden\" name=\"action\" value=\"delete\"/>")
                     .append("<input type=\"hidden\" name=\"tenantId\" value=\"").append(esc(t.tenantId)).append("\"/>")
-                    .append("<button type=\"submit\">Del</button></form></td></tr>");
+                    .append("<button type=\"submit\" class=\"").append(DEL_BTN).append("\">Del</button></form></td></tr>");
         }
-        sb.append("</table></div>");
         return sb.toString();
     }
 
-    private String usersHtml(String notice) {
+    String userRowsHtml() {
         StringBuilder sb = new StringBuilder();
-        sb.append("<div class=\"catalog\">");
-        if (notice != null) sb.append("<p class=\"notice\">").append(esc(notice)).append("</p>");
-        sb.append("<h2>Admin users</h2>");
-        sb.append("<p class=\"hint\">Roles: ADMIN | OPS | TENANT. TENANT login <b>username must equal tenantId</b> ")
-                .append("(e.g. ethio-bank) — RestLink is only a dist brand, not a required username. ")
-                .append("Passwords stored as SHA-256 hex (lab). ")
-                .append("Use action=update with existing username to change role/password.</p>");
-        sb.append("<form hx-post=\"/admin/users\" hx-target=\"#panel\" hx-swap=\"innerHTML\" ")
-                .append("hx-headers='{\"X-USSD-Admin-Key\":\"ussd-admin\"}' class=\"grid-form\">");
-        sb.append("<label>Username <input name=\"username\" required/></label>");
-        sb.append("<label>Password <input name=\"password\" type=\"password\" placeholder=\"required on create\"/></label>");
-        sb.append("<label>Role <select name=\"role\"><option>OPS</option><option>ADMIN</option><option>TENANT</option></select></label>");
-        sb.append("<label>tenantId <input name=\"tenantId\" list=\"tenant-ids\"/></label>");
-        sb.append("<label>Display <input name=\"displayName\"/></label>");
-        sb.append("<label>enabled <select name=\"enabled\"><option>true</option><option>false</option></select></label>");
-        sb.append("<label>action <select name=\"action\"><option value=\"create\">create</option>")
-                .append("<option value=\"update\">update</option></select></label>");
-        sb.append("<button type=\"submit\">Submit</button></form>");
-        tenantDatalist(sb);
-        sb.append("<table><tr><th>user</th><th>role</th><th>tenant</th><th>display</th><th>on</th><th></th></tr>");
-        for (AdminUserEntity u : users.list()) {
-            sb.append("<tr><td>").append(esc(u.username)).append("</td><td>")
-                    .append(esc(u.role)).append("</td><td>").append(esc(u.tenantId)).append("</td><td>")
-                    .append(esc(u.displayName)).append("</td><td>").append(u.enabled).append("</td><td>");
-            sb.append("<form hx-post=\"/admin/users\" hx-target=\"#panel\" hx-swap=\"innerHTML\" ")
-                    .append("hx-headers='{\"X-USSD-Admin-Key\":\"ussd-admin\"}' class=\"inline\">")
+        var list = users.list();
+        if (list.isEmpty()) {
+            sb.append("<tr><td colspan=\"6\" class=\"px-3 py-4 text-ink-mute italic\">No users.</td></tr>");
+            return sb.toString();
+        }
+        for (AdminUserEntity u : list) {
+            sb.append("<tr><td").append(TD).append(">").append(esc(u.username)).append("</td><td")
+                    .append(TD).append(">").append(esc(u.role)).append("</td><td")
+                    .append(TD).append(">").append(esc(u.tenantId)).append("</td><td")
+                    .append(TD).append(">").append(esc(u.displayName)).append("</td><td")
+                    .append(TD).append(">").append(u.enabled).append("</td><td").append(TD).append(">");
+            sb.append("<form hx-post=\"/admin/users\" hx-target=\"#user-rows\" hx-swap=\"innerHTML\" class=\"inline\">")
                     .append("<input type=\"hidden\" name=\"action\" value=\"delete\"/>")
                     .append("<input type=\"hidden\" name=\"username\" value=\"").append(esc(u.username)).append("\"/>")
-                    .append("<button type=\"submit\">Del</button></form></td></tr>");
+                    .append("<button type=\"submit\" class=\"").append(DEL_BTN).append("\">Del</button></form></td></tr>");
         }
-        sb.append("</table></div>");
         return sb.toString();
     }
 
-    private void tenantDatalist(StringBuilder sb) {
-        sb.append("<datalist id=\"tenant-ids\">");
+    private String tenantDatalistHtml() {
+        StringBuilder sb = new StringBuilder("<datalist id=\"tenant-ids\">");
         for (TenantEntity t : tenants.list()) {
             sb.append("<option value=\"").append(esc(t.tenantId)).append("\"/>");
         }
         sb.append("</datalist>");
+        return sb.toString();
+    }
+
+    private String tenantOptionsHtml() {
+        StringBuilder sb = new StringBuilder("<option value=\"\">—</option>");
+        for (TenantEntity t : tenants.list()) {
+            sb.append("<option value=\"").append(esc(t.tenantId)).append("\">")
+                    .append(esc(t.tenantId)).append("</option>");
+        }
+        return sb.toString();
+    }
+
+    private static AdminHttpHandler.HttpReply rowsOk(String rows, String message) {
+        return AdminHttpHandler.HttpReply.html(rows)
+                .withHeader("HX-Trigger", toastJson(message, "ok"))
+                .withHeader("Vary", "HX-Request");
+    }
+
+    private static AdminHttpHandler.HttpReply rowsErr(String rows, String message) {
+        return AdminHttpHandler.HttpReply.html(rows)
+                .withHeader("HX-Trigger", toastJson(message, "error"))
+                .withHeader("Vary", "HX-Request");
+    }
+
+    private static String toastJson(String message, String kind) {
+        return "{\"ussdToast\":{\"message\":" + jsonStr(message) + ",\"kind\":" + jsonStr(kind) + "}}";
+    }
+
+    private static String jsonStr(String s) {
+        if (s == null) {
+            return "\"\"";
+        }
+        return "\"" + s.replace("\\", "\\\\").replace("\"", "\\\"")
+                .replace("\n", "\\n").replace("\r", "") + "\"";
     }
 
     private static String maskKey(String key) {
@@ -337,6 +382,10 @@ public class AdminCatalogHandler {
             m.put(k, v);
         }
         return m;
+    }
+
+    private static String nullToEmpty(String s) {
+        return s == null ? "" : s;
     }
 
     private static String esc(String s) {

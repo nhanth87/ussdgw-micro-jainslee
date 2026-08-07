@@ -52,7 +52,7 @@ public class AsPullRouter {
 
         if (http) {
             container.routeEvent(new PullHttpEvent(url, enriched),
-                    container.createActivityContext("pull-http-" + corr));
+                    container.createActivityContext(pullActivityName(corr)));
             return "routed HTTP sc=" + asReq.shortCode();
         }
         String[] parts = url.split("\\|", 2);
@@ -62,7 +62,20 @@ public class AsPullRouter {
         }
         String method = parts.length > 1 ? parts[1] : "et.restlink.ussdgw.as.UssdAs/Pull";
         container.routeEvent(new PullGrpcEvent(target, method, enriched),
-                container.createActivityContext("pull-grpc-" + corr));
+                container.createActivityContext(pullActivityName(corr)));
         return "routed GRPC sc=" + asReq.shortCode();
+    }
+
+    /**
+     * Activity context name for an outbound pull.
+     *
+     * <p>Must be the bare correlation id: both client RAs fire their completion on
+     * {@code createActivityHandle(correlationId)}, and the container derives the SBB entity id
+     * from the activity context name. A decorated name here ({@code "pull-http-" + corr}) put the
+     * submit and the completion on two different entities — and therefore two different pooled
+     * SBB instances.
+     */
+    public static String pullActivityName(String correlationId) {
+        return correlationId;
     }
 }

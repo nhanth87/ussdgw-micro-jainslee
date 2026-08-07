@@ -23,7 +23,6 @@ import java.util.function.Supplier;
 
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
-import org.eclipse.microprofile.config.inject.ConfigProperty;
 
 /**
  * Diameter USSD access — MO via RA inbound / lab inject; NI live when peer ready.
@@ -38,11 +37,6 @@ public class DiameterUssdAccessAdapter implements UssdAccessPort {
     @Inject UssdConfigService config;
     @Inject TenantGuard tenantGuard;
     @Inject DiameterApplyService diameterApply;
-
-    @ConfigProperty(name = "ussd.diameter.destination-host")
-    java.util.Optional<String> destHost;
-    @ConfigProperty(name = "ussd.diameter.destination-realm", defaultValue = "restlink.local")
-    String destRealm;
 
     private final AtomicLong moCount = new AtomicLong();
     private final AtomicLong niCount = new AtomicLong();
@@ -84,13 +78,13 @@ public class DiameterUssdAccessAdapter implements UssdAccessPort {
             avps.put(DiameterUssdCodes.AVP_USSD_STRING, text == null ? "" : text);
             avps.put(DiameterUssdCodes.AVP_SERVICE_CODE, session.shortCode());
             avps.put(DiameterUssdCodes.AVP_CORRELATION, session.correlationId());
-            String host = destHost == null ? "" : destHost.filter(s -> !s.isBlank()).orElse("");
+            String host = config.diameterDestinationHost();
             sendDiameter(port, new SendDiameterRequest(
                     sessionId,
                     DiameterUssdCodes.USSD_APP_ID,
                     DiameterUssdCodes.USSD_REQUEST,
-                    host,
-                    destRealm,
+                    host == null ? "" : host,
+                    config.diameterDestinationRealm(),
                     avps));
             cdr.write(session.correlationId(), CdrPhase.S2_PUSH, session.msisdn(),
                     session.shortCode(), "DIAMETER_SENT",

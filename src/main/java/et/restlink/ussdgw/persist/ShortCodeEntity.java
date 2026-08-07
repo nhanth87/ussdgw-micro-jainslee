@@ -32,4 +32,8 @@ public class ShortCodeEntity extends PanacheEntityBase {
 
     @Column(name = "network_id", nullable = false)
     public int networkId;
+
+    /** Prefix / mark key — when true, dialed USSD that startsWith(shortCode) matches. */
+    @Column(nullable = false)
+    public boolean mark = false;
 }

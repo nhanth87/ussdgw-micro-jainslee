@@ -50,6 +50,28 @@ class AsPullRouterTest {
         assertThat(detail).isEqualTo("routed GRPC sc=*456#");
     }
 
+    /**
+     * Both client RAs fire their completion on {@code createActivityHandle(correlationId)}, and
+     * the container derives the SBB entity id from the activity context name. A decorated name
+     * here would put submit and completion on two different entities.
+     */
+    @Test
+    void pullActivityIsNamedAfterTheBareCorrelationId() {
+        AsRequest req = new AsRequest("vs", "c-name", "r1", 0, "2519", "*123#", "*123#", 1);
+        router.route(new ShortCodeRule("*123#", RuleType.HTTP, "http://as/pull", true),
+                req, "c-name");
+        assertThat(container.getActivityContextNamingFacility().lookup("c-name")).isNotNull();
+        assertThat(container.getActivityContextNamingFacility().lookup("pull-http-c-name"))
+                .isNull();
+
+        AsRequest grpcReq = new AsRequest("vs", "g-name", "r1", 0, "2519", "*456#", "*456#", 1);
+        router.route(new ShortCodeRule("*456#", RuleType.GRPC, "localhost:50051|et.as/Pull", true),
+                grpcReq, "g-name");
+        assertThat(container.getActivityContextNamingFacility().lookup("g-name")).isNotNull();
+        assertThat(container.getActivityContextNamingFacility().lookup("pull-grpc-g-name"))
+                .isNull();
+    }
+
     @Test
     void emptyUrlFailsClosed() {
         AsRequest req = new AsRequest("vs", "c3", "r3", 0, "2519", "*1#", "*1#", 0);

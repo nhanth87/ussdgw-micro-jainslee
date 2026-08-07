@@ -21,6 +21,8 @@ public final class VirtualSession {
     private volatile long gateDeadlineMs;
     private volatile long gateMs;
     private volatile long pullStartedAtMs;
+    /** Monotonic twin of {@link #pullStartedAtMs}; only valid inside the JVM that set it. */
+    private volatile long pullStartedAtNanos;
     private volatile long invokeId;
     private volatile boolean dialogAlive = true;
     private volatile boolean adaptiveBridgeArm = true;
@@ -67,6 +69,10 @@ public final class VirtualSession {
     public void setGateMs(long gateMs) { this.gateMs = gateMs; }
     public long pullStartedAtMs() { return pullStartedAtMs; }
     public void setPullStartedAtMs(long pullStartedAtMs) { this.pullStartedAtMs = pullStartedAtMs; }
+    public long pullStartedAtNanos() { return pullStartedAtNanos; }
+    public void setPullStartedAtNanos(long pullStartedAtNanos) {
+        this.pullStartedAtNanos = pullStartedAtNanos;
+    }
     public long invokeId() { return invokeId; }
     public void setInvokeId(long invokeId) { this.invokeId = invokeId; }
     public boolean dialogAlive() { return dialogAlive; }

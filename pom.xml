@@ -39,6 +39,8 @@
         <dependency><groupId>io.quarkus</groupId><artifactId>quarkus-flyway</artifactId></dependency>
         <dependency><groupId>io.quarkus</groupId><artifactId>quarkus-scheduler</artifactId></dependency>
         <dependency><groupId>io.quarkus</groupId><artifactId>quarkus-jdbc-h2</artifactId></dependency>
+        <!-- BcryptUtil for ussd_admin_user.password_hash (salted, cost-parameterised). -->
+        <dependency><groupId>io.quarkus</groupId><artifactId>quarkus-elytron-security-common</artifactId></dependency>
         <dependency><groupId>com.microjainslee</groupId><artifactId>jainslee-telemetry</artifactId><version>${microjainslee.version}</version></dependency>
         <dependency><groupId>com.microjainslee</groupId><artifactId>jainslee-admin-spi</artifactId><version>${microjainslee.version}</version></dependency>
         <dependency><groupId>com.microjainslee</groupId><artifactId>jainslee-monitor</artifactId><version>${microjainslee.version}</version></dependency>

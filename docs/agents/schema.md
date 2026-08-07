@@ -7,9 +7,12 @@ OTA peer: [`ota-sim-push/docs/agents/schema.md`](../../../../ota-service/ota-sim
 | Path | Role |
 |------|------|
 | `src/main/resources/db/migration/V1__ussdgw_baseline.sql` | **Baseline:** full schema (`CREATE IF NOT EXISTS`) + indexes. PostgreSQL + H2 `MODE=PostgreSQL`. |
+| `V2__tenant_http_as_wire_format.sql` | Additive: `ussd_tenant.http_as_wire_format` (default `XML`). |
+| `V3__short_code_mark.sql` | Additive: `ussd_short_code.mark` (default `FALSE` — prefix / Mark key). |
+| `V4__config_value_unicode.sql` | Widen `ussd_config.config_value` to `VARCHAR(4096)` for Unicode bridge wait/fail messages. |
 
 Config: `quarkus.flyway.locations=classpath:db/migration` (`build/application.properties` → packaged `dist/configs/`).
-Startup guard: [`UssdSchemaInitializer`](../../src/main/java/et/restlink/ussdgw/persist/UssdSchemaInitializer.java) — `flyway.repair` + `migrate`, then verify `REQUIRED_TABLES` / `REQUIRED_COLUMNS`; classpath fallback if incomplete. Toggle: `ussd.db.schema-init.enabled`.
+Startup guard: [`UssdSchemaInitializer`](../../src/main/java/et/restlink/ussdgw/persist/UssdSchemaInitializer.java) — **migrate first**; `flyway.repair` only when migrate refuses (checksum drift). Then verify `REQUIRED_TABLES` / `REQUIRED_COLUMNS` (includes `ussd_short_code.mark`, `ussd_tenant.http_as_wire_format`); classpath fallback if incomplete. Toggle: `ussd.db.schema-init.enabled`. Keep `quarkus.flyway.repair-at-start=false`.
 
 ## Datasource switch (OTA same pattern)
 
@@ -20,14 +23,16 @@ Startup guard: [`UssdSchemaInitializer`](../../src/main/java/et/restlink/ussdgw/
 
 **Hard rules (2026-08-07 lab):** DB name is **`ussdgw`** — **never** point at OTA’s PostgreSQL DB **`ota`**. `quarkus.datasource.db-kind` is **build-time** (Quarkus JDBC extension); switching H2→PG needs a **rebuild / `package-dist.sh`**, not only editing a running process. Local git default stays **file H2**; Digicom PG lives in **server** `dist/configs` (or `QUARKUS_DATASOURCE_*`).
 
+**`package-dist.sh` never clobbers** an existing server `dist/configs/application.properties` — it writes `application.properties.new` via `build/install-config.sh`. Diff before adopting packaged defaults.
+
 Both drivers are on the classpath (`quarkus-jdbc-h2` + `quarkus-jdbc-postgresql`). Edit **`dist/configs/application.properties`** (or set `QUARKUS_DATASOURCE_*` env) — **no** Quarkus `%prod` profile required.
 
 ```properties
-# Prod — replace H2 block
+# Prod — replace H2 block (password via env, not this file)
 quarkus.datasource.db-kind=postgresql
 quarkus.datasource.username=ussdgw
-quarkus.datasource.password=ussdgw
 quarkus.datasource.jdbc.url=jdbc:postgresql://127.0.0.1:5432/ussdgw
+# export QUARKUS_DATASOURCE_PASSWORD=…
 ```
 
 Env equivalent: `QUARKUS_DATASOURCE_DB_KIND`, `_USERNAME`, `_PASSWORD`, `_JDBC_URL`.
@@ -44,16 +49,23 @@ quarkus.flyway.validate-on-migrate=true
 quarkus.hibernate-orm.database.generation=none
 ```
 
-## Squash policy
+## Squash / additive policy
 
 | Rule | Detail |
 |------|--------|
-| On disk | Single `V1__ussdgw_baseline.sql` until an additive `Vn__` is needed |
+| On disk | `V1` baseline + additive `Vn__` for new columns (do **not** rewrite V1 after it has shipped — checksum breaks existing DBs) |
 | `MIGRATIONS` | Must list every `db/migration/*.sql` — pinned by `UssdSchemaInitializerTest` |
-| Existing **H2** lab | Wipe `dist/data/ussdgw*` when V1 checksum changes |
-| Existing **PostgreSQL** | Operator dump → wipe / reset `flyway_schema_history` → migrate |
-| New table/column | Entity + fold into V1 (greenfield) or additive `Vn__` + update `REQUIRED_*` + test |
+| Existing **H2** lab | Next boot runs pending Flyway (`V2`/`V3`/`V4`). Wipe `dist/data/ussdgw*` only when V1 checksum itself changes |
+| Existing **PostgreSQL** | Boot with migrate-at-start applies pending `Vn`. Full wipe / reset `flyway_schema_history` only on V1 squash |
+| New table/column | Entity + additive `Vn__` + `REQUIRED_*` + test |
 
+### Current additive columns
+
+| Column | Migration | Default |
+|--------|-----------|---------|
+| `ussd_tenant.http_as_wire_format` | V2 | `XML` |
+| `ussd_short_code.mark` | V3 | `FALSE` |
+| `ussd_config.config_value` → `VARCHAR(4096)` | V4 | widen for Unicode bridge msgs |
 ## Agent checklist
 
 1. New table/column → SQL + Panache entity + `REQUIRED_TABLES` / `REQUIRED_COLUMNS` if boot-critical.

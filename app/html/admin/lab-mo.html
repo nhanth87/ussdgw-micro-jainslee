@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
-  <title>Lab MO — RestLink USSD</title>
+  <title>Lab MO — Digicom-ET USSDGW</title>
   <script>
     (function () {
       try {
@@ -38,30 +38,75 @@
   <script defer src="/admin/static/alpine.min.js"></script>
 </head>
 <body x-data class="min-h-full bg-ink font-display text-slate-200 antialiased"
-      style="background-image:radial-gradient(ellipse 80% 50% at 10% -10%,rgba(232,163,23,0.10),transparent),radial-gradient(ellipse 60% 40% at 100% 0%,rgba(56,100,160,0.12),transparent)">
+      style="background-image:radial-gradient(ellipse 80% 50% at 10% -10%,rgba(232,163,23,0.08),transparent),radial-gradient(ellipse 60% 40% at 100% 0%,rgba(56,100,160,0.12),transparent)">
   <header class="sticky top-0 z-40 border-b border-ink-line/80 bg-ink/90 backdrop-blur">
     <div class="mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-3 px-4 py-3">
       <div class="flex items-center gap-3">
         <span class="h-8 w-1 rounded-full bg-signal" aria-hidden="true"></span>
-        <a href="/admin" class="text-lg font-semibold tracking-wide text-slate-100">RestLink USSD</a>
-        <span class="hidden text-xs uppercase tracking-[0.2em] text-ink-mute sm:inline">ops</span>
+        <h1 class="text-lg font-semibold text-slate-100">Lab MO</h1>
       </div>
-      <nav class="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-ink-mute">
-        {{NAV_LINKS}}
-      </nav>
+      <nav class="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-ink-mute">{{NAV_LINKS}}</nav>
     </div>
   </header>
   <main class="mx-auto max-w-6xl px-4 py-8">
     {{NOTICE}}
-    <p class="text-xs uppercase tracking-[0.25em] text-signal">Access lab</p>
-    <h1 class="mt-1 text-2xl font-semibold text-slate-50">Lab MO</h1>
-    <p class="mt-1 text-sm text-ink-mute">Inject stub MO on Diameter / SMPP / SIP.</p>
-    <div id="panel" class="mt-6 min-h-[12rem] rounded-lg border border-ink-line/60 bg-ink-panel/40 p-4"
-         hx-get="/admin/lab/mo"
-         hx-trigger="load"
-         hx-swap="innerHTML">
-      <p class="text-sm text-ink-mute">loading…</p>
+    
+    <p class="text-xs uppercase tracking-[0.25em] text-signal">Create / update</p>
+    <div class="ops-section-indent">
+      <section class="form-card mb-10 rounded-lg border border-ink-line bg-ink-panel/80 p-5" style="max-width:40rem;margin-inline:auto">
+        <h2 class="mt-1 text-xl font-semibold text-slate-50">Lab MO inject</h2>
+        <p class="mt-1 mb-4 text-sm text-slate-300">
+          Stub MO on Diameter / SMPP / SIP — routes AS pull like MAP.
+          Flags: Diameter={{DIAM_ON}} · SMPP={{SMPP_ON}} · SIP={{SIP_ON}}.
+        </p>
+        <form method="post" action="/admin/lab/mo" accept-charset="UTF-8" class="space-y-3"
+              hx-post="/admin/lab/mo" hx-target="#plane-notice" hx-swap="innerHTML" hx-indicator="#lab-ind">
+          <div>
+            <label class="block text-xs uppercase tracking-wider text-ink-mute">plane</label>
+            <select name="plane" class="mt-1 w-full rounded-md border border-ink-line bg-ink px-3 py-2 text-sm focus:border-signal focus:outline-none focus:ring-1 focus:ring-signal/40">
+              <option>SMPP</option><option>DIAMETER</option><option>SIP</option>
+            </select>
+          </div>
+          <div>
+            <label class="block text-xs uppercase tracking-wider text-ink-mute">msisdn</label>
+            <input name="msisdn" required placeholder="251911000000"
+                   class="mt-1 w-full rounded-md border border-ink-line bg-ink px-3 py-2 font-mono text-sm focus:border-signal focus:outline-none focus:ring-1 focus:ring-signal/40"/>
+          </div>
+          <div>
+            <label class="block text-xs uppercase tracking-wider text-ink-mute">shortCode</label>
+            <input name="shortCode"  placeholder="*123#"
+                   class="mt-1 w-full rounded-md border border-ink-line bg-ink px-3 py-2 font-mono text-sm focus:border-signal focus:outline-none focus:ring-1 focus:ring-signal/40"/>
+          </div>
+          <div>
+            <label class="block text-xs uppercase tracking-wider text-ink-mute">ussd text</label>
+            <input name="ussd"  placeholder="*123#"
+                   class="mt-1 w-full rounded-md border border-ink-line bg-ink px-3 py-2 font-mono text-sm focus:border-signal focus:outline-none focus:ring-1 focus:ring-signal/40"/>
+          </div>
+          <div>
+            <label class="block text-xs uppercase tracking-wider text-ink-mute">tenantId</label>
+            <input name="tenantId" list="lab-tenant-ids"  placeholder=""
+                   class="mt-1 w-full rounded-md border border-ink-line bg-ink px-3 py-2 font-mono text-sm focus:border-signal focus:outline-none focus:ring-1 focus:ring-signal/40"/>
+          </div>
+          <div>
+            <label class="block text-xs uppercase tracking-wider text-ink-mute">networkId</label>
+            <input name="networkId" type="number" value="0" min="0" class="mt-1 w-full rounded-md border border-ink-line bg-ink px-3 py-2 font-mono text-sm focus:border-signal focus:outline-none focus:ring-1 focus:ring-signal/40"/>
+          </div>
+          <button type="submit" class="w-full rounded-md bg-signal py-2.5 text-sm font-semibold text-ink hover:bg-signal-dim">
+            Inject MO
+          </button>
+          <span id="lab-ind" class="htmx-indicator text-xs font-mono text-ink-mute">sending…</span>
+        </form>
+        {{TENANT_DATALIST}}
+      </section>
     </div>
+
+    <p class="text-xs uppercase tracking-[0.25em] text-signal">Result</p>
+    <div class="ops-section-indent">
+      <div id="plane-notice" class="rounded-lg border border-ink-line bg-ink-panel/60 p-4 text-sm text-slate-300">
+        {{LAST_RESULT}}
+      </div>
+    </div>
+
   </main>
 </body>
 </html>

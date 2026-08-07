@@ -108,6 +108,14 @@ public final class MapDialogHelper {
         return cfg == null ? 6 : cfg.hlrSsn();
     }
 
+    /**
+     * Outbound SRI-SM CalledParty GT — admin overlay {@code ussd.hlr.upper-gt} when non-blank,
+     * else application.properties / {@code @ConfigProperty}.
+     */
+    public static String upperHlrGt(UssdConfigService cfg) {
+        return cfg == null ? "" : cfg.hlrUpperGt();
+    }
+
     public static int mscSsn(UssdConfigService cfg) {
         return cfg == null ? 8 : cfg.mscSsn();
     }

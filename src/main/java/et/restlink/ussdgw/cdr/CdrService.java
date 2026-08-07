@@ -46,6 +46,19 @@ public class CdrService {
     public void write(String correlationId, CdrPhase phase, String msisdn,
                       String shortCode, String status, String detail,
                       int networkId, String tenantId, String originationType) {
+        write(correlationId, phase, msisdn, shortCode, status, detail,
+                networkId, tenantId, originationType, null, null);
+    }
+
+    /**
+     * Bridge-aware variant: stamps the adaptive gate that was applied and the EWMA that
+     * produced it as real columns, so gate behaviour is queryable instead of only readable
+     * in the free-text {@code detail}.
+     */
+    public void write(String correlationId, CdrPhase phase, String msisdn,
+                      String shortCode, String status, String detail,
+                      int networkId, String tenantId, String originationType,
+                      Long gateMs, Long observedEwmaMs) {
         if (!enabled) return;
         String d = detail == null ? null : (detail.length() > 1000 ? detail.substring(0, 1000) : detail);
         String phaseName = phase == null ? "UNKNOWN" : phase.name();
@@ -65,6 +78,8 @@ public class CdrService {
         row.networkId = networkId;
         row.tenantId = tenantId;
         row.originationType = originationType == null ? "MAP" : originationType;
+        row.gateMs = gateMs;
+        row.observedEwmaMs = observedEwmaMs;
         row.csvLine = csv.length() > 4000 ? csv.substring(0, 4000) : csv;
 
         try {
@@ -81,18 +96,40 @@ public class CdrService {
     /** Admin list — newest first. */
     @Transactional
     public List<CdrEntity> list(int limit) {
-        return list(limit, null);
+        return list(limit, null, null);
     }
 
     @Transactional
     public List<CdrEntity> list(int limit, String tenantId) {
+        return list(limit, tenantId, null);
+    }
+
+    /**
+     * Admin list with optional tenant scope and MSISDN filter (exact match after trim, OTA-shaped).
+     */
+    @Transactional
+    public List<CdrEntity> list(int limit, String tenantId, String msisdn) {
         int lim = Math.min(Math.max(limit, 1), MAX_LIMIT);
+        String tid = tenantId == null || tenantId.isBlank() ? null : tenantId.trim();
+        String msisdnFilter = normalizeMsisdnFilter(msisdn);
         TypedQuery<CdrEntity> q;
-        if (tenantId != null && !tenantId.isBlank()) {
+        if (tid != null && msisdnFilter != null) {
+            q = em.createQuery(
+                    "SELECT c FROM CdrEntity c WHERE c.tenantId = :tid AND c.msisdn = :m "
+                            + "ORDER BY c.recordedAt DESC",
+                    CdrEntity.class);
+            q.setParameter("tid", tid);
+            q.setParameter("m", msisdnFilter);
+        } else if (tid != null) {
             q = em.createQuery(
                     "SELECT c FROM CdrEntity c WHERE c.tenantId = :tid ORDER BY c.recordedAt DESC",
                     CdrEntity.class);
-            q.setParameter("tid", tenantId.trim());
+            q.setParameter("tid", tid);
+        } else if (msisdnFilter != null) {
+            q = em.createQuery(
+                    "SELECT c FROM CdrEntity c WHERE c.msisdn = :m ORDER BY c.recordedAt DESC",
+                    CdrEntity.class);
+            q.setParameter("m", msisdnFilter);
         } else {
             q = em.createQuery(
                     "SELECT c FROM CdrEntity c ORDER BY c.recordedAt DESC", CdrEntity.class);
@@ -103,11 +140,39 @@ public class CdrService {
 
     /** Backward-compatible view for admin HTML (phase/status fields). */
     public List<CdrRecord> listRecords(int limit) {
-        return listRecords(limit, null);
+        return listRecords(limit, null, null);
     }
 
     public List<CdrRecord> listRecords(int limit, String tenantId) {
-        return list(limit, tenantId).stream().map(CdrRecord::fromEntity).toList();
+        return listRecords(limit, tenantId, null);
+    }
+
+    public List<CdrRecord> listRecords(int limit, String tenantId, String msisdn) {
+        return list(limit, tenantId, msisdn).stream().map(CdrRecord::fromEntity).toList();
+    }
+
+    /** Clamp limit for admin UI; blank/invalid → default. */
+    public static int clampLimit(String raw) {
+        if (raw == null || raw.isBlank()) {
+            return DEFAULT_LIMIT;
+        }
+        try {
+            int n = Integer.parseInt(raw.trim());
+            if (n < 1) {
+                return DEFAULT_LIMIT;
+            }
+            return Math.min(n, MAX_LIMIT);
+        } catch (NumberFormatException e) {
+            return DEFAULT_LIMIT;
+        }
+    }
+
+    static String normalizeMsisdnFilter(String msisdn) {
+        if (msisdn == null) {
+            return null;
+        }
+        String t = msisdn.trim();
+        return t.isEmpty() ? null : t;
     }
 
     static String formatCsv(String corr, String phase, String msisdn, String sc,

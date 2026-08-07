@@ -42,12 +42,24 @@ class AdminCatalogRoutingTest {
         AdminHttpHandler.HttpReply saved = catalog.routingPost(
                 "action=save&shortCode=%2A999%23&ruleType=HTTP&asUrl=http%3A%2F%2Fas%2Fpull&enabled=true",
                 null);
-        assertThat(new String(saved.body())).contains("*999#").contains("saved").contains("live");
+        assertThat(new String(saved.body())).contains("*999#").contains("http://as/pull");
+        assertThat(saved.headers().get("HX-Trigger")).contains("saved").contains("live");
         assertThat(routing.find("*999#")).isPresent();
 
         AdminHttpHandler.HttpReply get = catalog.routingGet(null);
         assertThat(new String(get.body())).contains("*999#").contains("http://as/pull");
-        assertThat(new String(get.body())).contains("Reload from DB");
+    }
+
+    @Test
+    void saveMarkAppearsAndRoutesPrefix() {
+        AdminHttpHandler.HttpReply saved = catalog.routingPost(
+                "action=save&shortCode=%2A100%2A&ruleType=HTTP&asUrl=http%3A%2F%2Fas%2Fmark"
+                        + "&enabled=true&mark=true",
+                null);
+        assertThat(new String(saved.body())).contains("*100*").contains("true");
+        assertThat(routing.find("*100*123456#")).isPresent()
+                .get().extracting(ShortCodeRule::asUrl).isEqualTo("http://as/mark");
+        assertThat(routing.find("*100*123456#").get().mark()).isTrue();
     }
 
     @Test
@@ -55,7 +67,7 @@ class AdminCatalogRoutingTest {
         routing.putAndPersist(new ShortCodeRule("*888#", RuleType.HTTP, "http://x", true));
         AdminHttpHandler.HttpReply del = catalog.routingPost(
                 "action=delete&shortCode=%2A888%23", null);
-        assertThat(new String(del.body())).contains("deleted").contains("live");
+        assertThat(del.headers().get("HX-Trigger")).contains("deleted");
         assertThat(routing.find("*888#")).isEmpty();
         assertThat(new String(catalog.routingGet(null).body())).doesNotContain("*888#");
     }
@@ -65,7 +77,7 @@ class AdminCatalogRoutingTest {
         routing.putAndPersist(new ShortCodeRule("*777#", RuleType.GRPC, "127.0.0.1:9|m", true));
         AdminHttpHandler.HttpReply r = catalog.routingPost("action=reload", null);
         assertThat(routing.reloadCalls.get()).isEqualTo(1);
-        assertThat(new String(r.body())).contains("reloaded").contains("live");
+        assertThat(r.headers().get("HX-Trigger")).contains("reloaded").contains("live");
         assertThat(new String(r.body())).contains("*777#");
     }
 
@@ -90,9 +102,24 @@ class AdminCatalogRoutingTest {
 
         @Override
         public Optional<ShortCodeRule> find(String shortCode) {
-            ShortCodeRule r = map.get(shortCode == null ? "" : shortCode.toLowerCase());
-            if (r == null || !r.enabled()) return Optional.empty();
-            return Optional.of(r);
+            String sc = shortCode == null ? "" : shortCode.trim();
+            ShortCodeRule exact = map.get(sc.toLowerCase());
+            if (exact != null && exact.enabled() && !exact.mark()) {
+                return Optional.of(exact);
+            }
+            ShortCodeRule best = null;
+            int bestLen = -1;
+            for (ShortCodeRule r : map.values()) {
+                if (!r.enabled() || !r.mark()) continue;
+                String prefix = r.shortCode() == null ? "" : r.shortCode();
+                if (!prefix.isEmpty() && sc.startsWith(prefix) && prefix.length() > bestLen) {
+                    best = r;
+                    bestLen = prefix.length();
+                }
+            }
+            if (best != null) return Optional.of(best);
+            if (exact != null && exact.enabled()) return Optional.of(exact);
+            return Optional.empty();
         }
 
         @Override
