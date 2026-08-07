@@ -29,24 +29,14 @@
   "m3ua": {
     "as": [
       {
-        "name": "AS-BP-1404",
+        "name": "AS-BP",
         "mode": "loadshare",
         "functionality": "ipsp",
         "ipsp": "server",
         "exchangeType": "DE",
         "routingContext": 12,
         "links": [
-          "L1-BP-1404"
-        ]
-      },
-      {
-        "name": "AS-BP-1403",
-        "mode": "loadshare",
-        "functionality": "ipsp",
-        "ipsp": "server",
-        "exchangeType": "DE",
-        "routingContext": 12,
-        "links": [
+          "L1-BP-1404",
           "L2-BP-1403"
         ]
       }
@@ -57,14 +47,14 @@
           "dpc": 1404,
           "opc": 1470
         },
-        "via": "AS-BP-1404"
+        "via": "AS-BP"
       },
       {
         "to": {
           "dpc": 1403,
           "opc": 1470
         },
-        "via": "AS-BP-1403"
+        "via": "AS-BP"
       }
     ]
   },

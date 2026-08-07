@@ -179,6 +179,53 @@ class BridgeGateBehaviourTest {
     }
 
     @Test
+    void lateAsAfterGateExpiryPushesNiOnce() {
+        CountingNi ni = new CountingNi();
+        CapturingPort port = new CapturingPort();
+        VirtualSessionBridge bridge = newBridge(store, true, ni);
+        bridge.bindSs7(() -> port);
+
+        VirtualSession s = new VirtualSession("vs", "c-late", "r1", "251911000001", 0, "dlg-late", "*123#");
+        s.setInvokeId(2);
+        s.setDialogAlive(true);
+        s.setState(VirtualSessionState.AWAITING_AS);
+        s.setGateDeadlineMs(System.currentTimeMillis() - 1);
+        store.put(s);
+
+        assertThat(bridge.onGateExpired(s)).isTrue();
+        assertThat(store.get("c-late").orElseThrow().state()).isEqualTo(VirtualSessionState.S1_RELEASED);
+        assertThat(port.cmds).hasSize(1);
+
+        bridge.onAsResponse(new AsResponse("c-late", "r1", 1, "Late menu", AsAction.CONTINUE, false), 80);
+        assertThat(ni.pushes).isEqualTo(1);
+        assertThat(store.get("c-late").orElseThrow().state()).isEqualTo(VirtualSessionState.PUSH_PENDING);
+        // Second late AS must not double-push (generation claim / wrong state).
+        bridge.onAsResponse(new AsResponse("c-late", "r1", 1, "Again", AsAction.CONTINUE, false), 10);
+        assertThat(ni.pushes).isEqualTo(1);
+    }
+
+    @Test
+    void lateAsAfterHardFailCompletedDoesNotPushNi() {
+        CountingNi ni = new CountingNi();
+        CapturingPort port = new CapturingPort();
+        VirtualSessionBridge bridge = newBridge(store, false, ni); // bridgeEnabled=false → hard fail
+        bridge.bindSs7(() -> port);
+
+        VirtualSession s = new VirtualSession("vs", "c-hard", "r1", "2519", 0, "dlg-hard", "*123#");
+        s.setInvokeId(1);
+        s.setDialogAlive(true);
+        s.setState(VirtualSessionState.AWAITING_AS);
+        store.put(s);
+
+        assertThat(bridge.onGateExpired(s)).isTrue();
+        assertThat(store.get("c-hard")).isEmpty();
+
+        bridge.onAsResponse(new AsResponse("c-hard", "r1", 1, "Too late", AsAction.END, false), 20);
+        assertThat(ni.pushes).isZero();
+        assertThat(port.cmds).hasSize(1); // only the hard-fail MAP end
+    }
+
+    @Test
     void niFailMarksFailedAndRemovesProfile() {
         VirtualSession s = new VirtualSession("vs", "c-ni", "r1", "2519", 0, "dlg-ni", "*123#");
         s.setInvokeId(1);
@@ -208,6 +255,11 @@ class BridgeGateBehaviourTest {
     }
 
     private static VirtualSessionBridge newBridge(VirtualSessionStore store, boolean bridgeEnabled) {
+        return newBridge(store, bridgeEnabled, new CountingNi());
+    }
+
+    private static VirtualSessionBridge newBridge(VirtualSessionStore store, boolean bridgeEnabled,
+                                                  CountingNi ni) {
         VirtualSessionBridge bridge = new VirtualSessionBridge();
         set(bridge, "store", store);
         set(bridge, "adaptive", new AdaptiveTimeout());
@@ -224,11 +276,18 @@ class BridgeGateBehaviourTest {
                               String msisdn, String shortCode, String status, String detail,
                               int networkId, String tenantId, String originationType) { }
         });
-        set(bridge, "accessNi", new et.restlink.ussdgw.access.AccessNiDispatcher() {
-            @Override
-            public void requestNiPush(VirtualSession session, String text) { }
-        });
+        set(bridge, "accessNi", ni);
+        set(bridge, "niHttpPark", new et.restlink.ussdgw.api.classic.ClassicNiHttpPark());
         return bridge;
+    }
+
+    static final class CountingNi extends et.restlink.ussdgw.access.AccessNiDispatcher {
+        volatile int pushes;
+
+        @Override
+        public void requestNiPush(VirtualSession session, String text) {
+            pushes++;
+        }
     }
 
     private static void set(Object target, String field, Object value) {

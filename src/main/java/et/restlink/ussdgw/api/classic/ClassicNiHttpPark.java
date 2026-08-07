@@ -44,7 +44,8 @@ public class ClassicNiHttpPark {
         private final int networkId;
         private final long parkedAtMs;
         private final boolean emptyHandshake;
-        private final AtomicBoolean expired = new AtomicBoolean(false);
+        /** Wins exactly one HTTP reply (completeParked vs adaptive gate). */
+        private final AtomicBoolean settled = new AtomicBoolean(false);
         private volatile ScheduledFuture<?> gateFuture;
 
         ParkRecord(String httpSessionId, String jsessionId, String correlationId,
@@ -67,8 +68,9 @@ public class ClassicNiHttpPark {
         public int networkId() { return networkId; }
         public long parkedAtMs() { return parkedAtMs; }
         public boolean emptyHandshake() { return emptyHandshake; }
-        public boolean expired() { return expired.get(); }
-        void markExpired() { expired.set(true); }
+        public boolean expired() { return settled.get(); }
+        /** @return true when this caller owns the single HTTP reply */
+        boolean trySettle() { return settled.compareAndSet(false, true); }
     }
 
     @Inject AdaptiveTimeout adaptive;
@@ -183,6 +185,10 @@ public class ClassicNiHttpPark {
         if (httpId == null || httpId.isBlank()) {
             return false;
         }
+        // CAS before reply so a concurrent adaptive gate cannot also respond.
+        if (!rec.trySettle()) {
+            return false;
+        }
         rec.setHttpSessionId(null);
         String body = wireFacade.encodeNiResponse(rec.correlationId(), text, act, false, rec.format());
         reply(rec, httpId, 200, body);
@@ -206,10 +212,13 @@ public class ClassicNiHttpPark {
             return;
         }
         ParkRecord rec = opt.get();
-        rec.markExpired();
         String httpId = rec.httpSessionId();
         if (httpId == null || httpId.isBlank()) {
             unpark(correlationId);
+            return;
+        }
+        if (!rec.trySettle()) {
+            // completeParked (or another gate tick) already owns the HTTP reply.
             return;
         }
         LOG.info("NI HTTP park gate expired corr={} jsession={}",

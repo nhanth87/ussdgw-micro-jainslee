@@ -25,3 +25,7 @@ tools/as-node/node_modules
 # Lab M3UA captures (Digicom)
 build/pcap/
 .factorypath
+
+# Digicom rotated secrets (never commit)
+build/digicom-secrets-*.txt
+build/.digicom-rotate.env
