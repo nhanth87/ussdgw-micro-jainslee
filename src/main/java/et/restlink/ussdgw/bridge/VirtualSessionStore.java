@@ -113,6 +113,19 @@ public class VirtualSessionStore {
         }
         ensureTable();
         ProfileFacility f = requireFacility();
+        // Quarkus can leave ProfileFieldStoreLocator pointed at a different/empty
+        // InMemoryProfileFacility than container.getProfileFacility() — CMP setXxx
+        // then throws "No profile table: ussdTx". Re-bind before every write.
+        if (f instanceof com.microjainslee.core.ProfileFieldAccess access) {
+            com.microjainslee.core.ProfileFieldStoreLocator.set(access);
+        }
+        if (f.getProfileTable(UssdTxProfile.TABLE_NAME) == null) {
+            tableReady = false;
+            ensureTable();
+            if (f.getProfileTable(UssdTxProfile.TABLE_NAME) == null) {
+                throw new IllegalStateException("ussdTx missing on ProfileFacility after ensureTable");
+            }
+        }
         String corr = session.correlationId();
         ProfileID id = new ProfileID(UssdTxProfile.TABLE_NAME, corr);
         long expires = expiresAt(session);

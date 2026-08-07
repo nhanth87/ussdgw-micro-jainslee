@@ -60,8 +60,11 @@ public final class HttpServerSbb implements Sbb, SleeEventHandler {
             svc().niHttpPark().bindHttp(() -> http);
             detail = handle(req);
         } catch (Throwable t) {
-            detail = "error=" + t.getClass().getSimpleName();
+            detail = "error=" + t.getClass().getSimpleName()
+                    + ":" + String.valueOf(t.getMessage());
             replyText(req.getSessionId(), 500, "internal error");
+            org.apache.logging.log4j.LogManager.getLogger(HttpServerSbb.class)
+                    .error("HttpServerSbb handle failed path={}", req.getPath(), t);
         }
         SleeEventTrace.outSbb("HttpServerSbb", event, detail);
     }

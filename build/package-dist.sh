@@ -190,6 +190,32 @@ if [[ -f "$SCRIPT_DIR/dist-lib-README.md" ]]; then
   cp -f "$SCRIPT_DIR/dist-lib-README.md" "$DIST_ROOT/lib/README.md"
 fi
 
+# Quarkus Class-Path lists jainslee-api before jainslee-core. The api JAR ships a
+# stub ProfileAccessorInvoker that always throws UnsupportedOperationException;
+# core has the real impl (same FQCN). Without this shadow, Digicom POST /ussd dies
+# in VirtualSessionStore.put / CMP setXxx before NI park (ss7.live can still be true).
+shadow_profile_accessor_invoker() {
+  local api core work
+  api="$(find "${DIST_ROOT}/lib/main" -maxdepth 1 -type f -name 'com.microjainslee.jainslee-api-*.jar' | head -1 || true)"
+  core="$(find "${DIST_ROOT}/lib/main" -maxdepth 1 -type f -name 'com.microjainslee.jainslee-core-*.jar' | head -1 || true)"
+  if [[ -z "$api" || -z "$core" ]]; then
+    echo "error: missing jainslee-api or jainslee-core under lib/main (ProfileAccessorInvoker shadow)" >&2
+    exit 1
+  fi
+  work="$(mktemp -d)"
+  (cd "$work" && jar xf "$core" com/microjainslee/api/ProfileAccessorInvoker.class)
+  if ! javap -c -p "$work/com/microjainslee/api/ProfileAccessorInvoker.class" 2>/dev/null \
+      | grep -q 'ProfileFieldStoreLocator'; then
+    echo "error: core ProfileAccessorInvoker missing ProfileFieldStoreLocator (not the real impl?)" >&2
+    rm -rf "$work"
+    exit 1
+  fi
+  (cd "$work" && jar uf "$api" com/microjainslee/api/ProfileAccessorInvoker.class)
+  rm -rf "$work"
+  echo "  shadowed ProfileAccessorInvoker: $(basename "$core") → $(basename "$api")"
+}
+shadow_profile_accessor_invoker
+
 src_app_jar="$(find "$QA/app" -maxdepth 1 -type f -name '*.jar' | head -1 || true)"
 if [[ -z "$src_app_jar" ]]; then
   echo "error: no application jar under $QA/app" >&2
