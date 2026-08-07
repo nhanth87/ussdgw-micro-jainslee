@@ -67,9 +67,30 @@ case "$USSD_LOG_DIR" in
     ;;
 esac
 
+# Heap: Digicom-safe defaults -Xms2g -Xmx4g (live digicom-nb). 8g+AlwaysPreTouch OOM'd ~15 GiB with ss7sim/as-node.
+# Bigger hosts: USSD_XMS=8g USSD_XMX=8g. AlwaysPreTouch only when USSD_ALWAYS_PRETOUCH=1. Also: JAVA_OPTS / USSD_JAVA_OPTS.
+: "${USSD_XMS:=2g}"
+: "${USSD_XMX:=4g}"
+JAVA_OPTS_DEFAULT=(
+  "-Xms${USSD_XMS}"
+  "-Xmx${USSD_XMX}"
+  "-XX:+UseZGC"
+  "-XX:+ExitOnOutOfMemoryError"
+  "-XX:+HeapDumpOnOutOfMemoryError"
+  "-XX:HeapDumpPath=${USSD_LOG_DIR}/heap.hprof"
+)
+if [[ "${USSD_ALWAYS_PRETOUCH:-0}" == "1" ]]; then
+  JAVA_OPTS_DEFAULT+=("-XX:+AlwaysPreTouch")
+fi
+# shellcheck disable=SC2206
+EXTRA_JAVA_OPTS=( ${JAVA_OPTS:-${USSD_JAVA_OPTS:-}} )
+
 echo "Starting RestLink USSD GW (fast-jar: quarkus-run.jar + ussdgw-app.jar + lib/)"
 echo "Data: ${APP_HOME}/data (H2 file DB by default — switch configs to postgresql for prod)"
+echo "Heap: -Xms${USSD_XMS} -Xmx${USSD_XMX}"
 exec java \
+  "${JAVA_OPTS_DEFAULT[@]}" \
+  "${EXTRA_JAVA_OPTS[@]}" \
   -Dussd.log.dir="$USSD_LOG_DIR" \
   -Dquarkus.config.locations="file:$APP_HOME/configs/application.properties" \
   -jar "$APP_HOME/quarkus-run.jar"

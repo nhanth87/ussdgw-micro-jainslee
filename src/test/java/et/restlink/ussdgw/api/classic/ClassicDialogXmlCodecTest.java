@@ -99,4 +99,45 @@ class ClassicDialogXmlCodecTest {
         assertThat(parsed.correlationId()).isEqualTo("ni-in");
         assertThat(parsed.emptyDialogHandshake()).isTrue();
     }
+
+    @Test
+    void encodePullIncludesLatePushMetadataAttrs() {
+        AsRequest req = new AsRequest("vs-1", "corr-meta", "r1", 0, "251911", "*123#", "*123#", 2,
+                "corr-meta", 5100L, "BRIDGE");
+        String xml = ClassicDialogXmlCodec.encodePull(req);
+        assertThat(xml)
+                .contains("localId=\"corr-meta\"")
+                .contains("sessionId=\"vs-1\"")
+                .contains("virtualBridgeId=\"corr-meta\"")
+                .contains("adaptiveTimeoutMs=\"5100\"")
+                .contains("asMode=\"BRIDGE\"");
+    }
+
+    @Test
+    void decodeResponseReadsAsyncAndBridgeAttrs() {
+        String xml = """
+                <dialog localId="c-async" sessionId="vs-x" virtualBridgeId="c-async"
+                        adaptiveTimeoutMs="3000" async="true">
+                  <unstructuredSSRequest_Request dataCodingScheme="15" string=""/>
+                </dialog>
+                """;
+        AsResponse r = ClassicDialogXmlCodec.decodeResponse(xml, "fb");
+        assertThat(r.async()).isTrue();
+        assertThat(r.sessionId()).isEqualTo("vs-x");
+        assertThat(r.virtualBridgeId()).isEqualTo("c-async");
+        assertThat(r.adaptiveTimeoutMs()).isEqualTo(3000L);
+        assertThat(r.resolvePushBackId()).isEqualTo("c-async");
+    }
+
+    @Test
+    void decodeCallbackResolvesViaVirtualBridgeIdWhenLocalIdMissing() {
+        String xml = """
+                <dialog virtualBridgeId="bridge-only">
+                  <processUnstructuredSSRequest_Response dataCodingScheme="15" string="Late OK"/>
+                </dialog>
+                """;
+        AsResponse r = ClassicDialogXmlCodec.decodeCallback(xml);
+        assertThat(r.correlationId()).isEqualTo("bridge-only");
+        assertThat(r.text()).isEqualTo("Late OK");
+    }
 }

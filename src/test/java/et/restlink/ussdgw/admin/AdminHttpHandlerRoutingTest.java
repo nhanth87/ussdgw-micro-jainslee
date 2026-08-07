@@ -123,6 +123,33 @@ class AdminHttpHandlerRoutingTest {
     }
 
     @Test
+    void rootRedirectsToLoginWithoutSession() {
+        Optional<AdminHttpHandler.HttpReply> r = handler.tryHandle(
+                "GET", "/", Map.of(), Map.of(), null);
+        assertThat(r).isPresent();
+        assertThat(r.get().status()).isEqualTo(302);
+        assertThat(r.get().headers().get("Location")).isEqualTo("/admin/login");
+    }
+
+    @Test
+    void rootIgnoresApiKeyForBrowserRedirect() {
+        Optional<AdminHttpHandler.HttpReply> r = handler.tryHandle(
+                "GET", "/", Map.of("X-USSD-Admin-Key", "ussd-admin"), Map.of(), null);
+        assertThat(r).isPresent();
+        assertThat(r.get().status()).isEqualTo(302);
+        assertThat(r.get().headers().get("Location")).isEqualTo("/admin/login");
+    }
+
+    @Test
+    void dashboardShellRequiresSessionNotJustApiKey() {
+        Optional<AdminHttpHandler.HttpReply> r = handler.tryHandle(
+                "GET", "/admin", Map.of("X-USSD-Admin-Key", "ussd-admin"), Map.of(), null);
+        assertThat(r).isPresent();
+        assertThat(r.get().status()).isEqualTo(302);
+        assertThat(r.get().headers().get("Location")).isEqualTo("/admin/login");
+    }
+
+    @Test
     void adminRequiresKey() {
         Optional<AdminHttpHandler.HttpReply> r = handler.tryHandle(
                 "GET", "/admin/status", Map.of(), Map.of(), null);

@@ -212,7 +212,9 @@ public class AdminHttpAsModeHandler {
     private void syncHtml(StringBuilder sb, boolean tenant) {
         sb.append("<h2>HTTP AS · Sync</h2>");
         sb.append("<p class=\"hint\">SYNC pull: AS returns <code>async=false</code> with CONTINUE/END text. ")
-                .append("Configures HTTP pull client timeouts.</p>");
+                .append("Outbound pull carries <code>correlationId</code> (push-back key), ")
+                .append("<code>sessionId</code>/<code>virtualBridgeId</code>, ")
+                .append("<code>adaptiveTimeoutMs</code>. Configures HTTP pull client timeouts.</p>");
         String path = "/admin/http/sync";
         if (!tenant) {
             sb.append(formOpen(path));
@@ -236,7 +238,8 @@ public class AdminHttpAsModeHandler {
     private void asyncHtml(StringBuilder sb, boolean tenant) {
         sb.append("<h2>HTTP AS · Async ACK</h2>");
         sb.append("<p class=\"hint\">ASYNC_ACK: AS returns <code>async=true</code> (no EWMA feed). ")
-                .append("Content arrives later via callback. Gate / wait messages below.</p>");
+                .append("Content arrives later via callback with the same <code>correlationId</code>/")
+                .append("<code>virtualBridgeId</code>. Gate / wait messages below.</p>");
         String path = "/admin/http/async";
         if (!tenant) {
             sb.append(formOpen(path));
@@ -260,7 +263,9 @@ public class AdminHttpAsModeHandler {
         sb.append("<h2>HTTP AS · Callback</h2>");
         sb.append("<p class=\"hint\">Callback server (http-server-ra) accepts ")
                 .append("<code>POST ").append(esc(config.httpCallbackPath()))
-                .append("</code> with AsResponse JSON (content after async ACK).</p>");
+                .append("</code> with AsResponse (JSON or XML). Echo ")
+                .append("<code>correlationId</code> (or <code>virtualBridgeId</code>) for late reconcile. ")
+                .append("gRPC Callback uses the same fields.</p>");
         String path = "/admin/http/callback";
         if (!tenant) {
             sb.append(formOpen(path));

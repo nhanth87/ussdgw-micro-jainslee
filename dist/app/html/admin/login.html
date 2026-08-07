@@ -19,7 +19,7 @@
         extend: {
           colors: {
             ink: { DEFAULT: '#0c1220', panel: '#141c2b', line: '#243044', mute: '#7a8ba3' },
-            signal: { DEFAULT: '#0b6e4f', dim: '#085a41' }
+            signal: { DEFAULT: '#e8a317', dim: '#b87f0f' }
           },
           fontFamily: {
             display: ['"DM Sans"', 'system-ui', 'sans-serif'],
@@ -32,13 +32,12 @@
   <link rel="preconnect" href="https://fonts.googleapis.com"/>
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin/>
   <link href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600;9..40,700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet"/>
-  <script src="/admin/static/htmx.min.js"></script>
   <link rel="stylesheet" href="/admin/static/admin.css"/>
   <script defer src="/admin/static/ussd-shell.js"></script>
   <script defer src="/admin/static/alpine.min.js"></script>
 </head>
 <body x-data class="grid min-h-full place-items-center bg-ink px-4 font-display text-slate-200 antialiased"
-      style="background-image:radial-gradient(ellipse 70% 50% at 50% 0%,rgba(11,110,79,0.12),transparent)">
+      style="background-image:radial-gradient(ellipse 70% 50% at 50% 0%,rgba(232,163,23,0.1),transparent)">
   <form method="post" action="/admin/login"
         class="w-full max-w-sm rounded-lg border border-ink-line bg-ink-panel p-8 shadow-xl shadow-black/40">
     <div class="mb-6 flex items-center gap-3">

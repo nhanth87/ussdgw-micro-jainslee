@@ -103,21 +103,35 @@ components:
   schemas:
     AsRequest:
       type: object
+      description: |
+        GW→AS pull. correlationId is the real push-back key for /as/callback and
+        gRPC Callback. sessionId is virtualSessionId (logical). gRPC JSON bytes
+        use the same schema.
       properties:
-        sessionId: { type: string }
-        correlationId: { type: string }
+        sessionId: { type: string, description: Logical virtualSessionId }
+        correlationId: { type: string, description: Real store/bridge key for late push-back }
         requestId: { type: string }
         generation: { type: integer }
         msisdn: { type: string }
         shortCode: { type: string }
         ussdString: { type: string }
         networkId: { type: integer }
+        virtualBridgeId: { type: string, description: Bridge arm id when armed (usually = correlationId) }
+        adaptiveTimeoutMs: { type: integer, format: int64, description: Effective AdaptiveTimeout gate ms }
+        asMode: { type: string, enum: [SYNC, ASYNC_ACK, BRIDGE], description: Pull mode hint }
     AsResponse:
       type: object
+      description: |
+        AS→GW pull response or callback. Echo correlationId (required for push-back);
+        virtualBridgeId / sessionId accepted as fallbacks if correlationId omitted.
       properties:
-        correlationId: { type: string }
+        correlationId: { type: string, description: Real store/bridge key }
         requestId: { type: string }
         generation: { type: integer }
         text: { type: string }
         action: { type: string, enum: [CONTINUE, END, ABORT] }
-        async: { type: boolean, description: If true, AS will POST /as/callback later }
+        async: { type: boolean, description: If true, AS will POST /as/callback or gRPC Callback later }
+        alphabet: { type: string, enum: [ucs7, ucs8, unicode, auto] }
+        sessionId: { type: string, description: Optional echo of virtualSessionId }
+        virtualBridgeId: { type: string, description: Optional echo for late resolve }
+        adaptiveTimeoutMs: { type: integer, format: int64, description: Optional gate echo }

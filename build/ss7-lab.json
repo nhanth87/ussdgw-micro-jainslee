@@ -1,0 +1,45 @@
+{
+  "stackName": "ra-jss7",
+  "protocols": { "map": true, "cap": false },
+  "sctp": {
+    "connectDelay": 10000,
+    "workerThreads": 8,
+    "links": [
+      {
+        "name": "L1",
+        "type": "server",
+        "channel": "sctp",
+        "local": "127.0.0.1:8013",
+        "peer": "127.0.0.1:8014",
+        "localSecondary": []
+      }
+    ]
+  },
+  "m3ua": {
+    "as": [
+      {
+        "name": "AS1",
+        "mode": "loadshare",
+        "functionality": "ipsp",
+        "ipsp": "server",
+        "routingContext": 0,
+        "links": ["L1"]
+      }
+    ],
+    "routes": [
+      { "to": { "dpc": 2, "opc": 1 }, "via": "AS1" }
+    ]
+  },
+  "sccp": {
+    "localPoints": [
+      { "pc": 1, "networkIndicator": "national", "networkId": 0, "reachablePointCodes": [2] }
+    ],
+    "routing": [
+      { "from": "remote", "match": { "gt": "*" }, "to": { "pc": 1 }, "mask": "K" },
+      { "from": "local", "match": { "gt": "*" }, "to": { "pc": 2 }, "mask": "K" }
+    ]
+  },
+  "services": [
+    { "name": "primary", "ssn": 8, "protocol": "map" }
+  ]
+}
