@@ -14,6 +14,8 @@ import et.restlink.ussdgw.config.UssdConfigService;
 import et.restlink.ussdgw.ra.smpp.SmppEndpointRegistry;
 import et.restlink.ussdgw.service.AsPullClient;
 import et.restlink.ussdgw.service.BridgeGateScheduler;
+import et.restlink.ussdgw.service.GrpcApplyService;
+import et.restlink.ussdgw.service.HttpApplyService;
 import et.restlink.ussdgw.service.SmppApplyService;
 import et.restlink.ussdgw.service.Ss7ApplyService;
 
@@ -57,7 +59,12 @@ public class AdminHttpHandler {
     @Inject AdminCatalogHandler catalog;
     @Inject AdminPlaneHandler planes;
     @Inject AdminCampaignHandler campaigns;
+    @Inject AdminMyCampaignHandler myCampaigns;
+    @Inject AdminAppUserHandler appUsers;
+    @Inject AdminSipTrunkHandler sipTrunks;
     @Inject AdminLabMoHandler labMo;
+    @Inject HttpApplyService httpApply;
+    @Inject GrpcApplyService grpcApply;
     @Inject AdminHttpAsModeHandler httpAsModes;
     @Inject SmppApplyService smppApply;
     @Inject Ss7ApplyService ss7Apply;
@@ -329,11 +336,20 @@ public class AdminHttpHandler {
             case "/admin/http/async" -> Optional.of(httpAsModes.get("async", who));
             case "/admin/http/callback" -> Optional.of(httpAsModes.get("callback", who));
             case "/admin/grpc" -> Optional.of(planes.grpcGet());
+            case "/admin/sip/trunks" -> {
+                if (who != null && who.isTenantScoped()) {
+                    yield Optional.of(HttpReply.text(403, "forbidden for TENANT role"));
+                }
+                yield Optional.of(sipTrunks.get());
+            }
             case "/admin/routing", "/admin/rules", "/admin/routing/partial" ->
                     Optional.of(catalog.routingGet(who));
             case "/admin/tenants", "/admin/tenants/partial" -> Optional.of(catalog.tenantsGet(who));
             case "/admin/users", "/admin/users/partial" -> Optional.of(catalog.usersGet(who));
+            case "/admin/app-users", "/admin/app-users/partial" -> Optional.of(appUsers.get(who));
             case "/admin/campaigns" -> Optional.of(campaigns.get(who));
+            case "/admin/my-campaigns" -> Optional.of(myCampaigns.get(who));
+            case "/admin/monitor-feed" -> Optional.of(HttpReply.json(200, monitorFeedMap()));
             case "/admin/lab/mo", "/admin/lab-mo" -> Optional.of(labMo.get(who));
             case "/admin", "/admin/" -> Optional.of(statusHtml());
             case "/admin/hub", "/admin/links", "/admin/links/ss7", "/admin/links/smpp",
@@ -463,7 +479,7 @@ public class AdminHttpHandler {
         boolean loggedIn = who != null && who.fromSession();
         try {
             Map<String, String> extra = shellExtraVars(name, who, query);
-            return Optional.of(pages.pageWith(name, nav.adminPageVars(loggedIn, extra)));
+            return Optional.of(pages.pageWith(name, nav.adminPageVars(who, loggedIn, extra)));
         } catch (Exception e) {
             LOG.warn("[admin] shell page {}: {}", name, e.toString());
             return Optional.empty();
@@ -483,12 +499,56 @@ public class AdminHttpHandler {
             case "http.html" -> planes.httpPageVars();
             case "grpc.html" -> planes.grpcPageVars();
             case "diameter.html" -> planes.diameterPageVars();
-            case "sip.html" -> planes.sipPageVars();
+            case "sip.html" -> {
+                Map<String, String> m = new LinkedHashMap<>(planes.sipPageVars());
+                m.putAll(sipTrunks.pageVars());
+                yield m;
+            }
             case "hlr.html" -> planes.hlrPageVars(who);
             case "campaigns.html" -> campaigns.pageVars(who);
+            case "my-campaigns.html" -> myCampaigns.pageVars(who);
+            case "app-users.html" -> appUsers.pageVars(who);
             case "lab-mo.html" -> labMo.pageVars(who);
+            case "index.html" -> monitorStripVars();
             default -> Map.of();
         };
+    }
+
+    private Map<String, String> monitorStripVars() {
+        Map<String, Object> feed = monitorFeedMap();
+        StringBuilder strip = new StringBuilder();
+        strip.append("<section class=\"mb-8 rounded-lg border border-ink-line bg-ink-panel/80 p-4\">");
+        strip.append("<p class=\"text-xs uppercase tracking-[0.25em] text-signal\">Monitor strip</p>");
+        strip.append("<div class=\"mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-4 font-mono text-xs\">");
+        strip.append(monitorCell("ss7.live", feed.get("ss7.live")));
+        strip.append(monitorCell("smpp.live", feed.get("smpp.live")));
+        strip.append(monitorCell("http.niPushUrl", feed.get("http.niPushUrl")));
+        strip.append(monitorCell("grpc.pushEndpoint", feed.get("grpc.pushEndpoint")));
+        strip.append("</div>");
+        strip.append("<p class=\"mt-3 text-sm text-ink-mute\">Truth from LinkStatusService · ")
+                .append("<a class=\"text-signal hover:underline\" href=\"/admin/monitor-feed\">JSON feed</a> · ")
+                .append("<a class=\"text-signal hover:underline\" href=\"/telemetry/?tab=ss7\">Monitor Hub</a></p>");
+        strip.append("</section>");
+        return Map.of("{{MONITOR_STRIP}}", strip.toString());
+    }
+
+    private static String monitorCell(String k, Object v) {
+        return "<div class=\"rounded-md border border-ink-line bg-ink/40 p-3\">"
+                + "<div class=\"text-ink-mute\">" + esc(k) + "</div>"
+                + "<div class=\"mt-1 break-all text-slate-100\">" + esc(String.valueOf(v)) + "</div></div>";
+    }
+
+    Map<String, Object> monitorFeedMap() {
+        Map<String, Object> m = new LinkedHashMap<>(linkStatus.snapshot());
+        String ni = config.httpNiPath();
+        m.put("http.niPushUrl", PublicPushUrls.publicNiPushUrl(
+                config.publicBaseUrl(), httpApply.listenHost(), httpApply.listenPort(), ni));
+        m.put("grpc.pushEndpoint", PublicPushUrls.publicGrpcPushEndpoint(
+                config.publicBaseUrl(), grpcApply.listenPort()));
+        m.put("links.ss7", "/admin/ss7");
+        m.put("links.http", "/admin/http");
+        m.put("links.grpc", "/admin/grpc");
+        return m;
     }
 
     static String shellTemplateName(String path) {
@@ -498,6 +558,8 @@ public class AdminHttpHandler {
             case "/admin/routing", "/admin/rules" -> "routing.html";
             case "/admin/bridge" -> "bridge.html";
             case "/admin/campaigns" -> "campaigns.html";
+            case "/admin/my-campaigns" -> "my-campaigns.html";
+            case "/admin/app-users" -> "app-users.html";
             case "/admin/cdr" -> "cdr.html";
             case "/admin/tenants" -> "tenants.html";
             case "/admin/users" -> "users.html";
@@ -579,15 +641,16 @@ public class AdminHttpHandler {
     private Optional<HttpReply> handlePost(String p, String body, AdminAuthService.Principal who) {
         try {
             if (who != null && who.isTenantScoped()) {
-                // TENANT may mutate own routing + campaigns; no plane/users/tenants CRUD
+                // TENANT: routing, my-campaigns, app-users (own tenant); no plane/admin campaigns
                 return switch (p) {
                     case "/admin/routing", "/admin/rules" -> Optional.of(catalog.routingPost(body, who));
-                    case "/admin/campaigns" -> Optional.of(campaigns.post(body, who));
+                    case "/admin/my-campaigns" -> Optional.of(myCampaigns.post(body, who));
+                    case "/admin/app-users" -> Optional.of(appUsers.post(body, who));
                     case "/admin/lab/mo" -> Optional.of(labMo.post(body, who));
                     case "/admin/http/sync" -> Optional.of(httpAsModes.post("sync", body, who));
                     case "/admin/http/async" -> Optional.of(httpAsModes.post("async", body, who));
                     case "/admin/http/callback" -> Optional.of(httpAsModes.post("callback", body, who));
-                    case "/admin/tenants", "/admin/users",
+                    case "/admin/campaigns", "/admin/tenants", "/admin/users",
                          "/admin/ss7", "/admin/ss7/config", "/admin/ss7/apply", "/admin/ss7/start", "/admin/ss7/stop",
                          "/admin/hlr", "/admin/hlr/config", "/admin/hlr/apply",
                          "/admin/smpp", "/admin/smpp/config", "/admin/smpp/apply", "/admin/smpp/start", "/admin/smpp/stop",
@@ -596,7 +659,7 @@ public class AdminHttpHandler {
                          "/admin/diameter", "/admin/diameter/config", "/admin/diameter/apply",
                          "/admin/diameter/start", "/admin/diameter/stop",
                          "/admin/sip", "/admin/sip/config", "/admin/sip/apply",
-                         "/admin/sip/start", "/admin/sip/stop",
+                         "/admin/sip/start", "/admin/sip/stop", "/admin/sip/trunks",
                          "/admin/bridge" ->
                             Optional.of(HttpReply.text(403, "forbidden for TENANT role"));
                     default -> Optional.empty();
@@ -622,11 +685,14 @@ public class AdminHttpHandler {
                 case "/admin/sip", "/admin/sip/config",
                      "/admin/sip/apply", "/admin/sip/start", "/admin/sip/stop" ->
                         Optional.of(delegatePlanePost("sip", p, body, who));
+                case "/admin/sip/trunks" -> Optional.of(sipTrunks.post(body));
                 case "/admin/bridge" -> Optional.of(planes.bridgePost(body));
                 case "/admin/routing", "/admin/rules" -> Optional.of(catalog.routingPost(body, who));
                 case "/admin/tenants" -> Optional.of(catalog.tenantsPost(body, who));
                 case "/admin/users" -> Optional.of(catalog.usersPost(body, who));
+                case "/admin/app-users" -> Optional.of(appUsers.post(body, who));
                 case "/admin/campaigns" -> Optional.of(campaigns.post(body, who));
+                case "/admin/my-campaigns" -> Optional.of(myCampaigns.post(body, who));
                 case "/admin/lab/mo" -> Optional.of(labMo.post(body, who));
                 case "/admin/http/sync" -> Optional.of(httpAsModes.post("sync", body, who));
                 case "/admin/http/async" -> Optional.of(httpAsModes.post("async", body, who));
@@ -765,7 +831,7 @@ public class AdminHttpHandler {
     }
 
     public HttpReply statusJson() {
-        Map<String, Object> m = new LinkedHashMap<>(linkStatus.snapshot());
+        Map<String, Object> m = new LinkedHashMap<>(monitorFeedMap());
         m.put("sessions", store.size());
         m.put("bridge.count", bridge.bridgeCount());
         m.put("bridge.recover", bridge.recoverCount());

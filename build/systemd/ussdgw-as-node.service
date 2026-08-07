@@ -1,0 +1,25 @@
+[Unit]
+Description=Digicom-ET USSDGW lab AS (as-node pull:fast)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=app
+Group=app
+WorkingDirectory=/home/app/ota-push-services/ussdgw-micro-jainslee/tools/as-node
+Environment=HOME=/home/app
+Environment=PATH=/home/app/.local/share/mise/installs/node/20/bin:/home/app/.local/bin:/usr/bin:/bin
+Environment=DELAY_MS=0
+Environment=MODE=sync
+Environment=INTERACTIVE=true
+Environment=PORT=8090
+ExecStartPre=/usr/bin/test -f package.json
+ExecStart=/home/app/.local/share/mise/installs/node/20/bin/npm run pull:fast
+Restart=on-failure
+RestartSec=3
+StandardOutput=append:/tmp/as-node.service.log
+StandardError=append:/tmp/as-node.service.log
+
+[Install]
+WantedBy=multi-user.target

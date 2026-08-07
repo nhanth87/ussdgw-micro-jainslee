@@ -187,5 +187,8 @@ public class RuntimeConfigStore {
         public static final String HLR_UPPER_GT = "ussd.hlr.upper-gt";
         public static final String HLR_DIAM_DEST_HOST = "ussd.hlr.diameter.destination-host";
         public static final String HLR_DIAM_DEST_REALM = "ussd.hlr.diameter.destination-realm";
+
+        /** Operator-facing base for NI/gRPC push URLs (never 0.0.0.0). */
+        public static final String ADMIN_PUBLIC_BASE_URL = "ussd.admin.public-base-url";
     }
 }

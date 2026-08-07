@@ -1,11 +1,13 @@
 package et.restlink.ussdgw.admin;
 
 import et.restlink.ussdgw.persist.AdminUserEntity;
+import et.restlink.ussdgw.persist.SipTrunkEntity;
 import et.restlink.ussdgw.persist.TenantEntity;
 import et.restlink.ussdgw.routing.RuleType;
 import et.restlink.ussdgw.routing.ShortCodeRule;
 import et.restlink.ussdgw.routing.ShortCodeRoutingService;
 import et.restlink.ussdgw.security.AsUrlValidator;
+import et.restlink.ussdgw.sip.SipTrunkService;
 import et.restlink.ussdgw.tenant.AdminUserService;
 import et.restlink.ussdgw.tenant.TenantService;
 
@@ -33,6 +35,8 @@ public class AdminCatalogHandler {
     @Inject TenantService tenants;
     @Inject AdminUserService users;
     @Inject AsUrlValidator asUrlValidator;
+    @Inject AdminSipTrunkHandler sipTrunks;
+    @Inject SipTrunkService sipTrunkService;
 
     /** Tests construct this handler directly; fall back to the config-free defaults. */
     private AsUrlValidator asUrls() {
@@ -96,7 +100,10 @@ public class AdminCatalogHandler {
     }
 
     public Map<String, String> tenantsPageVars() {
-        return Map.of("{{ROWS}}", tenantRowsHtml());
+        Map<String, String> m = new LinkedHashMap<>();
+        m.put("{{ROWS}}", tenantRowsHtml());
+        m.put("{{SIP_TRUNK_OPTS}}", sipTrunks != null ? sipTrunks.trunkOptionsHtml(null) : "<option value=\"\">—</option>");
+        return m;
     }
 
     public AdminHttpHandler.HttpReply usersGet() {
@@ -131,6 +138,7 @@ public class AdminCatalogHandler {
             }
             if ("delete".equalsIgnoreCase(action)) {
                 String sc = f.getOrDefault("shortCode", "");
+                String appUser = f.getOrDefault("appUsername", "");
                 if (who != null && who.isTenantScoped()) {
                     boolean owned = routing.listForTenant(who.tenantId()).stream()
                             .anyMatch(r -> sc.equals(r.shortCode()));
@@ -138,7 +146,7 @@ public class AdminCatalogHandler {
                         return rowsErr(routingRowsHtml(who), "forbidden");
                     }
                 }
-                routing.delete(sc);
+                routing.delete(sc, appUser.isBlank() ? null : appUser);
                 return rowsOk(routingRowsHtml(who), "deleted — live");
             }
             String code = f.getOrDefault("shortCode", "").trim();
@@ -148,6 +156,7 @@ public class AdminCatalogHandler {
             int networkId = parseInt(f.get("networkId"), 0);
             boolean enabled = !"false".equalsIgnoreCase(f.getOrDefault("enabled", "true"));
             boolean mark = "true".equalsIgnoreCase(f.getOrDefault("mark", "false"));
+            String appUsername = f.getOrDefault("appUsername", "").trim();
             if (code.isEmpty() || url.isEmpty()) {
                 return rowsErr(routingRowsHtml(who), "shortCode and asUrl required");
             }
@@ -160,16 +169,40 @@ public class AdminCatalogHandler {
             if (who != null && who.isTenantScoped()) {
                 tenantId = who.tenantId();
             }
+            if (RuleType.SIP.name().equalsIgnoreCase(type)) {
+                Optional<String> sipErr = validateSipRoute(url, tenantId.isEmpty() ? null : tenantId);
+                if (sipErr.isPresent()) {
+                    return rowsErr(routingRowsHtml(who), sipErr.get());
+                }
+            }
             if (!tenantId.isEmpty() && networkId == 0) {
                 networkId = tenants.byId(tenantId).map(t -> t.networkId).orElse(0);
             }
             routing.putAndPersist(new ShortCodeRule(
                     code, RuleType.valueOf(type.toUpperCase()), url, enabled,
-                    tenantId.isEmpty() ? null : tenantId, networkId, mark));
+                    tenantId.isEmpty() ? null : tenantId, networkId, mark,
+                    appUsername.isEmpty() ? null : appUsername));
             return rowsOk(routingRowsHtml(who), "saved " + code + " — live");
         } catch (RuntimeException ex) {
             return rowsErr(routingRowsHtml(who), "error: " + nullToEmpty(ex.getMessage()));
         }
+    }
+
+    /** SIP asUrl = trunkId; trunk must exist, be enabled, and allow the rule tenant. */
+    private Optional<String> validateSipRoute(String asUrl, String ruleTenantId) {
+        if (sipTrunkService == null) {
+            return Optional.of("SIP trunks unavailable");
+        }
+        String trunkId = asUrl.split("\\|", 2)[0].trim();
+        Optional<SipTrunkEntity> trunk = sipTrunkService.byId(trunkId);
+        if (trunk.isEmpty() || !trunk.get().enabled) {
+            return Optional.of("SIP trunk not found or disabled: " + trunkId);
+        }
+        if (!SipTrunkService.trunkAllowsTenant(trunk.get(), ruleTenantId)) {
+            return Optional.of("SIP trunk " + trunkId + " does not allow tenant "
+                    + (ruleTenantId == null ? "(none)" : ruleTenantId));
+        }
+        return Optional.empty();
     }
 
     public AdminHttpHandler.HttpReply tenantsPost(String body) {
@@ -201,9 +234,11 @@ public class AdminCatalogHandler {
                     f.get("smppPassword"),
                     f.get("asCallbackBase"),
                     parseInt(f.get("maxTps"), 50),
-                    f.get("httpAsWireFormat"));
+                    f.get("httpAsWireFormat"),
+                    f.get("sipTrunkId"));
             String notice = "saved " + e.tenantId + " networkId=" + e.networkId
                     + " wire=" + nullToEmpty(e.httpAsWireFormat)
+                    + " sipTrunk=" + nullToEmpty(e.sipTrunkId)
                     + " key=" + maskKey(e.httpApiKey);
             return rowsOk(tenantRowsHtml(), notice);
         } catch (RuntimeException ex) {
@@ -254,7 +289,7 @@ public class AdminCatalogHandler {
         var rules = who != null && who.isTenantScoped()
                 ? routing.listForTenant(who.tenantId()) : routing.list();
         if (rules.isEmpty()) {
-            sb.append("<tr><td colspan=\"8\" class=\"px-3 py-4 text-ink-mute italic\">No short-code rules.</td></tr>");
+            sb.append("<tr><td colspan=\"9\" class=\"px-3 py-4 text-ink-mute italic\">No short-code rules.</td></tr>");
             return sb.toString();
         }
         for (ShortCodeRule r : rules) {
@@ -263,11 +298,13 @@ public class AdminCatalogHandler {
                     .append(TD).append(">").append(esc(r.asUrl())).append("</td><td")
                     .append(TD).append(">").append(esc(r.tenantId())).append("</td><td")
                     .append(TD).append(">").append(r.networkId()).append("</td><td")
+                    .append(TD).append(">").append(esc(r.appUsername())).append("</td><td")
                     .append(TD).append(">").append(r.mark()).append("</td><td")
                     .append(TD).append(">").append(r.enabled()).append("</td><td").append(TD).append(">");
             sb.append("<form hx-post=\"/admin/routing\" hx-target=\"#rule-rows\" hx-swap=\"innerHTML\" class=\"inline\">")
                     .append("<input type=\"hidden\" name=\"action\" value=\"delete\"/>")
                     .append("<input type=\"hidden\" name=\"shortCode\" value=\"").append(esc(r.shortCode())).append("\"/>")
+                    .append("<input type=\"hidden\" name=\"appUsername\" value=\"").append(esc(r.appUsername())).append("\"/>")
                     .append("<button type=\"submit\" class=\"").append(DEL_BTN).append("\">Del</button></form></td></tr>");
         }
         return sb.toString();
@@ -277,7 +314,7 @@ public class AdminCatalogHandler {
         StringBuilder sb = new StringBuilder();
         var list = tenants.list();
         if (list.isEmpty()) {
-            sb.append("<tr><td colspan=\"9\" class=\"px-3 py-4 text-ink-mute italic\">No tenants.</td></tr>");
+            sb.append("<tr><td colspan=\"10\" class=\"px-3 py-4 text-ink-mute italic\">No tenants.</td></tr>");
             return sb.toString();
         }
         for (TenantEntity t : list) {
@@ -285,6 +322,7 @@ public class AdminCatalogHandler {
                     .append(TD).append(">").append(esc(t.displayName)).append("</td><td")
                     .append(TD).append(">").append(t.networkId).append("</td><td")
                     .append(TD).append(">").append(esc(t.httpAsWireFormat)).append("</td><td")
+                    .append(TD).append(">").append(esc(t.sipTrunkId)).append("</td><td")
                     .append(TD).append(">").append(esc(t.smppSystemId)).append("</td><td")
                     .append(TD).append(">").append(esc(maskKey(t.httpApiKey))).append("</td><td")
                     .append(TD).append(">").append(t.maxTps).append("</td><td")

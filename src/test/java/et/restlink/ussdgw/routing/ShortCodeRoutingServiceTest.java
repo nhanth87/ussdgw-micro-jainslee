@@ -67,4 +67,41 @@ class ShortCodeRoutingServiceTest {
         svc.put(new ShortCodeRule("*100*", RuleType.HTTP, "http://as/off", false, null, 0, true));
         assertThat(svc.find("*100*1#")).isEmpty();
     }
+
+    @Test
+    void prefersMatchingAppUsernameAmongEqualMarks() {
+        ShortCodeRoutingService svc = new ShortCodeRoutingService();
+        svc.put(new ShortCodeRule("*100*", RuleType.HTTP, "http://as/a", true, "t1", 0, true, "app-a"));
+        svc.put(new ShortCodeRule("*100*", RuleType.HTTP, "http://as/b", true, "t1", 0, true, "app-b"));
+
+        assertThat(svc.find("*100*1#", "app-b")).get().extracting(ShortCodeRule::asUrl)
+                .isEqualTo("http://as/b");
+        assertThat(svc.find("*100*1#", "app-a")).get().extracting(ShortCodeRule::asUrl)
+                .isEqualTo("http://as/a");
+    }
+
+    @Test
+    void moPrefersUnboundAppUsername() {
+        ShortCodeRoutingService svc = new ShortCodeRoutingService();
+        svc.put(new ShortCodeRule("*200#", RuleType.HTTP, "http://as/shared", true, null, 0, false, null));
+        svc.put(new ShortCodeRule("*200#", RuleType.HTTP, "http://as/owned", true, "t1", 0, false, "app-a"));
+
+        assertThat(svc.find("*200#")).get().extracting(ShortCodeRule::asUrl)
+                .isEqualTo("http://as/shared");
+        assertThat(svc.find("*200#", "app-a")).get().extracting(ShortCodeRule::asUrl)
+                .isEqualTo("http://as/owned");
+    }
+
+    @Test
+    void twoExactRulesSameShortCodeDifferentAppUsernameCoexist() {
+        ShortCodeRoutingService svc = new ShortCodeRoutingService();
+        svc.put(new ShortCodeRule("*300#", RuleType.HTTP, "http://as/a", true, "t1", 1, false, "app-a"));
+        svc.put(new ShortCodeRule("*300#", RuleType.HTTP, "http://as/b", true, "t1", 1, false, "app-b"));
+
+        assertThat(svc.list()).hasSize(2);
+        assertThat(svc.find("*300#", "app-a")).get().extracting(ShortCodeRule::asUrl)
+                .isEqualTo("http://as/a");
+        assertThat(svc.find("*300#", "app-b")).get().extracting(ShortCodeRule::asUrl)
+                .isEqualTo("http://as/b");
+    }
 }

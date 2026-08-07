@@ -172,6 +172,46 @@ public class VirtualSessionStore {
         return findOneByAttribute("dialogId", dialogId);
     }
 
+    /**
+     * Best-effort SIP pull-reply correlation: first {@code AWAITING_AS}/{@code S1_RELEASED}
+     * row for {@code msisdn}, optionally scoped by tenant.
+     */
+    public Optional<VirtualSession> findAwaitingAsByMsisdn(String msisdn, String tenantId) {
+        if (msisdn == null || msisdn.isBlank()) {
+            return Optional.empty();
+        }
+        ensureTable();
+        ProfileFacility f = facility();
+        if (f == null) {
+            return Optional.empty();
+        }
+        try {
+            Collection<ProfileLocalObject> rows =
+                    f.findProfilesByAttribute(UssdTxProfile.TABLE_NAME, "msisdn", msisdn.trim());
+            String wantTenant = tenantId == null || tenantId.isBlank() ? null : tenantId.trim();
+            for (ProfileLocalObject plo : rows) {
+                VirtualSession s = UssdTxProfileMapper.read((UssdTxProfile) plo.getProfile());
+                if (s == null) {
+                    continue;
+                }
+                VirtualSessionState st = s.state();
+                if (st != VirtualSessionState.AWAITING_AS && st != VirtualSessionState.S1_RELEASED) {
+                    continue;
+                }
+                if (wantTenant != null) {
+                    String have = s.tenantId();
+                    if (have == null || !wantTenant.equals(have.trim())) {
+                        continue;
+                    }
+                }
+                return Optional.of(s);
+            }
+            return Optional.empty();
+        } catch (RuntimeException e) {
+            return Optional.empty();
+        }
+    }
+
     public void remove(String correlationId) {
         if (correlationId == null || correlationId.isBlank()) return;
         ensureTable();

@@ -21,6 +21,7 @@ public class CallbackAuthService {
     @Inject TenantGuard tenantGuard;
     @Inject VirtualSessionStore store;
     @Inject UssdConfigService config;
+    @Inject AppUserService appUsers;
 
     public enum Result {
         OK, UNAUTHORIZED, NO_SESSION
@@ -58,16 +59,21 @@ public class CallbackAuthService {
     /**
      * Outcome of authorizing a classic NI push.
      *
-     * @param tenantId  owning tenant, or null for the global admin key / disabled auth
-     * @param networkId the tenant's network, or null when no tenant was resolved
+     * @param tenantId    owning tenant, or null for the global admin key / disabled auth
+     * @param networkId   the tenant's network, or null when no tenant was resolved
+     * @param appUsername API app-user username when auth was via {@code ussd_app_user}, else null
      */
-    public record NiAuth(Result result, String tenantId, Integer networkId) {
+    public record NiAuth(Result result, String tenantId, Integer networkId, String appUsername) {
+        public NiAuth(Result result, String tenantId, Integer networkId) {
+            this(result, tenantId, networkId, null);
+        }
+
         public boolean ok() {
             return result == Result.OK;
         }
 
         static NiAuth unauthorized() {
-            return new NiAuth(Result.UNAUTHORIZED, null, null);
+            return new NiAuth(Result.UNAUTHORIZED, null, null, null);
         }
     }
 
@@ -77,23 +83,30 @@ public class CallbackAuthService {
      * <p>Classic ran this servlet with no security constraint at all — it relied on sitting inside
      * the operator VLAN. That is not a safe default here, so the API key is required by default and
      * an operator must opt out explicitly ({@code ussd.http.ni.auth-required=false}) for lab use.
-     * The key resolves the tenant, exactly as the sibling {@code /as/callback} path does.
+     * Resolution order: admin key → app-user key → tenant httpApiKey.
      */
     public NiAuth authorizeNi(Map<String, String> headers, boolean authRequired) {
         String key = header(headers, HDR_API_KEY);
         if (key == null) key = header(headers, HDR_API_KEY_ALT);
         if (key != null && !key.isBlank()) {
             if (config.adminKeyOk(key)) {
-                return new NiAuth(Result.OK, null, null);
+                return new NiAuth(Result.OK, null, null, null);
+            }
+            Optional<et.restlink.ussdgw.persist.AppUserEntity> app =
+                    appUsers.byApiKey(key.trim());
+            if (app.isPresent()) {
+                var u = app.get();
+                Integer net = tenantGuard.byId(u.tenantId).map(t -> t.networkId).orElse(null);
+                return new NiAuth(Result.OK, u.tenantId, net, u.username);
             }
             Optional<et.restlink.ussdgw.persist.TenantEntity> tenant =
                     tenantGuard.byHttpApiKey(key.trim());
             if (tenant.isPresent()) {
-                return new NiAuth(Result.OK, tenant.get().tenantId, tenant.get().networkId);
+                return new NiAuth(Result.OK, tenant.get().tenantId, tenant.get().networkId, null);
             }
             return NiAuth.unauthorized();
         }
-        return authRequired ? NiAuth.unauthorized() : new NiAuth(Result.OK, null, null);
+        return authRequired ? NiAuth.unauthorized() : new NiAuth(Result.OK, null, null, null);
     }
 
     static String header(Map<String, String> headers, String name) {

@@ -120,8 +120,12 @@ public class AdminPlaneHandler {
         m.put("{{CALLBACK_PATH}}", esc(config.httpCallbackPath()));
         String host = httpApply.listenHost();
         int port = httpApply.listenPort();
-        String niSlash = ni.startsWith("/") ? ni : "/" + ni;
-        m.put("{{NI_PUSH_URL}}", esc("http://" + host + ":" + port + niSlash));
+        String niUrl = PublicPushUrls.publicNiPushUrl(config.publicBaseUrl(), host, port, ni);
+        if (niUrl.isEmpty()) {
+            niUrl = "(set ussd.admin.public-base-url — bind host is "
+                    + host + ":" + port + ", not publishable)";
+        }
+        m.put("{{NI_PUSH_URL}}", esc(niUrl));
         m.put("{{STATUS_HTML}}", linkStatus.htmlPartial("http"));
         m.put("{{PANEL}}", httpHtml(null));
         return m;
@@ -129,6 +133,13 @@ public class AdminPlaneHandler {
 
     public Map<String, String> grpcPageVars() {
         Map<String, String> m = new LinkedHashMap<>();
+        int grpcPort = grpcApply.listenPort();
+        String ep = PublicPushUrls.publicGrpcPushEndpoint(config.publicBaseUrl(), grpcPort);
+        if (ep.isEmpty()) {
+            ep = "(set ussd.admin.public-base-url — gRPC listen port " + grpcPort + ")";
+        }
+        m.put("{{GRPC_PUSH_ENDPOINT}}", esc(ep));
+        m.put("{{GRPC_PORT}}", String.valueOf(grpcPort));
         m.put("{{STATUS_HTML}}", linkStatus.htmlPartial("grpc"));
         m.put("{{PANEL}}", grpcHtml(null));
         return m;
@@ -780,14 +791,18 @@ public class AdminPlaneHandler {
         if (niPath == null || niPath.isBlank()) {
             niPath = "/ussd";
         }
-        if (!niPath.startsWith("/")) {
-            niPath = "/" + niPath;
-        }
         String callback = config.httpCallbackPath();
-        String pushUrl = "http://" + host + ":" + port + niPath;
-        String callbackUrl = "http://" + host + ":" + port
-                + (callback == null || callback.isBlank() ? ""
-                : (callback.startsWith("/") ? callback : "/" + callback));
+        String pushUrl = PublicPushUrls.publicNiPushUrl(config.publicBaseUrl(), host, port, niPath);
+        if (pushUrl.isEmpty()) {
+            pushUrl = "(set ussd.admin.public-base-url)";
+        }
+        String cbPath = callback == null || callback.isBlank() ? ""
+                : (callback.startsWith("/") ? callback : "/" + callback);
+        String callbackUrl = PublicPushUrls.publicNiPushUrl(config.publicBaseUrl(), host, port,
+                cbPath.isEmpty() ? "/" : cbPath);
+        if (callbackUrl.isEmpty()) {
+            callbackUrl = "(set ussd.admin.public-base-url)";
+        }
 
         StringBuilder sb = new StringBuilder("<div class=\"plane http-panel space-y-4\">");
         if (notice != null) {

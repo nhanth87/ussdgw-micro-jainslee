@@ -85,6 +85,7 @@
             <select name="ruleType" class="mt-1 w-full rounded-md border border-ink-line bg-ink px-3 py-2 text-sm focus:border-signal focus:outline-none">
               <option value="HTTP">HTTP</option>
               <option value="GRPC">GRPC</option>
+              <option value="SIP">SIP (asUrl = trunkId)</option>
             </select>
           </div>
           <div>
@@ -93,6 +94,11 @@
                    class="mt-1 w-full rounded-md border border-ink-line bg-ink px-3 py-2 font-mono text-sm focus:border-signal focus:outline-none focus:ring-1 focus:ring-signal/40"/>
           </div>
           {{TENANT_FIELD}}
+          <div>
+            <label class="block text-xs uppercase tracking-wider text-ink-mute">appUsername (optional)</label>
+            <input name="appUsername" placeholder="API app user ownership"
+                   class="mt-1 w-full rounded-md border border-ink-line bg-ink px-3 py-2 font-mono text-sm focus:border-signal focus:outline-none focus:ring-1 focus:ring-signal/40"/>
+          </div>
           <div>
             <label class="block text-xs uppercase tracking-wider text-ink-mute">networkId</label>
             <input name="networkId" type="number" min="0" value="0"
@@ -146,6 +152,7 @@
                 <th class="px-3 py-2.5 font-medium">URL</th>
                 <th class="px-3 py-2.5 font-medium">tenant</th>
                 <th class="px-3 py-2.5 font-medium">net</th>
+                <th class="px-3 py-2.5 font-medium">appUser</th>
                 <th class="px-3 py-2.5 font-medium">mark</th>
                 <th class="px-3 py-2.5 font-medium">on</th>
                 <th class="px-3 py-2.5 font-medium"></th>

@@ -56,6 +56,25 @@ public class AsUrlValidator {
         return reject(asUrl, parseAllowlist(hostAllowlist), allowPrivateHosts, resolveDns);
     }
 
+    /**
+     * SSRF guard for SIP trunk {@code peerHost} (hostname or literal IP — no scheme).
+     * Same private / loopback / metadata policy as HTTP {@code asUrl}.
+     */
+    public Optional<String> rejectSipPeerHost(String peerHost) {
+        return rejectSipPeerHost(
+                peerHost, parseAllowlist(hostAllowlist), allowPrivateHosts, resolveDns);
+    }
+
+    /**
+     * SSRF guard for SIP {@code requestUriTemplate} ({@code sip:} / {@code sips:}).
+     * Blank is allowed (runtime falls back to peer host). {@code {msisdn}} may appear only in
+     * the user part — never in the host.
+     */
+    public Optional<String> rejectSipRequestUriTemplate(String template) {
+        return rejectSipRequestUriTemplate(
+                template, parseAllowlist(hostAllowlist), allowPrivateHosts, resolveDns);
+    }
+
     static Optional<String> reject(String asUrl, Set<String> allowlist, boolean allowPrivate,
                                    boolean resolveDns) {
         if (asUrl == null || asUrl.isBlank()) {
@@ -76,6 +95,53 @@ public class AsUrlValidator {
         if (host == null || host.isBlank()) {
             return Optional.of("asUrl has no host");
         }
+        return rejectHost(host, allowlist, allowPrivate, resolveDns, "asUrl");
+    }
+
+    static Optional<String> rejectSipPeerHost(String peerHost, Set<String> allowlist,
+                                              boolean allowPrivate, boolean resolveDns) {
+        if (peerHost == null || peerHost.isBlank()) {
+            return Optional.of("peerHost required");
+        }
+        String raw = peerHost.trim();
+        if (raw.contains("://") || raw.contains("/") || raw.contains("@") || raw.contains(" ")) {
+            return Optional.of("peerHost must be a bare hostname or IP (no URI)");
+        }
+        String host = extractSipHost(raw);
+        if (host.isBlank()) {
+            return Optional.of("peerHost required");
+        }
+        return rejectHost(host, allowlist, allowPrivate, resolveDns, "peerHost");
+    }
+
+    static Optional<String> rejectSipRequestUriTemplate(String template, Set<String> allowlist,
+                                                        boolean allowPrivate, boolean resolveDns) {
+        if (template == null || template.isBlank()) {
+            return Optional.empty();
+        }
+        String tpl = template.trim();
+        String lower = tpl.toLowerCase(Locale.ROOT);
+        if (!lower.startsWith("sip:") && !lower.startsWith("sips:")) {
+            return Optional.of("requestUriTemplate scheme must be sip or sips");
+        }
+        int at = tpl.indexOf('@');
+        if (at < 0 || at + 1 >= tpl.length()) {
+            return Optional.of("requestUriTemplate must be sip:user@host (got no host)");
+        }
+        String afterAt = tpl.substring(at + 1);
+        if (afterAt.toLowerCase(Locale.ROOT).contains("{msisdn}")) {
+            return Optional.of("requestUriTemplate must not put {msisdn} in the host");
+        }
+        String host = extractSipHost(afterAt);
+        if (host.isBlank()) {
+            return Optional.of("requestUriTemplate has no host");
+        }
+        return rejectHost(host, allowlist, allowPrivate, resolveDns, "requestUriTemplate");
+    }
+
+    /** Host-only check shared by HTTP asUrl and SIP requestUriTemplate. */
+    static Optional<String> rejectHost(String host, Set<String> allowlist, boolean allowPrivate,
+                                       boolean resolveDns, String label) {
         String normalized = normalizeHost(host);
         if (allowlist.contains(normalized)) {
             return Optional.empty();
@@ -84,30 +150,53 @@ public class AsUrlValidator {
             return Optional.empty();
         }
         if (METADATA_HOST_NAMES.contains(normalized)) {
-            return Optional.of(deny(host, "cloud metadata endpoint", allowlist));
+            return Optional.of(deny(label, host, "cloud metadata endpoint", allowlist));
         }
         if (LOCAL_HOST_NAMES.contains(normalized)) {
-            return Optional.of(deny(host, "loopback", allowlist));
+            return Optional.of(deny(label, host, "loopback", allowlist));
         }
         Optional<InetAddress> literal = parseLiteralAddress(normalized);
         if (literal.isPresent()) {
             String why = classify(literal.get());
-            return why == null ? Optional.empty() : Optional.of(deny(host, why, allowlist));
+            return why == null ? Optional.empty() : Optional.of(deny(label, host, why, allowlist));
         }
         if (resolveDns) {
             try {
                 for (InetAddress addr : InetAddress.getAllByName(normalized)) {
                     String why = classify(addr);
                     if (why != null) {
-                        return Optional.of(deny(host, why + " (" + addr.getHostAddress() + ")",
-                                allowlist));
+                        return Optional.of(deny(label, host,
+                                why + " (" + addr.getHostAddress() + ")", allowlist));
                     }
                 }
             } catch (UnknownHostException ex) {
-                return Optional.of("asUrl host " + host + " does not resolve");
+                return Optional.of(label + " host " + host + " does not resolve");
             }
         }
         return Optional.empty();
+    }
+
+    /** Host from {@code host[:port][;params]} after the {@code @} in a SIP URI. */
+    static String extractSipHost(String hostPortParams) {
+        if (hostPortParams == null || hostPortParams.isBlank()) {
+            return "";
+        }
+        String h = hostPortParams.trim();
+        int semi = h.indexOf(';');
+        if (semi > 0) {
+            h = h.substring(0, semi);
+        }
+        if (h.startsWith("[")) {
+            int close = h.indexOf(']');
+            if (close > 1) {
+                return h.substring(1, close);
+            }
+        }
+        int colon = h.indexOf(':');
+        if (colon > 0) {
+            return h.substring(0, colon);
+        }
+        return h;
     }
 
     /** @return why the address is off-limits, or null when it is a normal routable host. */
@@ -132,8 +221,8 @@ public class AsUrlValidator {
         return b.length == 4 && (b[0] & 0xFF) == 100 && (b[1] & 0xFF) >= 64 && (b[1] & 0xFF) <= 127;
     }
 
-    private static String deny(String host, String why, Set<String> allowlist) {
-        return "asUrl host " + host + " is " + why
+    private static String deny(String label, String host, String why, Set<String> allowlist) {
+        return label + " host " + host + " is " + why
                 + " — refused as SSRF. Allow it with ussd.as.url.host-allowlist"
                 + (allowlist.isEmpty() ? "" : " (current: " + String.join(",", allowlist) + ")")
                 + " or ussd.as.url.allow-private-hosts=true.";

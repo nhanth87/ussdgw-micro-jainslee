@@ -6,7 +6,11 @@ Short memory for Digicom footguns. Prefer this + OTA peer [`lessons.md`](../../.
 
 | Mistake | Rule | Detail |
 |---------|------|--------|
+| Treating SIP listen as AS trunk UP | Trunks are peer+URI rows; NI requires matched **enabled** trunk. Soft free-text → pull-reply first (`SipUssiSbb`); SIP park via `AsPullRouter.armSipPullBridge`. From-host ≠ digest auth. | [sip-trunk.md](../as-contract/sip-trunk.md) |
+| Assuming V6 `short_code` UNIQUE alone covers app-user multi-rule | Do not assume V6 alone — use **V8** composite UNIQUE `(short_code, app_username)`; unbound `app_username` is stored as `''`, not NULL. | `V8__short_code_app_username_unique.sql` |
 | Stuffing long walls into **`AGENTS.md`** | Keep root thin — link `docs/agents/*`. | [README.md](README.md) |
+| Equating **portal TENANT** login with **API app-user** | Portal keeps **`username === tenantId`**. NI keys live in **`ussd_app_user`** (A/B/C). | `AppUserService` · `/admin/app-users` |
+| Letting TENANT **Start** campaigns | TENANT **create/submit** on `/admin/my-campaigns`; ADMIN/OPS **approve** on `/admin/campaigns` (`PENDING_APPROVAL` → `RUNNING`). `start()` must **not** promote `PENDING_APPROVAL`. | `CampaignService` |
 | Using **Java 8/11/17/21** or fixing compile by lowering release | **Java 25 only** (mise `zulu-25`). | OTA [packaging.md](../../../../ota-service/ota-sim-push/docs/agents/packaging.md) |
 | Seeing **`bcprov-jdk18on`** / APT **`RELEASE_8`** → switch to JDK 8 | Product-line name / upstream metadata — keep release=25. | OTA packaging |
 | Shipping an **uber-jar** or `java -jar ussdgw-app.jar` alone | Fast-jar: `quarkus-run.jar` + root `ussdgw-app.jar` + `lib/`. Start via `./run.sh`. | [skills.md](skills.md) |

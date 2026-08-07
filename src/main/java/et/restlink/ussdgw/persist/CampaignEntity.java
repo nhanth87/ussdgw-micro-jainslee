@@ -48,4 +48,16 @@ public class CampaignEntity extends PanacheEntityBase {
 
     @Column(name = "updated_at", nullable = false)
     public Instant updatedAt = Instant.now();
+
+    @Column(name = "created_by", length = 64)
+    public String createdBy;
+
+    @Column(name = "submitted_at")
+    public Instant submittedAt;
+
+    @Column(name = "reviewed_by", length = 64)
+    public String reviewedBy;
+
+    @Column(name = "review_note", length = 512)
+    public String reviewNote;
 }

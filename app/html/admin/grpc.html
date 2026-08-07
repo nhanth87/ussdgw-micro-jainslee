@@ -60,6 +60,11 @@
           Status only — JSON AsRequest/AsResponse with the same SYNC / ASYNC_ACK / BRIDGE modes as HTTP.
           No config form on this page.
         </p>
+        <div class="rounded-lg border border-signal/40 bg-signal/5 p-4 mb-4">
+          <h3 class="text-sm font-semibold uppercase tracking-wider text-signal">gRPC push endpoint</h3>
+          <p class="mt-2 font-mono text-sm text-slate-100">{{GRPC_PUSH_ENDPOINT}}</p>
+          <p class="mt-1 font-mono text-xs text-ink-mute">listen port={{GRPC_PORT}} · AS Pull method as configured on routing rules</p>
+        </div>
         <div class="mb-3 flex flex-wrap items-end justify-between gap-3">
           <h3 class="text-sm font-semibold text-slate-100">Live status</h3>
           <button type="button"

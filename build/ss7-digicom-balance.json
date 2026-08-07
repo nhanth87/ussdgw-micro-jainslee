@@ -1,0 +1,121 @@
+{
+  "stackName": "ra-jss7",
+  "protocols": {
+    "map": true,
+    "cap": false
+  },
+  "sctp": {
+    "connectDelay": 10000,
+    "workerThreads": 8,
+    "links": [
+      {
+        "name": "L1-BP-1404",
+        "type": "client",
+        "channel": "sctp",
+        "local": "172.16.144.163:2011",
+        "peer": "10.177.55.241:2501",
+        "localSecondary": []
+      },
+      {
+        "name": "L2-BP-1403",
+        "type": "client",
+        "channel": "sctp",
+        "local": "172.16.144.163:2019",
+        "peer": "10.177.54.241:2502",
+        "localSecondary": []
+      }
+    ]
+  },
+  "m3ua": {
+    "as": [
+      {
+        "name": "AS-BP-1404",
+        "mode": "loadshare",
+        "functionality": "ipsp",
+        "ipsp": "client",
+        "routingContext": 101,
+        "links": [
+          "L1-BP-1404"
+        ]
+      },
+      {
+        "name": "AS-BP-1403",
+        "mode": "loadshare",
+        "functionality": "ipsp",
+        "ipsp": "client",
+        "routingContext": 101,
+        "links": [
+          "L2-BP-1403"
+        ]
+      }
+    ],
+    "routes": [
+      {
+        "to": {
+          "dpc": 1404,
+          "opc": 1470
+        },
+        "via": "AS-BP-1404"
+      },
+      {
+        "to": {
+          "dpc": 1403,
+          "opc": 1470
+        },
+        "via": "AS-BP-1403"
+      }
+    ]
+  },
+  "sccp": {
+    "localPoints": [
+      {
+        "pc": 1470,
+        "networkIndicator": "national",
+        "networkId": 0,
+        "reachablePointCodes": [
+          1404,
+          1403
+        ]
+      }
+    ],
+    "routing": [
+      {
+        "from": "remote",
+        "match": {
+          "gt": "*"
+        },
+        "to": {
+          "pc": 1470
+        },
+        "mask": "K"
+      },
+      {
+        "from": "local",
+        "match": {
+          "gt": "*"
+        },
+        "to": {
+          "pc": 1404
+        },
+        "mask": "K"
+      }
+    ]
+  },
+  "tcap": {
+    "dialogIdleTimeout": 60000,
+    "invokeTimeout": 30000,
+    "maxDialogs": 50000
+  },
+  "services": [
+    {
+      "name": "primary",
+      "ssn": 8,
+      "protocol": "map"
+    },
+    {
+      "name": "hlr",
+      "ssn": 6,
+      "protocol": "map"
+    }
+  ]
+}

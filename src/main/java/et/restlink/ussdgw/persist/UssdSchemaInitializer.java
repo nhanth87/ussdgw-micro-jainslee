@@ -43,24 +43,36 @@ public class UssdSchemaInitializer {
             "ussd_cdr",
             "ussd_campaign",
             "ussd_campaign_target",
-            "ussd_config"
+            "ussd_config",
+            "ussd_app_user",
+            "ussd_sip_trunk"
     );
 
     static final List<RequiredColumn> REQUIRED_COLUMNS = List.of(
             new RequiredColumn("ussd_short_code", "tenant_id"),
             new RequiredColumn("ussd_short_code", "network_id"),
             new RequiredColumn("ussd_short_code", "mark"),
+            new RequiredColumn("ussd_short_code", "app_username"),
             new RequiredColumn("ussd_tenant", "http_api_key"),
             new RequiredColumn("ussd_tenant", "network_id"),
             new RequiredColumn("ussd_tenant", "max_tps"),
             new RequiredColumn("ussd_tenant", "http_as_wire_format"),
+            new RequiredColumn("ussd_tenant", "sip_trunk_id"),
             new RequiredColumn("ussd_admin_user", "role"),
             new RequiredColumn("ussd_admin_user", "tenant_id"),
             new RequiredColumn("ussd_cdr", "tenant_id"),
             new RequiredColumn("ussd_cdr", "origination_type"),
             new RequiredColumn("ussd_cdr", "gate_ms"),
             new RequiredColumn("ussd_cdr", "observed_ewma_ms"),
-            new RequiredColumn("ussd_campaign", "tenant_id")
+            new RequiredColumn("ussd_campaign", "tenant_id"),
+            new RequiredColumn("ussd_campaign", "created_by"),
+            new RequiredColumn("ussd_campaign", "submitted_at"),
+            new RequiredColumn("ussd_campaign", "reviewed_by"),
+            new RequiredColumn("ussd_campaign", "review_note"),
+            new RequiredColumn("ussd_app_user", "tenant_id"),
+            new RequiredColumn("ussd_app_user", "api_key_hash"),
+            new RequiredColumn("ussd_sip_trunk", "peer_host"),
+            new RequiredColumn("ussd_sip_trunk", "inbound_body")
     );
 
     static final List<String> MIGRATIONS = List.of(
@@ -68,7 +80,10 @@ public class UssdSchemaInitializer {
             "V2__tenant_http_as_wire_format.sql",
             "V3__short_code_mark.sql",
             "V4__config_value_unicode.sql",
-            "V5__cdr_gate_metrics.sql"
+            "V5__cdr_gate_metrics.sql",
+            "V6__app_user_routing_campaign.sql",
+            "V7__sip_trunk.sql",
+            "V8__short_code_app_username_unique.sql"
     );
 
     @Inject

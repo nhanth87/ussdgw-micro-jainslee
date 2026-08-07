@@ -112,6 +112,11 @@
             </select>
           </div>
           <div>
+            <label class="block text-xs uppercase tracking-wider text-ink-mute">SIP trunk</label>
+            <select name="sipTrunkId" class="mt-1 w-full rounded-md border border-ink-line bg-ink px-3 py-2 text-sm focus:border-signal focus:outline-none">{{SIP_TRUNK_OPTS}}</select>
+            <p class="mt-1 text-xs text-ink-mute">AS-facing trunk for RuleType.SIP pull / NI push ownership</p>
+          </div>
+          <div>
             <label class="block text-xs uppercase tracking-wider text-ink-mute">enabled</label>
             <select name="enabled" class="mt-1 w-full rounded-md border border-ink-line bg-ink px-3 py-2 text-sm focus:border-signal focus:outline-none">
               <option value="true">true</option>
@@ -156,6 +161,7 @@
                 <th class="px-3 py-2.5 font-medium">name</th>
                 <th class="px-3 py-2.5 font-medium">networkId</th>
                 <th class="px-3 py-2.5 font-medium">wire</th>
+                <th class="px-3 py-2.5 font-medium">sipTrunk</th>
                 <th class="px-3 py-2.5 font-medium">SMPP</th>
                 <th class="px-3 py-2.5 font-medium">HTTP key</th>
                 <th class="px-3 py-2.5 font-medium">tps</th>

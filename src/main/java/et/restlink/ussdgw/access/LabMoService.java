@@ -70,9 +70,11 @@ public class LabMoService {
         session.setTenantId(tid);
         session.setOriginationType(plane);
         session.setDialogAlive(false);
-        session.setAdaptiveBridgeArm(rule.ruleType() == RuleType.HTTP
-                ? config.httpClientBridgeEnabled()
-                : config.grpcClientBridgeEnabled());
+        session.setAdaptiveBridgeArm(switch (rule.ruleType()) {
+            case HTTP -> config.httpClientBridgeEnabled();
+            case GRPC -> config.grpcClientBridgeEnabled();
+            case SIP -> config.bridgeEnabled();
+        });
         store.put(session);
         bridge.startAwaitingAs(session);
         bumpMo(plane);

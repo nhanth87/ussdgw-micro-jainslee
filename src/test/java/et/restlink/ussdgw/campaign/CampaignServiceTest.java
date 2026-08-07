@@ -9,6 +9,7 @@ import java.util.Set;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class CampaignServiceTest {
     @Test
@@ -74,6 +75,20 @@ class CampaignServiceTest {
         // create→start uses DRAFT→RUNNING; cancel from any non-terminal → CANCELLED
         assertThat(CampaignStatus.DRAFT.name()).isEqualTo("DRAFT");
         assertThat(CampaignStatus.RUNNING.name()).isEqualTo("RUNNING");
+    }
+
+    @Test
+    void startRejectsPendingApprovalBypass() {
+        assertThatThrownBy(() -> CampaignService.assertMayStart(CampaignStatus.PENDING_APPROVAL.name()))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("approve()");
+    }
+
+    @Test
+    void startAllowsDraftPausedRunning() {
+        CampaignService.assertMayStart(CampaignStatus.DRAFT.name());
+        CampaignService.assertMayStart(CampaignStatus.PAUSED.name());
+        CampaignService.assertMayStart(CampaignStatus.RUNNING.name());
     }
 
     private static CampaignTargetEntity pending(String msisdn) {

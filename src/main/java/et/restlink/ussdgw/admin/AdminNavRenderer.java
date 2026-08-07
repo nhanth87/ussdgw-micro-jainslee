@@ -25,6 +25,22 @@ public class AdminNavRenderer {
 
     /** Full ADMIN/OPS nav — USSD pages only (no fleet/CAP/OTA portal). */
     public static String adminNavLinks(boolean loggedIn) {
+        return adminNavLinks(null, loggedIn);
+    }
+
+    public static String adminNavLinks(AdminAuthService.Principal who, boolean loggedIn) {
+        if (who != null && who.isTenantScoped()) {
+            return """
+                    <a class="hover:text-signal" href="/admin">Dashboard</a>
+                    <a class="hover:text-signal" href="/admin/routing">Routing</a>
+                    <a class="hover:text-signal" href="/admin/my-campaigns">My Campaigns</a>
+                    <a class="hover:text-signal" href="/admin/app-users">App users</a>
+                    <a class="hover:text-signal" href="/admin/cdr">CDR</a>
+                    <a class="hover:text-signal" href="/admin/http">HTTP</a>
+                    %s
+                    %s
+                    """.formatted(themeToggleHtml(), authNavHtml(loggedIn)).trim();
+        }
         return """
                 <a class="hover:text-signal" href="/admin">Dashboard</a>
                 <a class="hover:text-signal" href="/telemetry/">Monitor Hub</a>
@@ -39,6 +55,7 @@ public class AdminNavRenderer {
                 <a class="hover:text-signal" href="/admin/cdr">CDR</a>
                 <a class="hover:text-signal" href="/admin/tenants">Tenants</a>
                 <a class="hover:text-signal" href="/admin/users">Users</a>
+                <a class="hover:text-signal" href="/admin/app-users">App users</a>
                 <a class="hover:text-signal" href="/admin/diameter">Diameter</a>
                 <a class="hover:text-signal" href="/admin/sip">SIP</a>
                 <a class="hover:text-signal" href="/admin/lab-mo">Lab MO</a>
@@ -48,8 +65,13 @@ public class AdminNavRenderer {
     }
 
     public Map<String, String> adminPageVars(boolean loggedIn, Map<String, String> extra) {
+        return adminPageVars(null, loggedIn, extra);
+    }
+
+    public Map<String, String> adminPageVars(AdminAuthService.Principal who, boolean loggedIn,
+                                             Map<String, String> extra) {
         Map<String, String> m = new LinkedHashMap<>();
-        m.put("{{NAV_LINKS}}", adminNavLinks(loggedIn));
+        m.put("{{NAV_LINKS}}", adminNavLinks(who, loggedIn));
         m.put("{{AUTH_NAV}}", authNavHtml(loggedIn));
         m.put("{{SUCCESS_BANNER}}", "");
         m.put("{{NOTICE}}", "");

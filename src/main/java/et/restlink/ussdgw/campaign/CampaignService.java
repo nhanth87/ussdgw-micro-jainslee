@@ -21,7 +21,7 @@ import org.apache.logging.log4j.Logger;
 import org.eclipse.microprofile.config.inject.ConfigProperty;
 
 /**
- * NI USSD push campaigns — create / start / pause / cancel / claim / complete.
+ * NI USSD push campaigns — create / submit / approve / reject / start / pause / cancel / claim.
  */
 @ApplicationScoped
 public class CampaignService {
@@ -48,6 +48,12 @@ public class CampaignService {
     @Transactional
     public CampaignEntity create(String name, String tenantId, String text, String alphabet,
                                  int networkId, int maxTps, String msisdnBlob) {
+        return create(name, tenantId, text, alphabet, networkId, maxTps, msisdnBlob, null);
+    }
+
+    @Transactional
+    public CampaignEntity create(String name, String tenantId, String text, String alphabet,
+                                 int networkId, int maxTps, String msisdnBlob, String createdBy) {
         if (name == null || name.isBlank()) {
             throw new IllegalArgumentException("name required");
         }
@@ -82,6 +88,7 @@ public class CampaignService {
         c.maxTps = maxTps <= 0 ? 5 : Math.min(maxTps, 100);
         c.sentCount = 0;
         c.failCount = 0;
+        c.createdBy = blank(createdBy);
         c.createdAt = now;
         c.updatedAt = now;
         c.persist();
@@ -95,20 +102,85 @@ public class CampaignService {
             t.updatedAt = now;
             t.persist();
         }
-        LOG.info("Campaign created id={} targets={} tenant={}", c.id, msisdns.size(), tid);
+        LOG.info("Campaign created id={} targets={} tenant={} by={}", c.id, msisdns.size(), tid, createdBy);
         return c;
     }
 
+    /** TENANT/OPS: DRAFT|REJECTED → PENDING_APPROVAL. */
+    @Transactional
+    public CampaignEntity submit(UUID id, String submittedBy) {
+        CampaignEntity c = require(id);
+        if (!CampaignStatus.DRAFT.name().equals(c.status)
+                && !CampaignStatus.REJECTED.name().equals(c.status)) {
+            throw new IllegalStateException("submit only from DRAFT or REJECTED (have " + c.status + ")");
+        }
+        c.status = CampaignStatus.PENDING_APPROVAL.name();
+        c.submittedAt = Instant.now();
+        c.updatedAt = c.submittedAt;
+        if (blank(submittedBy) != null && c.createdBy == null) {
+            c.createdBy = submittedBy.trim();
+        }
+        c.reviewNote = null;
+        return c;
+    }
+
+    /** ADMIN/OPS: PENDING_APPROVAL → RUNNING. */
+    @Transactional
+    public CampaignEntity approve(UUID id, String reviewedBy, String note) {
+        CampaignEntity c = require(id);
+        if (!CampaignStatus.PENDING_APPROVAL.name().equals(c.status)) {
+            throw new IllegalStateException("approve only from PENDING_APPROVAL (have " + c.status + ")");
+        }
+        c.status = CampaignStatus.RUNNING.name();
+        c.reviewedBy = blank(reviewedBy);
+        c.reviewNote = blank(note);
+        c.updatedAt = Instant.now();
+        return c;
+    }
+
+    /** ADMIN/OPS: PENDING_APPROVAL → REJECTED (or DRAFT when note empty — keep REJECTED). */
+    @Transactional
+    public CampaignEntity reject(UUID id, String reviewedBy, String note) {
+        CampaignEntity c = require(id);
+        if (!CampaignStatus.PENDING_APPROVAL.name().equals(c.status)) {
+            throw new IllegalStateException("reject only from PENDING_APPROVAL (have " + c.status + ")");
+        }
+        c.status = CampaignStatus.REJECTED.name();
+        c.reviewedBy = blank(reviewedBy);
+        c.reviewNote = blank(note);
+        c.updatedAt = Instant.now();
+        return c;
+    }
+
+    /**
+     * ADMIN/OPS start: DRAFT (legacy) or PAUSED → RUNNING.
+     * {@link CampaignStatus#PENDING_APPROVAL} must go through {@link #approve} — start never bypasses.
+     */
     @Transactional
     public CampaignEntity start(UUID id) {
         CampaignEntity c = require(id);
-        if (CampaignStatus.CANCELLED.name().equals(c.status)
-                || CampaignStatus.COMPLETED.name().equals(c.status)) {
-            throw new IllegalStateException("cannot start " + c.status);
-        }
+        assertMayStart(c.status);
         c.status = CampaignStatus.RUNNING.name();
         c.updatedAt = Instant.now();
         return c;
+    }
+
+    /** Package-visible for unit tests — start must not promote PENDING_APPROVAL. */
+    static void assertMayStart(String status) {
+        if (CampaignStatus.PENDING_APPROVAL.name().equals(status)) {
+            throw new IllegalStateException(
+                    "use approve() for PENDING_APPROVAL — start cannot bypass approval");
+        }
+        if (CampaignStatus.CANCELLED.name().equals(status)
+                || CampaignStatus.COMPLETED.name().equals(status)
+                || CampaignStatus.REJECTED.name().equals(status)) {
+            throw new IllegalStateException("cannot start " + status);
+        }
+        if (!CampaignStatus.DRAFT.name().equals(status)
+                && !CampaignStatus.PAUSED.name().equals(status)
+                && !CampaignStatus.RUNNING.name().equals(status)) {
+            throw new IllegalStateException("cannot start " + status);
+        }
     }
 
     @Transactional
@@ -143,6 +215,12 @@ public class CampaignService {
     }
 
     @Transactional
+    public List<CampaignEntity> listPendingApproval() {
+        return CampaignEntity.list("status = ?1 order by submittedAt asc, createdAt asc",
+                CampaignStatus.PENDING_APPROVAL.name());
+    }
+
+    @Transactional
     public Optional<CampaignEntity> byId(UUID id) {
         return CampaignEntity.findByIdOptional(id);
     }
@@ -152,10 +230,6 @@ public class CampaignService {
         return CampaignTargetEntity.count("campaignId = ?1 and status = ?2", campaignId, status);
     }
 
-    /**
-     * Claim up to {@code limit} PENDING targets across RUNNING campaigns.
-     * Skips MSISDNs that already have a SENDING target (busy-UE).
-     */
     @Transactional
     public List<ClaimedTarget> claim(int limit) {
         int lim = Math.min(Math.max(1, limit), claimLimit());
@@ -231,10 +305,6 @@ public class CampaignService {
                 "msisdn = ?1 and status = ?2", msisdn, CampaignTargetStatus.SENDING.name()) > 0;
     }
 
-    /**
-     * Pick PENDING targets up to {@code budget}, skipping busy MSISDNs.
-     * Also skips a second PENDING for an MSISDN already selected in this batch.
-     */
     static List<CampaignTargetEntity> selectClaimable(
             List<CampaignTargetEntity> pending,
             java.util.function.Predicate<String> busyUe,
@@ -252,17 +322,14 @@ public class CampaignService {
         return picked;
     }
 
-    /** Allowed campaign status after cancel. */
     static String cancelledStatus() {
         return CampaignStatus.CANCELLED.name();
     }
 
-    /** PENDING targets become FAILED when campaign is cancelled. */
     static String cancelledTargetStatus() {
         return CampaignTargetStatus.FAILED.name();
     }
 
-    /** Claim CAS: PENDING → SENDING. */
     static String claimedTargetStatus() {
         return CampaignTargetStatus.SENDING.name();
     }
@@ -273,7 +340,6 @@ public class CampaignService {
         return c;
     }
 
-    /** Parse newline/comma/space separated MSISDNs; digits only; dedupe preserve order. */
     public static List<String> parseMsisdns(String blob) {
         LinkedHashSet<String> set = new LinkedHashSet<>();
         if (blob == null || blob.isBlank()) return List.of();

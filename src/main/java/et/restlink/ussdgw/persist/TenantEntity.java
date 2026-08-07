@@ -45,6 +45,10 @@ public class TenantEntity extends PanacheEntityBase {
     @Column(name = "http_as_wire_format", length = 8, nullable = false)
     public String httpAsWireFormat = "XML";
 
+    /** Preferred AS-facing SIP trunk for MO pull / NI push over SIP. */
+    @Column(name = "sip_trunk_id", length = 64)
+    public String sipTrunkId;
+
     @Column(name = "created_at", nullable = false)
     public Instant createdAt = Instant.now();
 

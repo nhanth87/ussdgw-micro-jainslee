@@ -1,0 +1,25 @@
+[Unit]
+Description=Digicom-ET jSS7 USSD simulator (MAP peer for USSDGW)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=app
+Group=app
+WorkingDirectory=/home/app/ota-push-services/simulator-ss7/bin
+Environment=HOME=/home/app
+Environment=PATH=/home/app/.local/bin:/home/app/.local/share/mise/installs/java/zulu-25.36.15.0/bin:/usr/bin:/bin
+Environment=JAVA_HOME=/home/app/.local/share/mise/installs/java/zulu-25.36.15.0
+# HTTP GUI / management on 8089; SCTP peer ports come from sim data XML (8014→GW 8013).
+ExecStartPre=/bin/bash -lc 'cd /home/app/ota-push-services/simulator-ss7/bin && ln -sfn ../data/main_simulator2.xml main_simulator2.xml'
+ExecStart=/home/app/ota-push-services/simulator-ss7/bin/run.sh core -n main -t 8089
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=45
+KillMode=mixed
+StandardOutput=append:/tmp/ss7sim.service.log
+StandardError=append:/tmp/ss7sim.service.log
+
+[Install]
+WantedBy=multi-user.target

@@ -4,18 +4,18 @@ import et.restlink.ussdgw.campaign.CampaignService;
 import et.restlink.ussdgw.campaign.CampaignStatus;
 import et.restlink.ussdgw.campaign.CampaignTargetStatus;
 import et.restlink.ussdgw.persist.CampaignEntity;
-import et.restlink.ussdgw.persist.TenantEntity;
-import et.restlink.ussdgw.tenant.TenantService;
 
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
 /**
- * HTMX admin panel for NI USSD push campaigns.
+ * Admin campaign approvals queue (ADMIN/OPS) — no create form.
+ * TENANT create/submit lives on {@code /admin/my-campaigns}.
  */
 @ApplicationScoped
 public class AdminCampaignHandler {
@@ -23,51 +23,39 @@ public class AdminCampaignHandler {
             "rounded-md border border-ink-line px-2 py-1 text-xs text-ink-mute hover:border-signal hover:text-signal";
 
     @Inject CampaignService campaigns;
-    @Inject TenantService tenants;
 
     public AdminHttpHandler.HttpReply get(AdminAuthService.Principal who) {
         return AdminHttpHandler.HttpReply.html(rowsHtml(who)).withHeader("Vary", "HX-Request");
     }
 
-    /** Disk-template seed for {@code campaigns.html}. */
     public Map<String, String> pageVars(AdminAuthService.Principal who) {
         Map<String, String> m = new LinkedHashMap<>();
         m.put("{{ROWS}}", rowsHtml(who));
-        m.put("{{TENANT_DATALIST}}", tenantDatalist(who));
+        m.put("{{PENDING_ROWS}}", pendingRowsHtml(who));
         return m;
     }
 
     public AdminHttpHandler.HttpReply post(String body, AdminAuthService.Principal who) {
+        if (who != null && who.isTenantScoped()) {
+            return AdminHttpHandler.HttpReply.text(403,
+                    "forbidden — TENANT uses /admin/my-campaigns");
+        }
         Map<String, String> f = AdminCatalogHandler.parseForm(body);
-        String action = f.getOrDefault("action", "create");
+        String action = f.getOrDefault("action", "").trim();
         try {
-            if ("create".equalsIgnoreCase(action)) {
-                String tenantId = f.getOrDefault("tenantId", "").trim();
-                if (who != null && who.isTenantScoped()) {
-                    tenantId = who.tenantId();
-                }
-                CampaignEntity c = campaigns.create(
-                        f.get("name"),
-                        tenantId,
-                        f.get("text"),
-                        f.getOrDefault("alphabet", "AUTO"),
-                        parseInt(f.get("networkId"), 0),
-                        parseInt(f.get("maxTps"), 5),
-                        f.get("msisdns"));
-                return rowsReply(who, "created " + c.id, "ok");
-            }
             UUID id = UUID.fromString(f.getOrDefault("id", "").trim());
-            if (who != null && who.isTenantScoped()) {
-                CampaignEntity c = campaigns.byId(id).orElseThrow(
-                        () -> new IllegalArgumentException("not found"));
-                if (!who.tenantId().equals(c.tenantId)) {
-                    return AdminHttpHandler.HttpReply.text(403, "forbidden");
-                }
+            String reviewer = who == null ? "admin" : nullToEmpty(who.username());
+            if (reviewer.isBlank()) {
+                reviewer = who == null ? "admin" : who.role();
             }
             switch (action.toLowerCase()) {
+                case "approve" -> campaigns.approve(id, reviewer, f.get("note"));
+                case "reject" -> campaigns.reject(id, reviewer, f.get("note"));
                 case "start" -> campaigns.start(id);
                 case "pause" -> campaigns.pause(id);
                 case "cancel" -> campaigns.cancel(id);
+                case "create" -> throw new IllegalArgumentException(
+                        "create is on /admin/my-campaigns (TENANT) only");
                 default -> throw new IllegalArgumentException("unknown action: " + action);
             }
             return rowsReply(who, action + " ok", "ok");
@@ -78,50 +66,69 @@ public class AdminCampaignHandler {
 
     private AdminHttpHandler.HttpReply rowsReply(AdminAuthService.Principal who,
                                                  String message, String kind) {
-        return AdminHttpHandler.HttpReply.html(rowsHtml(who))
+        String html = "<div id=\"pending-rows\" hx-swap-oob=\"innerHTML\">"
+                + pendingRowsHtml(who) + "</div>" + rowsHtml(who);
+        return AdminHttpHandler.HttpReply.html(html)
                 .withHeader("HX-Trigger",
                         "{\"ussdToast\":{\"message\":" + jsonStr(message)
                                 + ",\"kind\":" + jsonStr(kind) + "}}")
                 .withHeader("Vary", "HX-Request");
     }
 
+    private String pendingRowsHtml(AdminAuthService.Principal who) {
+        if (who != null && who.isTenantScoped()) {
+            return "<tr><td colspan=\"6\" class=\"px-3 py-4 text-ink-mute\">N/A for TENANT</td></tr>";
+        }
+        StringBuilder sb = new StringBuilder();
+        for (CampaignEntity c : campaigns.listPendingApproval()) {
+            long pending = campaigns.targetCount(c.id, CampaignTargetStatus.PENDING.name());
+            sb.append("<tr><td>").append(esc(c.name)).append("</td><td>")
+                    .append(esc(c.tenantId)).append("</td><td>")
+                    .append(esc(c.createdBy)).append("</td><td>")
+                    .append(esc(String.valueOf(c.submittedAt))).append("</td><td>")
+                    .append(pending).append("</td><td>");
+            actionBtn(sb, c.id, "approve", "Approve");
+            actionBtn(sb, c.id, "reject", "Reject");
+            sb.append("</td></tr>");
+        }
+        if (sb.isEmpty()) {
+            sb.append("<tr><td colspan=\"6\" class=\"px-3 py-4 text-ink-mute\">No pending approvals</td></tr>");
+        }
+        return sb.toString();
+    }
+
     private String rowsHtml(AdminAuthService.Principal who) {
         StringBuilder sb = new StringBuilder();
         String scope = who != null && who.isTenantScoped() ? who.tenantId() : null;
-        for (CampaignEntity c : campaigns.list(scope)) {
+        List<CampaignEntity> list = campaigns.list(scope);
+        for (CampaignEntity c : list) {
             long pending = campaigns.targetCount(c.id, CampaignTargetStatus.PENDING.name());
             sb.append("<tr><td>").append(esc(c.name)).append("</td><td>")
                     .append(esc(c.tenantId)).append("</td><td>").append(esc(c.status))
                     .append("</td><td>").append(c.sentCount).append('/').append(c.failCount)
                     .append("</td><td>").append(pending).append("</td><td>");
-            if (CampaignStatus.DRAFT.name().equals(c.status)
-                    || CampaignStatus.PAUSED.name().equals(c.status)) {
-                actionBtn(sb, c.id, "start", "Start");
-            }
-            if (CampaignStatus.RUNNING.name().equals(c.status)) {
-                actionBtn(sb, c.id, "pause", "Pause");
-            }
-            if (!CampaignStatus.CANCELLED.name().equals(c.status)
-                    && !CampaignStatus.COMPLETED.name().equals(c.status)) {
-                actionBtn(sb, c.id, "cancel", "Cancel");
+            if (who == null || who.isAdminOrOps()) {
+                if (CampaignStatus.PENDING_APPROVAL.name().equals(c.status)) {
+                    actionBtn(sb, c.id, "approve", "Approve");
+                    actionBtn(sb, c.id, "reject", "Reject");
+                }
+                if (CampaignStatus.PAUSED.name().equals(c.status)
+                        || CampaignStatus.DRAFT.name().equals(c.status)) {
+                    actionBtn(sb, c.id, "start", "Start");
+                }
+                if (CampaignStatus.RUNNING.name().equals(c.status)) {
+                    actionBtn(sb, c.id, "pause", "Pause");
+                }
+                if (!CampaignStatus.CANCELLED.name().equals(c.status)
+                        && !CampaignStatus.COMPLETED.name().equals(c.status)) {
+                    actionBtn(sb, c.id, "cancel", "Cancel");
+                }
             }
             sb.append("</td></tr>");
         }
         if (sb.isEmpty()) {
             sb.append("<tr><td colspan=\"6\" class=\"px-3 py-4 text-ink-mute\">No campaigns</td></tr>");
         }
-        return sb.toString();
-    }
-
-    private String tenantDatalist(AdminAuthService.Principal who) {
-        if (who != null && who.isTenantScoped()) {
-            return "";
-        }
-        StringBuilder sb = new StringBuilder("<datalist id=\"tenant-ids\">");
-        for (TenantEntity t : tenants.list()) {
-            sb.append("<option value=\"").append(esc(t.tenantId)).append("\"/>");
-        }
-        sb.append("</datalist>");
         return sb.toString();
     }
 
@@ -132,11 +139,6 @@ public class AdminCampaignHandler {
                 .append("<input type=\"hidden\" name=\"id\" value=\"").append(id).append("\"/>")
                 .append("<button type=\"submit\" class=\"").append(DEL_BTN).append("\">")
                 .append(label).append("</button></form> ");
-    }
-
-    private static int parseInt(String s, int def) {
-        if (s == null || s.isBlank()) return def;
-        try { return Integer.parseInt(s.trim()); } catch (NumberFormatException e) { return def; }
     }
 
     private static String nullToEmpty(String s) {

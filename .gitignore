@@ -21,3 +21,7 @@ tools/as-node/node_modules
 # Lab SS7 sim peer XML (keep; root data/ is for app DB)
 !tools/ss7-simulator/data/
 !tools/ss7-simulator/data/**
+
+# Lab M3UA captures (Digicom)
+build/pcap/
+.factorypath

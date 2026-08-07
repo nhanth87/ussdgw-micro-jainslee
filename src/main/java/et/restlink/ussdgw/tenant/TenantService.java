@@ -60,6 +60,15 @@ public class TenantService {
                                boolean enabled, String httpApiKey, String smppSystemId,
                                String smppPasswordOrBlank, String asCallbackBase, int maxTps,
                                String httpAsWireFormat) {
+        return upsert(tenantId, displayName, networkId, enabled, httpApiKey,
+                smppSystemId, smppPasswordOrBlank, asCallbackBase, maxTps, httpAsWireFormat, null);
+    }
+
+    @Transactional
+    public TenantEntity upsert(String tenantId, String displayName, int networkId,
+                               boolean enabled, String httpApiKey, String smppSystemId,
+                               String smppPasswordOrBlank, String asCallbackBase, int maxTps,
+                               String httpAsWireFormat, String sipTrunkId) {
         String id = tenantId.trim();
         TenantEntity e = TenantEntity.findById(id);
         Instant now = Instant.now();
@@ -83,6 +92,9 @@ public class TenantService {
         e.asCallbackBase = blank(asCallbackBase);
         e.maxTps = maxTps <= 0 ? 50 : maxTps;
         e.httpAsWireFormat = normalizeHttpAsWireFormat(httpAsWireFormat);
+        if (sipTrunkId != null) {
+            e.sipTrunkId = blank(sipTrunkId);
+        }
         e.updatedAt = now;
         e.persist();
         return e;

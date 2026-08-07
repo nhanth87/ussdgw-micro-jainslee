@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
-  <title>Campaigns — Digicom-ET USSDGW</title>
+  <title>Campaign approvals — Digicom-ET USSDGW</title>
   <script>
     (function () {
       try {
@@ -43,7 +43,7 @@
     <div class="mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-3 px-4 py-3">
       <div class="flex items-center gap-3">
         <span class="h-8 w-1 rounded-full bg-signal" aria-hidden="true"></span>
-        <h1 class="text-lg font-semibold text-slate-100">Campaigns</h1>
+        <h1 class="text-lg font-semibold text-slate-100">Campaign approvals</h1>
       </div>
       <nav class="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-ink-mute">{{NAV_LINKS}}</nav>
     </div>
@@ -52,67 +52,33 @@
     {{NOTICE}}
     <div id="plane-notice"></div>
 
-    <p class="text-xs uppercase tracking-[0.25em] text-signal">Create / update</p>
-    <div class="ops-section-indent">
-      <section class="form-card mb-10 rounded-lg border border-ink-line bg-ink-panel/80 p-5">
-        <h2 class="mt-1 text-xl font-semibold text-slate-50">NI push campaign</h2>
-        <p class="mt-1 mb-4 text-sm text-slate-300">
-          Blast USSD NI text to an MSISDN list (SRI→MAP). Scheduler claims when SS7 is live.
-        </p>
-        <form method="post" action="/admin/campaigns" accept-charset="UTF-8" class="space-y-3"
-              hx-post="/admin/campaigns" hx-target="#campaign-rows" hx-swap="innerHTML" hx-indicator="#camp-ind">
-          <input type="hidden" name="action" value="create"/>
-          <div>
-            <label class="block text-xs uppercase tracking-wider text-ink-mute">Name</label>
-            <input name="name" required
-                   class="mt-1 w-full rounded-md border border-ink-line bg-ink px-3 py-2 text-sm focus:border-signal focus:outline-none focus:ring-1 focus:ring-signal/40"/>
-          </div>
-          <div>
-            <label class="block text-xs uppercase tracking-wider text-ink-mute">tenantId</label>
-            <input name="tenantId" list="tenant-ids" 
-                   class="mt-1 w-full rounded-md border border-ink-line bg-ink px-3 py-2 font-mono text-sm focus:border-signal focus:outline-none focus:ring-1 focus:ring-signal/40"/>
-          </div>
-          <div>
-            <label class="block text-xs uppercase tracking-wider text-ink-mute">networkId</label>
-            <input name="networkId" type="number" value="0" min="0"
-                   class="mt-1 w-full rounded-md border border-ink-line bg-ink px-3 py-2 font-mono text-sm focus:border-signal focus:outline-none focus:ring-1 focus:ring-signal/40"/>
-          </div>
-          <div>
-            <label class="block text-xs uppercase tracking-wider text-ink-mute">maxTps</label>
-            <input name="maxTps" type="number" value="5" min="1" max="100"
-                   class="mt-1 w-full rounded-md border border-ink-line bg-ink px-3 py-2 font-mono text-sm focus:border-signal focus:outline-none focus:ring-1 focus:ring-signal/40"/>
-          </div>
-          <div>
-            <label class="block text-xs uppercase tracking-wider text-ink-mute">alphabet</label>
-            <select name="alphabet" class="mt-1 w-full rounded-md border border-ink-line bg-ink px-3 py-2 text-sm focus:border-signal focus:outline-none focus:ring-1 focus:ring-signal/40">
-              <option>AUTO</option><option>UCS7</option><option>UCS8</option><option>UNICODE</option>
-            </select>
-          </div>
-          <div>
-            <label class="block text-xs uppercase tracking-wider text-ink-mute">Text (Unicode OK)</label>
-            <input name="text" required maxlength="182"
-                   class="mt-1 w-full rounded-md border border-ink-line bg-ink px-3 py-2 text-sm focus:border-signal focus:outline-none focus:ring-1 focus:ring-signal/40"/>
-          </div>
-          <div>
-            <label class="block text-xs uppercase tracking-wider text-ink-mute">MSISDNs (newline/comma)</label>
-            <textarea name="msisdns" rows="4" required accept-charset="UTF-8"
-                      class="mt-1 w-full rounded-md border border-ink-line bg-ink px-3 py-2 font-mono text-sm focus:border-signal focus:outline-none focus:ring-1 focus:ring-signal/40"></textarea>
-          </div>
-          <button type="submit" class="w-full rounded-md bg-signal py-2.5 text-sm font-semibold text-ink hover:bg-signal-dim">
-            Create draft
-          </button>
-          <span id="camp-ind" class="htmx-indicator text-xs font-mono text-ink-mute">saving…</span>
-        </form>
-        {{TENANT_DATALIST}}
-      </section>
+    <p class="text-xs uppercase tracking-[0.25em] text-signal">Pending approval</p>
+    <div class="ops-section-indent mb-10">
+      <p class="mb-3 text-sm text-slate-300">
+        TENANT creates drafts on <a class="text-signal hover:underline" href="/admin/my-campaigns">My Campaigns</a>.
+        ADMIN/OPS approve here — no create form on this page.
+      </p>
+      <div class="overflow-x-auto rounded-lg border border-ink-line">
+        <table class="w-full text-left text-sm">
+          <thead class="bg-ink-panel text-xs uppercase tracking-wider text-ink-mute">
+            <tr>
+              <th class="px-3 py-2.5 font-medium">Name</th>
+              <th class="px-3 py-2.5 font-medium">tenant</th>
+              <th class="px-3 py-2.5 font-medium">createdBy</th>
+              <th class="px-3 py-2.5 font-medium">submitted</th>
+              <th class="px-3 py-2.5 font-medium">pending</th>
+              <th class="px-3 py-2.5 font-medium"></th>
+            </tr>
+          </thead>
+          <tbody id="pending-rows"
+                 class="hx-table-live divide-y divide-ink-line font-mono text-xs [&_td]:px-3 [&_td]:py-2">{{PENDING_ROWS}}</tbody>
+        </table>
+      </div>
     </div>
 
     <div class="table-wrap">
-      <p class="text-xs uppercase tracking-[0.25em] text-signal">Directory</p>
+      <p class="text-xs uppercase tracking-[0.25em] text-signal">All campaigns</p>
       <div class="ops-section-indent">
-        <div class="mb-3 flex flex-wrap items-end justify-between gap-3">
-          <h2 class="mt-1 text-xl font-semibold text-slate-50">Campaigns</h2>
-        </div>
         <div class="overflow-x-auto rounded-lg border border-ink-line">
           <table class="w-full text-left text-sm">
             <thead class="bg-ink-panel text-xs uppercase tracking-wider text-ink-mute">
@@ -131,7 +97,6 @@
         </div>
       </div>
     </div>
-
   </main>
 </body>
 </html>

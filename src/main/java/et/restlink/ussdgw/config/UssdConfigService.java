@@ -18,6 +18,9 @@ public class UssdConfigService {
 
     @ConfigProperty(name = "ussd.admin.api-key", defaultValue = "ussd-admin")
     String adminApiKey;
+    /** Digicom seed: http://100.110.205.176:8088 — never publish bind 0.0.0.0. */
+    @ConfigProperty(name = "ussd.admin.public-base-url", defaultValue = "")
+    Optional<String> publicBaseUrlProp;
     @ConfigProperty(name = "ussd.bridge.enabled", defaultValue = "true")
     boolean bridgeEnabledProp;
     @ConfigProperty(name = "ussd.bridge.async-gate-timeout-ms", defaultValue = "7000")
@@ -136,6 +139,11 @@ public class UssdConfigService {
     }
 
     public String adminApiKey() { return adminApiKey; }
+
+    /** Operator-facing base URL for NI/gRPC push advertise (may be empty). */
+    public String publicBaseUrl() {
+        return str(RuntimeConfigStore.Keys.ADMIN_PUBLIC_BASE_URL, opt(publicBaseUrlProp));
+    }
 
     public boolean bridgeEnabled() {
         return bool(RuntimeConfigStore.Keys.BRIDGE_ENABLED, bridgeEnabledProp);

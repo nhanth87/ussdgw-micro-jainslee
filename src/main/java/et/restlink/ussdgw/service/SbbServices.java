@@ -21,6 +21,7 @@ import et.restlink.ussdgw.hlr.HlrResolvePolicy;
 import et.restlink.ussdgw.hlr.PendingHlrProxyRegistry;
 import et.restlink.ussdgw.access.DiameterUssdAccessAdapter;
 import et.restlink.ussdgw.access.SipUssiAccessAdapter;
+import et.restlink.ussdgw.sip.SipTrunkService;
 
 import com.microjainslee.core.MicroSleeContainer;
 
@@ -48,6 +49,7 @@ public class SbbServices {
     @Inject DiameterLocationClient diameterLocation;
     @Inject DiameterUssdAccessAdapter diameterAccess;
     @Inject SipUssiAccessAdapter sipAccess;
+    @Inject SipTrunkService sipTrunks;
     @Inject et.restlink.ussdgw.ra.smpp.SmppEndpointRegistry smppRegistry;
     @Inject TenantGuard tenantGuard;
     @Inject AsPullClient asPull;
@@ -85,6 +87,7 @@ public class SbbServices {
     public DiameterLocationClient diameterLocation() { return diameterLocation; }
     public DiameterUssdAccessAdapter diameterAccess() { return diameterAccess; }
     public SipUssiAccessAdapter sipAccess() { return sipAccess; }
+    public SipTrunkService sipTrunks() { return sipTrunks; }
     public et.restlink.ussdgw.ra.smpp.SmppEndpointRegistry smppRegistry() { return smppRegistry; }
     public TenantGuard tenantGuard() { return tenantGuard; }
     public AsPullClient asPull() { return asPull; }

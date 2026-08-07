@@ -237,9 +237,7 @@ public final class MapUssdParentSbb implements Sbb, SleeEventHandler {
         session.setTenantId(r.tenantId());
         session.setOriginationType(OriginationType.MAP);
         session.setLocalGt(MapDialogHelper.localGt(svc().config()));
-        session.setAdaptiveBridgeArm(r.ruleType() == RuleType.HTTP
-                ? svc().config().httpClientBridgeEnabled()
-                : svc().config().grpcClientBridgeEnabled());
+        session.setAdaptiveBridgeArm(adaptiveBridgeArmFor(r.ruleType()));
         svc().store().put(session);
         svc().bridge().startAwaitingAs(session);
 
@@ -285,9 +283,7 @@ public final class MapUssdParentSbb implements Sbb, SleeEventHandler {
             return "tenant-reject continue reason=" + admit.reason();
         }
         s.nextGeneration();
-        s.setAdaptiveBridgeArm(r.ruleType() == RuleType.HTTP
-                ? svc().config().httpClientBridgeEnabled()
-                : svc().config().grpcClientBridgeEnabled());
+        s.setAdaptiveBridgeArm(adaptiveBridgeArmFor(r.ruleType()));
         svc().bridge().startAwaitingAs(s);
         AsRequest asReq = new AsRequest(
                 s.virtualSessionId(), s.correlationId(), s.requestId(), s.generation(),
@@ -340,5 +336,16 @@ public final class MapUssdParentSbb implements Sbb, SleeEventHandler {
             }
         }
         return svc().hlrFace().relayUpperResponse(pending, imsi, msc, lmsi, ss7);
+    }
+
+    private boolean adaptiveBridgeArmFor(RuleType type) {
+        if (type == RuleType.HTTP) {
+            return svc().config().httpClientBridgeEnabled();
+        }
+        if (type == RuleType.GRPC) {
+            return svc().config().grpcClientBridgeEnabled();
+        }
+        // SIP (and any future plane): global bridge flag — reply correlation is best-effort.
+        return svc().config().bridgeEnabled();
     }
 }

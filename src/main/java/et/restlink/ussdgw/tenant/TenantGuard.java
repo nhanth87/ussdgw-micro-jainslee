@@ -103,6 +103,13 @@ public class TenantGuard {
         return tenants.byHttpApiKey(key);
     }
 
+    public Optional<TenantEntity> byId(String tenantId) {
+        if (tenantId == null || tenantId.isBlank()) {
+            return Optional.empty();
+        }
+        return tenants.byId(tenantId.trim());
+    }
+
     boolean tryAcquire(String tenantId, int maxTps) {
         long nowSec = System.currentTimeMillis() / 1000L;
         AtomicLong slot = windows.computeIfAbsent(tenantId, ignored -> new AtomicLong(pack(nowSec, 0)));
