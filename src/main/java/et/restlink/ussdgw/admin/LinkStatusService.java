@@ -168,49 +168,77 @@ public class LinkStatusService {
         boolean wantGrpc = tab == null || tab.isBlank() || "all".equals(tab) || "grpc".equals(tab);
         boolean wantDiam = tab == null || tab.isBlank() || "all".equals(tab) || "diameter".equals(tab);
         boolean wantSip = tab == null || tab.isBlank() || "all".equals(tab) || "sip".equals(tab);
-        if (wantSs7 || wantHttp || wantGrpc || wantDiam || wantSip) {
-            sb.append("<pre>");
-            if (wantSs7) {
-                sb.append("=== SS7 ===\n");
-                sb.append("live=").append(s.get("ss7.live")).append('\n');
-                sb.append("raActive=").append(s.get("ss7.raActive")).append('\n');
-                sb.append("detail=").append(s.get("ss7.detail")).append('\n');
-            }
-            if (wantHttp) {
-                sb.append("=== HTTP ===\n");
-                sb.append("listen=").append(s.get("http.listen")).append('\n');
-                sb.append("detail=").append(s.get("http.detail")).append('\n');
-            }
-            if (wantGrpc) {
-                sb.append("=== gRPC ===\n");
-                sb.append("listen=").append(s.get("grpc.listen")).append('\n');
-                sb.append("detail=").append(s.get("grpc.detail")).append('\n');
-            }
-            if (wantDiam) {
-                sb.append("=== Diameter ===\n");
-                sb.append("live=").append(s.get("diameter.live")).append('\n');
-                sb.append("detail=").append(s.get("diameter.detail")).append('\n');
-            }
-            if (wantSip) {
-                sb.append("=== SIP ===\n");
-                sb.append("live=").append(s.get("sip.live")).append('\n');
-                sb.append("detail=").append(s.get("sip.detail")).append('\n');
-            }
-            sb.append("</pre>");
+        sb.append("<div class=\"grid gap-3 lg:grid-cols-2\">");
+        if (wantSs7) {
+            boolean live = Boolean.TRUE.equals(s.get("ss7.live"));
+            sb.append(planeCard("SS7", live,
+                    "raActive=" + s.get("ss7.raActive") + " · " + s.get("ss7.detail"),
+                    "/telemetry/?tab=ss7"));
         }
+        if (wantHttp) {
+            boolean listen = Boolean.TRUE.equals(s.get("http.listen"));
+            sb.append(planeCard("HTTP", listen,
+                    String.valueOf(s.get("http.detail")),
+                    "/telemetry/?tab=http"));
+        }
+        if (wantGrpc) {
+            boolean listen = Boolean.TRUE.equals(s.get("grpc.listen"));
+            sb.append(planeCard("gRPC", listen,
+                    String.valueOf(s.get("grpc.detail")),
+                    "/admin/grpc"));
+        }
+        if (wantDiam) {
+            boolean live = Boolean.TRUE.equals(s.get("diameter.live"));
+            sb.append(planeCard("Diameter", live,
+                    String.valueOf(s.get("diameter.detail")),
+                    "/admin/diameter"));
+        }
+        if (wantSip) {
+            boolean live = Boolean.TRUE.equals(s.get("sip.live"));
+            sb.append(planeCard("SIP", live,
+                    String.valueOf(s.get("sip.detail")),
+                    "/admin/sip"));
+        }
+        sb.append("</div>");
         if (wantSmpp) {
+            sb.append("<div class=\"mt-3\">");
             try {
                 sb.append(new SmppAdminController().statusHtml(null).bodyAsString());
             } catch (RuntimeException ex) {
-                sb.append("<pre>=== SMPP ===\n");
-                sb.append("server=").append(s.get("smpp.server")).append('\n');
-                sb.append("boundSessions=").append(s.get("smpp.boundSessions")).append('\n');
-                sb.append("clients=").append(s.get("smpp.clients")).append('\n');
-                sb.append("detail=").append(s.get("smpp.detail")).append('\n');
-                sb.append("</pre>");
+                int bound = s.get("smpp.boundSessions") instanceof Number n ? n.intValue() : 0;
+                int clients = s.get("smpp.clients") instanceof Number n ? n.intValue() : 0;
+                boolean live = bound > 0 || clients > 0;
+                sb.append(planeCard("SMPP", live,
+                        "server=" + s.get("smpp.server")
+                                + " · bound=" + bound
+                                + " · clients=" + clients
+                                + " · " + s.get("smpp.detail"),
+                        "/telemetry/?tab=smpp"));
             }
+            sb.append("</div>");
         }
         return sb.toString();
+    }
+
+    private static String planeCard(String name, boolean live, String detail, String href) {
+        String badge = live
+                ? "<span class=\"link-status-badge link-status-badge--ok\">LIVE</span>"
+                : "<span class=\"link-status-badge link-status-badge--mute\">DOWN</span>";
+        return "<div class=\"link-status-panel\">"
+                + "<div class=\"link-status-head\"><h3>" + esc(name) + "</h3>" + badge + "</div>"
+                + "<p class=\"link-status-detail\">" + esc(detail) + "</p>"
+                + "<p class=\"mt-2 text-xs\"><a class=\"text-signal hover:underline\" href=\""
+                + esc(href) + "\">Open</a></p>"
+                + "</div>";
+    }
+
+    private static String esc(Object o) {
+        if (o == null) return "";
+        return o.toString()
+                .replace("&", "&amp;")
+                .replace("<", "&lt;")
+                .replace(">", "&gt;")
+                .replace("\"", "&quot;");
     }
 
     private String synthesizeSs7Detail(boolean routeReady, boolean raActive) {

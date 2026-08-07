@@ -19,7 +19,7 @@
         extend: {
           colors: {
             ink: { DEFAULT: '#0c1220', panel: '#141c2b', line: '#243044', mute: '#7a8ba3' },
-            signal: { DEFAULT: '#0b6e4f', dim: '#085a41' }
+            signal: { DEFAULT: '#e8a317', dim: '#b87f0f' }
           },
           fontFamily: {
             display: ['"DM Sans"', 'system-ui', 'sans-serif'],
@@ -38,30 +38,46 @@
   <script defer src="/admin/static/alpine.min.js"></script>
 </head>
 <body x-data class="min-h-full bg-ink font-display text-slate-200 antialiased"
-      style="background-image:radial-gradient(ellipse 80% 50% at 10% -10%,rgba(11,110,79,0.10),transparent),radial-gradient(ellipse 60% 40% at 100% 0%,rgba(56,100,160,0.12),transparent)">
+      style="background-image:radial-gradient(ellipse 80% 50% at 10% -10%,rgba(232,163,23,0.08),transparent),radial-gradient(ellipse 60% 40% at 100% 0%,rgba(56,100,160,0.12),transparent)">
   <header class="sticky top-0 z-40 border-b border-ink-line/80 bg-ink/90 backdrop-blur">
     <div class="mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-3 px-4 py-3">
       <div class="flex items-center gap-3">
         <span class="h-8 w-1 rounded-full bg-signal" aria-hidden="true"></span>
         <a href="/admin" class="text-lg font-semibold tracking-wide text-slate-100">RestLink USSD</a>
-        <span class="hidden text-xs uppercase tracking-[0.2em] text-ink-mute sm:inline">gw</span>
+        <span class="hidden text-xs uppercase tracking-[0.2em] text-ink-mute sm:inline">ops</span>
+        <span class="hx-live-badge" title="Dashboard metrics poll via HTMX">HTMX</span>
       </div>
       <nav class="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-ink-mute">
         {{NAV_LINKS}}
       </nav>
     </div>
   </header>
+
   <main class="mx-auto max-w-6xl px-4 py-8">
     {{NOTICE}}
     <p class="text-xs uppercase tracking-[0.25em] text-signal">Live plane</p>
-    <h1 class="mt-1 text-2xl font-semibold text-slate-50">Dashboard</h1>
-    <p class="mt-1 text-sm text-ink-mute">Status, sessions, and adaptive bridge gauges.</p>
-    <div id="panel" class="mt-6 min-h-[12rem] rounded-lg border border-ink-line/60 bg-ink-panel/40 p-4"
-         hx-get="/admin/status"
-         hx-trigger="load"
-         hx-swap="innerHTML">
-      <p class="text-sm text-ink-mute">loading…</p>
+    <div class="ops-section-indent">
+      <div class="mb-6 flex flex-wrap items-end justify-between gap-3">
+        <div>
+          <h1 class="mt-1 text-2xl font-semibold text-slate-50">Gateway gauges</h1>
+          <p class="mt-1 text-sm text-ink-mute">Sessions, bridge, AS circuit, and access-plane truth.</p>
+        </div>
+        <span id="status-ind" class="htmx-indicator text-xs font-mono text-ink-mute">syncing…</span>
+      </div>
+      <div id="panel" class="min-h-[12rem]"
+           hx-get="/admin/status"
+           hx-trigger="load, every 5s"
+           hx-swap="innerHTML"
+           hx-indicator="#status-ind">
+        <p class="text-sm text-ink-mute">loading…</p>
+      </div>
     </div>
+
+    <p class="mt-8 text-sm text-ink-mute">
+      Prometheus <code class="font-mono text-slate-300">/metrics</code>
+      · health <code class="font-mono text-slate-300">/health</code>
+      · JSON <code class="font-mono text-slate-300">/admin/status.json</code>
+    </p>
   </main>
 </body>
 </html>

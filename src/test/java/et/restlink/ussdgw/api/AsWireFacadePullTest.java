@@ -28,6 +28,16 @@ class AsWireFacadePullTest {
     }
 
     @Test
+    void encodePullJsonIncludesMetadata() {
+        AsRequest req = new AsRequest("s1", "c1", "r1", 1, "251911", "*123#", "1", 7,
+                "c1", 2500L, "SYNC");
+        String body = facade.encodePullRequest(req, AsHttpWireFormat.JSON);
+        assertThat(body).contains("\"virtualBridgeId\":\"c1\"")
+                .contains("\"adaptiveTimeoutMs\":2500")
+                .contains("\"asMode\":\"SYNC\"");
+    }
+
+    @Test
     void nullFormatDefaultsToXml() {
         AsRequest req = new AsRequest("s1", "c1", "r1", 1, "251911", "*123#", "hi", 7);
         String body = facade.encodePullRequest(req, null);

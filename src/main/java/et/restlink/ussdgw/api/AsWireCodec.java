@@ -49,9 +49,16 @@ public final class AsWireCodec {
         }
         try {
             AsResponse resp = JSON.readValue(body, AsResponse.class);
-            if (resp.correlationId() == null || resp.correlationId().isBlank()) {
+            String pushBack = resp.resolvePushBackId();
+            if (pushBack == null || pushBack.isBlank()) {
                 return new AsResponse(fallbackCorr, resp.requestId(), resp.generation(),
-                        resp.text(), resp.action(), resp.async(), resp.alphabet());
+                        resp.text(), resp.action(), resp.async(), resp.alphabet(),
+                        resp.sessionId(), resp.virtualBridgeId(), resp.adaptiveTimeoutMs());
+            }
+            if (resp.correlationId() == null || resp.correlationId().isBlank()) {
+                return new AsResponse(pushBack, resp.requestId(), resp.generation(),
+                        resp.text(), resp.action(), resp.async(), resp.alphabet(),
+                        resp.sessionId(), resp.virtualBridgeId(), resp.adaptiveTimeoutMs());
             }
             return resp;
         } catch (Exception e) {

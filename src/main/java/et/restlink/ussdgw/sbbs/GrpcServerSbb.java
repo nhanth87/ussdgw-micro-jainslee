@@ -1,6 +1,7 @@
 package et.restlink.ussdgw.sbbs;
 
 import et.restlink.ussdgw.api.AsResponse;
+import et.restlink.ussdgw.api.AsWireCodec;
 import et.restlink.ussdgw.logging.SleeEventTrace;
 import et.restlink.ussdgw.service.SbbServices;
 
@@ -57,8 +58,9 @@ public final class GrpcServerSbb implements Sbb, SleeEventHandler {
             return "callback-disabled";
         }
         String json = new String(req.payload() == null ? new byte[0] : req.payload(), StandardCharsets.UTF_8);
-        AsResponse resp = JSON.readValue(json.isBlank() ? "{}" : json, AsResponse.class);
-        var auth = svc().callbackAuth().authorizeCallback(resp.correlationId(), req.metadata());
+        AsResponse resp = AsWireCodec.decodeResponse(json, null);
+        String pushBack = resp.resolvePushBackId();
+        var auth = svc().callbackAuth().authorizeCallback(pushBack, req.metadata());
         if (auth != et.restlink.ussdgw.tenant.CallbackAuthService.Result.OK) {
             RaCommandPort deny = grpcServer;
             if (deny != null) {

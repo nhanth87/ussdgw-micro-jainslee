@@ -122,8 +122,12 @@ public class RuntimeConfigStore {
         public static final String HTTP_SERVER_ENABLED = "ussd.http.server.enabled";
         public static final String HTTP_RA_HOST = "http.ra.host";
         public static final String HTTP_RA_PORT = "http.ra.port";
+        public static final String HTTP_RA_EVENT_LOOP = "http.ra.event-loop-threads";
+        public static final String HTTP_RA_WORKER_POOL = "http.ra.worker-pool-size";
+        public static final String HTTP_RA_ACCEPT_BACKLOG = "http.ra.accept-backlog";
         public static final String HTTP_CONNECT_MS = "ussd.http.client.connect-timeout-ms";
         public static final String HTTP_REQUEST_MS = "ussd.http.client.request-timeout-ms";
+        public static final String HTTP_CLIENT_MAX_POOL = "ussd.http.client.max-pool-size";
         public static final String HTTP_CALLBACK_PATH = "ussd.http.callback-path";
         /** AS HTTP wire: XML (classic dialog) or JSON (greenfield). */
         public static final String AS_HTTP_WIRE_FORMAT = "ussd.as.http.wire-format";

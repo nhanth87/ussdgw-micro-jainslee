@@ -56,8 +56,8 @@ public class CdrDbFlusher {
     public CdrDbFlusher(
             DataSource dataSource,
             EntityManager em,
-            @ConfigProperty(name = "ussd.cdr.db.batch-size", defaultValue = "500") int batchSize,
-            @ConfigProperty(name = "ussd.cdr.db.queue-cap", defaultValue = "10000") int queueCap) {
+            @ConfigProperty(name = "ussd.cdr.db.batch-size", defaultValue = "2000") int batchSize,
+            @ConfigProperty(name = "ussd.cdr.db.queue-cap", defaultValue = "100000") int queueCap) {
         this.dataSource = dataSource;
         this.em = em;
         this.batchSize = Math.max(1, batchSize);
@@ -85,7 +85,7 @@ public class CdrDbFlusher {
     public long droppedCount() { return dropped.sum(); }
     public long flushedCount() { return flushed.sum(); }
 
-    @Scheduled(every = "${ussd.cdr.db.flush-every:200ms}",
+    @Scheduled(every = "${ussd.cdr.db.flush-every:100ms}",
             concurrentExecution = Scheduled.ConcurrentExecution.SKIP)
     void scheduledFlush() {
         flushOnce();

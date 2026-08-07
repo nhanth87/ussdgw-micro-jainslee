@@ -31,6 +31,12 @@ public class HttpApplyService {
     int httpRaPortProp;
     @ConfigProperty(name = "http.ra.host", defaultValue = "0.0.0.0")
     String httpRaHostProp;
+    @ConfigProperty(name = "http.ra.event-loop-threads", defaultValue = "8")
+    int httpRaEventLoopProp;
+    @ConfigProperty(name = "http.ra.worker-pool-size", defaultValue = "256")
+    int httpRaWorkerPoolProp;
+    @ConfigProperty(name = "http.ra.accept-backlog", defaultValue = "8192")
+    int httpRaAcceptBacklogProp;
 
     private volatile HttpServerRaEndpoint serverEndpoint;
     private volatile HttpCallbackRaEndpoint clientEndpoint;
@@ -84,10 +90,12 @@ public class HttpApplyService {
             HttpCallbackClientRa ra = new HttpCallbackClientRa();
             ra.setConnectTimeoutMs(config.httpConnectTimeoutMs());
             ra.setRequestTimeoutMs(config.httpRequestTimeoutMs());
+            ra.setMaxPoolSize(config.httpClientMaxPoolSize());
             clientEndpoint = new HttpCallbackRaEndpoint(ra);
             container.registerRa(clientEndpoint, clientEndpoint);
             detail.append("http-client=wired;connectMs=").append(config.httpConnectTimeoutMs())
-                    .append(";requestMs=").append(config.httpRequestTimeoutMs()).append(';');
+                    .append(";requestMs=").append(config.httpRequestTimeoutMs())
+                    .append(";pool=").append(config.httpClientMaxPoolSize()).append(';');
         } else {
             detail.append("http-client=off;");
         }
@@ -95,15 +103,27 @@ public class HttpApplyService {
         if (config.httpServerEnabled()) {
             int port = store.getInt(RuntimeConfigStore.Keys.HTTP_RA_PORT, httpRaPortProp);
             String host = store.getOr(RuntimeConfigStore.Keys.HTTP_RA_HOST, httpRaHostProp);
+            int eventLoop = store.getInt(RuntimeConfigStore.Keys.HTTP_RA_EVENT_LOOP, httpRaEventLoopProp);
+            int workerPool = store.getInt(RuntimeConfigStore.Keys.HTTP_RA_WORKER_POOL, httpRaWorkerPoolProp);
+            int acceptBacklog = store.getInt(RuntimeConfigStore.Keys.HTTP_RA_ACCEPT_BACKLOG, httpRaAcceptBacklogProp);
             HttpServerResourceAdaptor ra = new HttpServerResourceAdaptor();
             ra.setPort(port);
             ra.setHost(host);
+            // Optional tunables — present on newer ra-http-server; absent on older 1.2.0-SNAPSHOT.
+            // Call via reflection so ECJ/Maven never bake "Unresolved compilation problem" stubs
+            // when compile classpath lags the jain-slee tree.
+            invokeIntSetter(ra, "setEventLoopThreads", eventLoop);
+            invokeIntSetter(ra, "setWorkerPoolSize", workerPool);
+            invokeIntSetter(ra, "setAcceptBacklog", acceptBacklog);
             serverEndpoint = new HttpServerRaEndpoint(ra);
             serverEndpoint.setPort(port);
             container.registerRa(serverEndpoint, serverEndpoint);
             HttpServerAdminBindings.bind(serverEndpoint);
             linkStatus.markHttpListen(port);
             detail.append("http-server=wired;listen=").append(host).append(':').append(port)
+                    .append(";eventLoop=").append(eventLoop)
+                    .append(";workerPool=").append(workerPool)
+                    .append(";acceptBacklog=").append(acceptBacklog)
                     .append(";callback=").append(config.httpCallbackPath());
         } else {
             linkStatus.clearHttp();
@@ -126,5 +146,17 @@ public class HttpApplyService {
 
     public String listenHost() {
         return store.getOr(RuntimeConfigStore.Keys.HTTP_RA_HOST, httpRaHostProp);
+    }
+
+    /**
+     * Best-effort int setter for ra-http-server knobs that are not on every installed SNAPSHOT.
+     * Missing method → log once at debug and keep Vert.x defaults.
+     */
+    private static void invokeIntSetter(Object target, String method, int value) {
+        try {
+            target.getClass().getMethod(method, int.class).invoke(target, value);
+        } catch (ReflectiveOperationException ex) {
+            LOG.debug("HTTP RA {} unavailable on {}: {}", method, target.getClass().getName(), ex.toString());
+        }
     }
 }

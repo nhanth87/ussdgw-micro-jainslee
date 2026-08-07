@@ -5,29 +5,37 @@ option java_multiple_files = true;
 option java_package = "et.restlink.ussdgw.as.proto";
 
 // Greenfield gRPC AS contract (JSON-over-bytes also supported by lab sims).
+// Field names align with HTTP JSON AsRequest/AsResponse (camelCase on wire JSON).
 service UssdAs {
   rpc Pull(AsRequest) returns (AsResponse);
   rpc Callback(AsResponse) returns (Ack);
 }
 
 message AsRequest {
-  string session_id = 1;
-  string correlation_id = 2;
+  string session_id = 1;            // virtualSessionId (logical)
+  string correlation_id = 2;        // REAL push-back / store key
   string request_id = 3;
   int32 generation = 4;
   string msisdn = 5;
   string short_code = 6;
   string ussd_string = 7;
   int32 network_id = 8;
+  string virtual_bridge_id = 9;     // bridge arm when enabled
+  int64 adaptive_timeout_ms = 10;   // effective AdaptiveTimeout gate
+  string as_mode = 11;              // SYNC | BRIDGE (ASYNC_ACK via response.async)
 }
 
 message AsResponse {
-  string correlation_id = 1;
+  string correlation_id = 1;        // REAL push-back key
   string request_id = 2;
   int32 generation = 3;
   string text = 4;
   string action = 5; // CONTINUE | END | ABORT
-  bool async = 6;
+  bool async = 6;                   // ASYNC_ACK — content later via Callback
+  string alphabet = 7;              // ucs7 | ucs8 | unicode | auto
+  string session_id = 8;            // optional echo of virtualSessionId
+  string virtual_bridge_id = 9;     // optional echo for late resolve
+  int64 adaptive_timeout_ms = 10;   // optional echo of gate
 }
 
 message Ack {

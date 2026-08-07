@@ -104,6 +104,30 @@ Meaning: GW opens an **empty** MAP dialog first; only after the peer accepts the
 
 `AdaptiveTimeout` (EWMA per `networkId`) gates how long GW waits for AS on pull and how long a **parked NI HTTP** response may stay open before abort/bridge policy. Floor/ceiling match classic (~1000–7000 ms lab defaults). Late AS after gate may hit Virtual Session Bridge (S1 wait text → S2 NI) when bridge is armed — same behavior matrix as classic §8.
 
+### Late-push metadata (RestLink additive)
+
+GW includes these on **PULL** encode (HTTP XML attrs / JSON fields; gRPC JSON bytes share the same schema):
+
+| Field | XML attr | Meaning |
+|-------|----------|---------|
+| `localId` / `correlationId` | `localId` | **Real session id for push-back** — VirtualSessionStore / `bridge.onAsResponse` key. AS must echo on `/as/callback` or gRPC `Callback`. |
+| `sessionId` | `sessionId` | Logical `virtualSessionId` (not the store key). |
+| `virtualBridgeId` | `virtualBridgeId` | Bridge arm identity when armed (usually equals `correlationId`). |
+| `adaptiveTimeoutMs` | `adaptiveTimeoutMs` | Effective adaptive gate ms for this network/session (`AdaptiveTimeout.effectiveGateMs`). |
+| `asMode` | `asMode` | Hint: `SYNC` \| `BRIDGE` (ASYNC_ACK is AS response `async=true`). |
+
+Classic AS may ignore unknown attributes. RestLink also accepts `async="true"` on response `<dialog>` for XML ASYNC_ACK.
+
+Example pull fragment:
+
+```xml
+<dialog appCntx="networkUnstructuredSsContext" localId="corr-1"
+        sessionId="vs-1" virtualBridgeId="corr-1" adaptiveTimeoutMs="4200"
+        asMode="BRIDGE" networkId="0">
+  …
+</dialog>
+```
+
 ## Mapping to greenfield JSON
 
 | XML signal | JSON `AsResponse` / `AsRequest` |
@@ -112,6 +136,8 @@ Meaning: GW opens an **empty** MAP dialog first; only after the peer accepts the
 | `processUnstructuredSSRequest_Response` / empty end | `action=END` |
 | abort attrs / user abort | `action=ABORT` |
 | MSISDN / shortCode / ussdString on pull | `AsRequest` fields |
-| `async` late reconcile | Prefer `/as/callback` (+ optional `X-Ussd-Request-Id` bridge headers) |
+| `localId` | `correlationId` (**push-back key**) |
+| `sessionId` / `virtualBridgeId` / `adaptiveTimeoutMs` / `asMode` | same JSON field names |
+| `async` late reconcile | Prefer `/as/callback` or gRPC Callback (+ optional `X-Ussd-Request-Id` bridge headers) |
 
-gRPC remains greenfield JSON payload bytes ([`grpc-json.md`](grpc-json.md)); HTTP is the dual-mode plane.
+gRPC remains greenfield JSON payload bytes ([`grpc-json.md`](grpc-json.md)); HTTP is the dual-mode plane. Same metadata fields on both.

@@ -195,13 +195,11 @@ public class AdminHttpHandler {
             return Optional.empty();
         }
 
-        // Public landing + static + login
+        boolean sessionOk = hasBrowserSession(principal);
+
+        // Root → login first (OTA lab UX for Digicom); session holders go to dashboard
         if (p.equals("/")) {
-            try {
-                return Optional.of(pages.landingPage());
-            } catch (Exception e) {
-                return Optional.of(HttpReply.html(AdminPageRenderer.fallbackLandingHtml()));
-            }
+            return Optional.of(HttpReply.redirect(sessionOk ? "/admin" : "/admin/login"));
         }
         if (p.startsWith("/admin/static/")) {
             try {
@@ -211,6 +209,9 @@ public class AdminHttpHandler {
             }
         }
         if (p.equals("/admin/login")) {
+            if (sessionOk && !"POST".equalsIgnoreCase(method)) {
+                return Optional.of(HttpReply.redirect("/admin"));
+            }
             if ("POST".equalsIgnoreCase(method)) {
                 return Optional.of(handleLoginPost(body));
             }
@@ -228,10 +229,17 @@ public class AdminHttpHandler {
                     .withHeader("Set-Cookie", SignedSessionCookie.clearCookieHeader()));
         }
 
-        if (principal.isEmpty() && !isPublicAsset(p)) {
-            if (wantsShellPage(method, headers, p)) {
+        // Browser HTML shells require a form-login session cookie (API key alone is not enough).
+        // API key / Basic still authorize HTMX fragments + JSON for automation.
+        if (wantsShellPage(method, headers, p)) {
+            if (!sessionOk) {
                 return Optional.of(HttpReply.redirect("/admin/login"));
             }
+            Optional<HttpReply> shell = serveShellPage(p, principal.orElse(null));
+            if (shell.isPresent()) return shell;
+        }
+
+        if (principal.isEmpty() && !isPublicAsset(p)) {
             return Optional.of(HttpReply.text(401, "unauthorized"));
         }
 
@@ -240,12 +248,6 @@ public class AdminHttpHandler {
         if ("POST".equalsIgnoreCase(method)) {
             Optional<HttpReply> post = handlePost(p, body, who);
             if (post.isPresent()) return post;
-        }
-
-        // Full shell pages (browser navigation) vs HTMX fragments
-        if (wantsShellPage(method, headers, p)) {
-            Optional<HttpReply> shell = serveShellPage(p, who);
-            if (shell.isPresent()) return shell;
         }
 
         String tab = query == null ? null : query.get("tab");
@@ -506,60 +508,83 @@ public class AdminHttpHandler {
         return p.endsWith(".css") || p.endsWith(".js") || p.endsWith(".svg");
     }
 
+    private static boolean hasBrowserSession(Optional<AdminAuthService.Principal> principal) {
+        return principal.isPresent() && principal.get().fromSession();
+    }
+
     private HttpReply statusHtml() {
         Map<String, Object> m = new LinkedHashMap<>(linkStatus.snapshot());
-        m.put("sessions", store.size());
-        m.put("bridge.count", bridge.bridgeCount());
-        m.put("bridge.recover", bridge.recoverCount());
-        m.put("bridge.zombieDrop", bridge.zombieDrop());
-        m.put("bridge.enabled", config.bridgeEnabled());
-        if (bridgeGate != null) {
-            m.put("scheduler.gateExpired", bridgeGate.gateExpired());
-            m.put("scheduler.reclaimCount", bridgeGate.reclaimCount());
-        }
-        if (asPull != null) {
-            m.put("as.circuitOpenRejects", asPull.openRejects());
-        }
-        if (saga != null) {
-            m.put("saga.niFail", saga.niFailCount());
-            m.put("saga.pullFail", saga.pullFailCount());
-        }
-        m.put("adaptive.gateCeilingMs", config.asyncGateTimeoutMs());
-        m.put("adaptive.dialogTimeoutMs", config.dialogTimeoutMs());
-        m.put("adaptive.floorMs", AdaptiveTimeout.FLOOR_MS);
-        m.put("adaptive.ewma", adaptive.snapshot());
-        StringBuilder sb = new StringBuilder("<div class=\"status\">");
-        sb.append("<p class=\"hint\">Plane live status: ")
-                .append("<a href=\"/telemetry/?tab=ss7\">SS7</a> · ")
-                .append("<a href=\"/telemetry/?tab=smpp\">SMPP</a> · ")
-                .append("<a href=\"/telemetry/?tab=http\">HTTP</a>")
-                .append(" (Monitor Hub). Quick forms: ")
-                .append("<a href=\"/admin/ss7\">SS7</a> · ")
-                .append("<a href=\"/admin/smpp\">SMPP</a> · ")
-                .append("<a href=\"/admin/diameter\">Diameter</a> · ")
-                .append("<a href=\"/admin/sip\">SIP</a>")
-                .append("</p>");
+        long sessions = store.size();
+        long bridgeCount = bridge.bridgeCount();
+        long bridgeRecover = bridge.recoverCount();
+        long bridgeZombie = bridge.zombieDrop();
+        long gateExpired = bridgeGate != null ? bridgeGate.gateExpired() : 0L;
+        long reclaim = bridgeGate != null ? bridgeGate.reclaimCount() : 0L;
+        long asRejects = asPull != null ? asPull.openRejects() : 0L;
+        long niFail = saga != null ? saga.niFailCount() : 0L;
+        long pullFail = saga != null ? saga.pullFailCount() : 0L;
+        Object ewma = adaptive.snapshot();
+
+        StringBuilder cards = new StringBuilder();
+        cards.append(metricCard("Sessions", String.valueOf(sessions), "active virtual sessions"));
+        cards.append(metricCard("Bridge", String.valueOf(bridgeCount),
+                "recover " + bridgeRecover + " · zombie " + bridgeZombie
+                        + (config.bridgeEnabled() ? " · on" : " · off")));
+        cards.append(metricCard("Gate", String.valueOf(gateExpired),
+                "expired · reclaim " + reclaim + " · ceiling "
+                        + config.asyncGateTimeoutMs() + "ms"));
+        cards.append(metricCard("AS / Saga", String.valueOf(asRejects),
+                "circuit rejects · NI fail " + niFail + " · pull fail " + pullFail));
+        cards.append(metricCard("Adaptive", String.valueOf(ewma),
+                "EWMA · floor " + AdaptiveTimeout.FLOOR_MS + "ms · dialog "
+                        + config.dialogTimeoutMs() + "ms"));
+
+        StringBuilder sb = new StringBuilder();
+        sb.append("<div class=\"status\">");
+        sb.append("<div class=\"grid gap-3 sm:grid-cols-2 lg:grid-cols-5\">")
+                .append(cards).append("</div>");
+        sb.append("<div class=\"table-wrap mt-8\">");
+        sb.append("<p class=\"text-xs uppercase tracking-[0.25em] text-signal\">Planes</p>");
+        sb.append("<div class=\"ops-section-indent mt-3 link-status\">");
         sb.append(linkStatus.htmlPartial("all"));
-        sb.append("<pre>");
-        m.forEach((k, v) -> {
-            if (String.valueOf(k).startsWith("ss7.") || String.valueOf(k).startsWith("http.")
-                    || String.valueOf(k).startsWith("grpc.") || String.valueOf(k).startsWith("smpp.")
-                    || String.valueOf(k).startsWith("diameter.") || String.valueOf(k).startsWith("sip.")) {
-                return;
-            }
-            sb.append(esc(String.valueOf(k))).append(" = ")
-                    .append(esc(String.valueOf(v))).append('\n');
-        });
-        // Always surface link truth fields
+        sb.append("</div></div>");
+        sb.append("<p class=\"mt-4 text-sm text-ink-mute\">");
+        sb.append("Monitor Hub <a class=\"text-signal hover:underline\" href=\"/telemetry/?tab=ss7\">SS7</a>");
+        sb.append(" · <a class=\"text-signal hover:underline\" href=\"/telemetry/?tab=smpp\">SMPP</a>");
+        sb.append(" · <a class=\"text-signal hover:underline\" href=\"/telemetry/?tab=http\">HTTP</a>");
+        sb.append(" · config <a class=\"text-signal hover:underline\" href=\"/admin/ss7/config\">SS7</a>");
+        sb.append(" · <a class=\"text-signal hover:underline\" href=\"/admin/smpp/config\">SMPP</a>");
+        sb.append(" · <a class=\"text-signal hover:underline\" href=\"/admin/bridge\">Bridge</a>");
+        sb.append(" · <a class=\"text-signal hover:underline\" href=\"/admin/cdr\">CDR</a>");
+        sb.append(" · JSON <code class=\"font-mono text-slate-300\">/admin/status.json</code>");
+        sb.append("</p>");
+        // Keep link-truth fields for operators who scrape the fragment
+        sb.append("<pre class=\"mt-4 max-h-40 overflow-auto rounded-md border border-ink-line bg-ink p-3 ")
+                .append("font-mono text-xs text-ink-mute\">");
         for (String k : new String[]{
                 "ss7.live", "ss7.detail", "smpp.detail", "http.detail", "grpc.detail",
-                "diameter.live", "diameter.detail", "sip.live", "sip.detail"}) {
-            if (m.containsKey(k)) {
-                sb.append(esc(k)).append(" = ").append(esc(String.valueOf(m.get(k)))).append('\n');
+                "diameter.live", "diameter.detail", "sip.live", "sip.detail",
+                "sessions", "bridge.count", "adaptive.ewma"}) {
+            Object v = "sessions".equals(k) ? sessions
+                    : "bridge.count".equals(k) ? bridgeCount
+                    : "adaptive.ewma".equals(k) ? ewma
+                    : m.get(k);
+            if (v != null) {
+                sb.append(esc(k)).append(" = ").append(esc(String.valueOf(v))).append('\n');
             }
         }
         sb.append("</pre></div>");
         return HttpReply.html(sb.toString());
+    }
+
+    private static String metricCard(String title, String value, String detail) {
+        return "<div class=\"rounded-lg border border-ink-line bg-ink-panel/90 p-4\">"
+                + "<h3 class=\"text-[0.7rem] font-medium uppercase tracking-[0.18em] text-ink-mute\">"
+                + esc(title) + "</h3>"
+                + "<p class=\"mt-2 font-mono text-3xl font-medium tabular-nums text-signal\">"
+                + esc(value) + "</p>"
+                + "<p class=\"mt-1 font-mono text-xs text-ink-mute\">" + esc(detail) + "</p>"
+                + "</div>";
     }
 
     public HttpReply statusJson() {

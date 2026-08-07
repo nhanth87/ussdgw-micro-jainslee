@@ -31,7 +31,7 @@ public final class ClassicDialogXmlCodec {
             return encodeContinue(req);
         }
         StringBuilder sb = new StringBuilder(256);
-        openDialog(sb, req.correlationId(), req.networkId(), false);
+        openDialog(sb, req, false);
         sb.append("<processUnstructuredSSRequest_Request dataCodingScheme=\"").append(DCS)
                 .append("\" string=\"").append(xmlAttr(req.ussdString())).append("\">");
         appendMsisdn(sb, req.msisdn());
@@ -46,7 +46,7 @@ public final class ClassicDialogXmlCodec {
             return "<dialog/>";
         }
         StringBuilder sb = new StringBuilder(256);
-        openDialog(sb, req.correlationId(), req.networkId(), false);
+        openDialog(sb, req, false);
         sb.append("<unstructuredSSRequest_Request dataCodingScheme=\"").append(DCS)
                 .append("\" string=\"").append(xmlAttr(req.ussdString())).append("\">");
         appendMsisdn(sb, req.msisdn());
@@ -57,7 +57,8 @@ public final class ClassicDialogXmlCodec {
 
     /**
      * Decode AS pull/callback response body.
-     * Abort → ABORT; empty USSD string → END; otherwise CONTINUE. Always async=false.
+     * Abort → ABORT; empty USSD string → END; otherwise CONTINUE.
+     * RestLink extension: {@code async="true"} on {@code <dialog>} for ASYNC_ACK (classic omits).
      */
     public static AsResponse decodeResponse(String xml, String fallbackCorr) {
         String corr = blankTo(fallbackCorr, "unknown");
@@ -69,18 +70,30 @@ public final class ClassicDialogXmlCodec {
             if (root == null || root.isMissingNode()) {
                 return new AsResponse(corr, corr, 1, "", AsAction.END, false);
             }
+            String sessionId = firstNonBlank(attr(root, "sessionId"), textChild(root, "sessionId"));
+            String bridgeId = firstNonBlank(
+                    attr(root, "virtualBridgeId"), textChild(root, "virtualBridgeId"));
+            Long gateMs = parseLong(firstNonBlank(
+                    attr(root, "adaptiveTimeoutMs"), textChild(root, "adaptiveTimeoutMs")));
             corr = firstNonBlank(
                     attr(root, "localId"),
                     textChild(root, "localId"),
+                    attr(root, "correlationId"),
+                    bridgeId,
+                    sessionId,
                     corr);
+            boolean async = boolAttr(root, "async")
+                    || "true".equalsIgnoreCase(textChild(root, "async"));
 
             if (isAbort(root)) {
-                return new AsResponse(corr, corr, 1, "", AsAction.ABORT, false);
+                return new AsResponse(corr, corr, 1, "", AsAction.ABORT, async,
+                        null, sessionId, bridgeId, gateMs);
             }
 
             String text = extractResponseString(root);
             AsAction action = (text == null || text.isEmpty()) ? AsAction.END : AsAction.CONTINUE;
-            return new AsResponse(corr, corr, 1, text == null ? "" : text, action, false);
+            return new AsResponse(corr, corr, 1, text == null ? "" : text, action, async,
+                    null, sessionId, bridgeId, gateMs);
         } catch (Exception e) {
             throw new IllegalArgumentException("decode classic dialog XML", e);
         }
@@ -91,7 +104,10 @@ public final class ClassicDialogXmlCodec {
                 resp == null ? null : resp.correlationId(),
                 resp == null ? null : resp.text(),
                 resp == null ? AsAction.END : resp.action(),
-                false);
+                false,
+                resp == null ? null : resp.sessionId(),
+                resp == null ? null : resp.virtualBridgeId(),
+                resp == null ? null : resp.adaptiveTimeoutMs());
     }
 
     public static AsResponse decodeCallback(String xml) {
@@ -105,13 +121,17 @@ public final class ClassicDialogXmlCodec {
      */
     public static String encodeNiSnapshot(String correlationId, String text, AsAction action,
                                           boolean emptyHandshake) {
+        return encodeNiSnapshot(correlationId, text, action, emptyHandshake, null, null, null);
+    }
+
+    public static String encodeNiSnapshot(String correlationId, String text, AsAction action,
+                                          boolean emptyHandshake, String sessionId,
+                                          String virtualBridgeId, Long adaptiveTimeoutMs) {
         AsAction act = action == null ? AsAction.END : action;
         StringBuilder sb = new StringBuilder(256);
         if (act == AsAction.ABORT) {
             sb.append("<dialog");
-            if (notBlank(correlationId)) {
-                sb.append(" localId=\"").append(xmlAttr(correlationId)).append('"');
-            }
+            appendIdentityAttrs(sb, correlationId, sessionId, virtualBridgeId, adaptiveTimeoutMs, null);
             sb.append(" mapMessagesSize=\"0\" mapUserAbortChoice=\"isUserSpecificReason\"");
             if (emptyHandshake) {
                 sb.append(" emptyDialogHandshake=\"true\"");
@@ -119,7 +139,8 @@ public final class ClassicDialogXmlCodec {
             sb.append("/>");
             return sb.toString();
         }
-        openDialog(sb, correlationId, -1, emptyHandshake);
+        openDialog(sb, correlationId, -1, emptyHandshake, sessionId, virtualBridgeId,
+                adaptiveTimeoutMs, null, null);
         String safe = text == null ? "" : text;
         if (act == AsAction.CONTINUE) {
             sb.append("<unstructuredSSRequest_Request dataCodingScheme=\"").append(DCS)
@@ -157,18 +178,59 @@ public final class ClassicDialogXmlCodec {
 
     // --- helpers ---
 
-    private static void openDialog(StringBuilder sb, String localId, int networkId, boolean emptyHandshake) {
+    private static void openDialog(StringBuilder sb, AsRequest req, boolean emptyHandshake) {
+        openDialog(sb, req.correlationId(), req.networkId(), emptyHandshake,
+                req.sessionId(), req.virtualBridgeId(), req.adaptiveTimeoutMs(),
+                req.asMode(), null);
+    }
+
+    private static void openDialog(StringBuilder sb, String localId, int networkId,
+                                   boolean emptyHandshake, String sessionId,
+                                   String virtualBridgeId, Long adaptiveTimeoutMs,
+                                   String asMode, Boolean async) {
         sb.append("<dialog appCntx=\"").append(APP_CTX).append('"');
-        if (notBlank(localId)) {
-            sb.append(" localId=\"").append(xmlAttr(localId)).append('"');
-        }
+        appendIdentityAttrs(sb, localId, sessionId, virtualBridgeId, adaptiveTimeoutMs, asMode);
         if (networkId >= 0) {
             sb.append(" networkId=\"").append(networkId).append('"');
         }
         if (emptyHandshake) {
             sb.append(" emptyDialogHandshake=\"true\"");
         }
+        if (async != null && async) {
+            sb.append(" async=\"true\"");
+        }
         sb.append('>');
+    }
+
+    private static void appendIdentityAttrs(StringBuilder sb, String localId, String sessionId,
+                                            String virtualBridgeId, Long adaptiveTimeoutMs,
+                                            String asMode) {
+        if (notBlank(localId)) {
+            sb.append(" localId=\"").append(xmlAttr(localId)).append('"');
+        }
+        if (notBlank(sessionId)) {
+            sb.append(" sessionId=\"").append(xmlAttr(sessionId)).append('"');
+        }
+        if (notBlank(virtualBridgeId)) {
+            sb.append(" virtualBridgeId=\"").append(xmlAttr(virtualBridgeId)).append('"');
+        }
+        if (adaptiveTimeoutMs != null && adaptiveTimeoutMs > 0) {
+            sb.append(" adaptiveTimeoutMs=\"").append(adaptiveTimeoutMs).append('"');
+        }
+        if (notBlank(asMode)) {
+            sb.append(" asMode=\"").append(xmlAttr(asMode)).append('"');
+        }
+    }
+
+    private static Long parseLong(String s) {
+        if (!notBlank(s)) {
+            return null;
+        }
+        try {
+            return Long.parseLong(s.trim());
+        } catch (NumberFormatException e) {
+            return null;
+        }
     }
 
     private static void appendMsisdn(StringBuilder sb, String msisdn) {

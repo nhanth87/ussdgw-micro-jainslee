@@ -96,11 +96,12 @@ public final class HttpServerSbb implements Sbb, SleeEventHandler {
         AsHttpWireFormat format = detectWireFormat(contentType(req), body);
         AsWireFacade facade = svc().wireFacade();
         AsResponse resp = facade.decodeCallback(body, format);
-        var auth = svc().callbackAuth().authorizeCallback(resp.correlationId(), req.getHeaders());
+        String pushBack = resp.resolvePushBackId();
+        var auth = svc().callbackAuth().authorizeCallback(pushBack, req.getHeaders());
         if (auth != et.restlink.ussdgw.tenant.CallbackAuthService.Result.OK) {
             if (format == AsHttpWireFormat.XML) {
                 replyEx(req.getSessionId(), 401, format.contentType(),
-                        facade.encodeNiResponse(resp.correlationId(), "unauthorized", AsAction.ABORT, false, format),
+                        facade.encodeNiResponse(pushBack, "unauthorized", AsAction.ABORT, false, format),
                         Map.of());
             } else {
                 replyJson(req.getSessionId(), 401, Map.of("error", "unauthorized"));

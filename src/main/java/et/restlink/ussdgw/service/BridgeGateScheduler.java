@@ -22,7 +22,7 @@ public class BridgeGateScheduler {
     private final AtomicLong gateExpired = new AtomicLong();
     private final AtomicLong reclaimCount = new AtomicLong();
 
-    @Scheduled(every = "0.2s")
+    @Scheduled(every = "${ussd.bridge.gate-tick-ms:100}ms")
     void tickGates() {
         long now = System.currentTimeMillis();
         for (VirtualSession s : store.awaitingPastDeadline(now)) {

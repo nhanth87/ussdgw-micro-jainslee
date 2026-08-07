@@ -39,14 +39,15 @@ Greenfield RestLink **USSD** gateway (3GPP **pull/MO** + **push/NI**) that **rep
 - **Prove the artifact, not the source** — before debugging runtime: artifact mtime vs source, `jar tf ussdgw-app.jar | grep <NewClass>`, classpath of the *running* PID. Green `mvn test` ≠ deployed. Never trust `mvn -q test` alone (`Tests run: 0` looks green). → [lessons](docs/agents/lessons.md)
 - **Log4j2 ONLY** — `log4j-core` + `log4j2.xml` → `dist/logs/` (`ussd.log.dir`); never `/tmp`; never dual `SleeEventTrace`+`LOG.info`; never `log4j2-jboss-logmanager` / `quarkus.log.file*`. → [logging](docs/agents/logging.md)
 - **Link status truth** — see section below; `ss7.live` / `smpp.live` via `LinkStatusService` only (SCTP+M3UA ACTIVE / bound ESME). Never LISTEN-alone, Apply-once, or UI badge fixes.
-- **SCTP** — verify with `ss` / `/proc/net/sctp/eps`, **not** `netstat`. → [ss7-lab-pair](docs/agents/ss7-lab-pair.md)
+- **SCTP** — verify with `ss -ln --sctp` / `/proc/net/sctp/{eps,assocs}`, **not** `netstat` (empty netstat ≠ down; `map.enabled=false` ⇒ no listen 8013). → [ss7-lab-pair](docs/agents/ss7-lab-pair.md) · [lessons](docs/agents/lessons.md)
 - **Sim persist XML** — never leave corrupt `*sccp*.xml` (`<1>` keys). Validate Jackson parse; quarantine + replace seed; smoke Start. → [ss7-lab-pair](docs/agents/ss7-lab-pair.md) · jSS7 AGENTS
 - **SBB handlers** — catch **`Throwable`** in every `onEvent`; end/cancel MAP dialogs; `IN SBB=` count must match `OUT SBB=`.
 - **HTTP/gRPC** — RA **callbacks** only — never 50ms timer poll. Pull body = raw wire (XML default or JSON per tenant) — **not** `CallbackRequest` envelope. Classic **NI sync** on `ussd.http.ni-path` (default `/ussd`) with **JSESSIONID**; park HTTP via async + **`AdaptiveTimeout`** — never `Thread.sleep`.
 - **HLR face** — inbound SRI-SM: `ussd.hlr.mode` default **PROXY_MAP fail-closed**; no silent FAKE; upper GT must not loop to local. → [ss7-lab-pair](docs/agents/ss7-lab-pair.md)
 - **TENANT login** — **username === tenantId**. RestLink = dist brand only.
-- **Flyway / DB** — lab **file H2** (`./data/ussdgw`, PG-mode) or **PostgreSQL** via `configs` / `QUARKUS_DATASOURCE_*`. Single `V1__ussdgw_baseline.sql`; wipe lab H2 / reset `flyway_schema_history` after squash. Boot guard `UssdSchemaInitializer`. Never `h2:mem` for ship. → [schema](docs/agents/schema.md)
-- **Commits** — **nhanth87 / Tran Nhan** only. No AI `Co-authored-by:` / trailers. Hooks reject; never `--no-verify`.
+- **Flyway / DB** — lab **file H2** (`./data/ussdgw`, PG-mode) or **PostgreSQL** via server `configs` / `QUARKUS_DATASOURCE_*`. Dedicated DB **`ussdgw`** (never OTA’s **`ota`**); `db-kind` is **build-time** (H2→PG needs rebuild). Single `V1__ussdgw_baseline.sql`; wipe lab H2 / reset `flyway_schema_history` after squash. Boot guard `UssdSchemaInitializer`. Never `h2:mem` for ship. → [schema](docs/agents/schema.md) · [lessons](docs/agents/lessons.md)
+- **Lab heap** — Digicom-safe `run-dist.sh` defaults **`-Xms2g -Xmx4g`** (live `digicom-nb`); **AlwaysPreTouch** only if `USSD_ALWAYS_PRETOUCH=1`; override to **8g** via `USSD_XMS`/`USSD_XMX` on bigger hosts. Do **not** co-force OTA **8G** + ussdgw **8G+PreTouch** on ~15 GiB. → [lessons](docs/agents/lessons.md)
+- **Commits** — **nhanth87 / Tran Nhan** only. No AI `Co-authored-by:` / trailers (Cursor injects — strip / clean `commit-tree`). Hooks reject; never `--no-verify`.
 
 ## Link status truth (non-negotiable)
 
@@ -105,7 +106,7 @@ Detail: [logging.md](docs/agents/logging.md).
 | **Server** | Copy **complete `dist/`** (after package) → `./run.sh` (host JDK 25) |
 | Bare bootstrap | [`dist-package-script.sh`](dist-package-script.sh) (sctp → jss7 → jain-slee → package) |
 
-Lab AS sims: `tools/as-http-sim.py`, `tools/as-grpc-json-sim.py`.
+Lab AS sims: **`tools/as-node/`** (Fastify — prefer), `tools/as-http-sim.py`, `tools/as-grpc-json-sim.py`.
 
 ## Scope (short)
 

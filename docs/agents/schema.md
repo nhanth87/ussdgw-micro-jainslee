@@ -16,7 +16,9 @@ Startup guard: [`UssdSchemaInitializer`](../../src/main/java/et/restlink/ussdgw/
 | Mode | `db-kind` | JDBC URL |
 |------|-----------|----------|
 | **Lab (default)** | `h2` | `jdbc:h2:file:./data/ussdgw;…;MODE=PostgreSQL;DATABASE_TO_LOWER=TRUE;…` |
-| **Prod** | `postgresql` | `jdbc:postgresql://HOST:5432/ussdgw` |
+| **Prod / Digicom server** | `postgresql` | `jdbc:postgresql://HOST:5432/ussdgw` |
+
+**Hard rules (2026-08-07 lab):** DB name is **`ussdgw`** — **never** point at OTA’s PostgreSQL DB **`ota`**. `quarkus.datasource.db-kind` is **build-time** (Quarkus JDBC extension); switching H2→PG needs a **rebuild / `package-dist.sh`**, not only editing a running process. Local git default stays **file H2**; Digicom PG lives in **server** `dist/configs` (or `QUARKUS_DATASOURCE_*`).
 
 Both drivers are on the classpath (`quarkus-jdbc-h2` + `quarkus-jdbc-postgresql`). Edit **`dist/configs/application.properties`** (or set `QUARKUS_DATASOURCE_*` env) — **no** Quarkus `%prod` profile required.
 

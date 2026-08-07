@@ -72,7 +72,7 @@ Peer: OTA [`docs/agents/packaging.md`](../../../../ota-service/ota-sim-push/docs
 - **Dist:** git scaffold ≠ runnable — `package-dist.sh` before copy-and-run (`lib/` gitignored). → § Dist
 - **DB:** file H2 lab or PostgreSQL prod — never `h2:mem` for ship. → [schema.md](schema.md)
 - **`AGENTS.md` stays thin** — durable rules live here / linked docs.
-- **HTTP AS modes:** Sync / Async / Callback = admin HTMX + Monitor Hub hooks; TENANT lab only.
+- **HTTP AS modes:** Sync / Async / Callback = admin HTMX + Monitor Hub hooks; TENANT lab only. Pull carries `correlationId` (push-back key), `sessionId`/`virtualBridgeId`, `adaptiveTimeoutMs` — same JSON fields on gRPC.
 - **AS HTTP wire (dual-mode):** default **XML** (`text/xml`, classic `<dialog>`) + opt-in **JSON**; per-tenant `http_as_wire_format` / `ussd.as.http.wire-format`. NI sync path `/ussd` + `JSESSIONID`; park with `AdaptiveTimeout`, never `Thread.sleep`. → [classic-xml.md](../as-contract/classic-xml.md)
 - **HLR face:** inbound SRI-SM → `HlrResponderSbb`. Default PROXY_MAP fail-closed. → [ss7-lab-pair.md](ss7-lab-pair.md)
 - **Diameter / SIP:** live MO/NI when RA peer ready; stub only when down.

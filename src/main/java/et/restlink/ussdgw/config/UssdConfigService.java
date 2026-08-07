@@ -51,10 +51,12 @@ public class UssdConfigService {
     boolean httpClientEnabledProp;
     @ConfigProperty(name = "ussd.http.server.enabled", defaultValue = "true")
     boolean httpServerEnabledProp;
-    @ConfigProperty(name = "ussd.http.client.connect-timeout-ms", defaultValue = "10000")
+    @ConfigProperty(name = "ussd.http.client.connect-timeout-ms", defaultValue = "5000")
     int httpConnectMsProp;
     @ConfigProperty(name = "ussd.http.client.request-timeout-ms", defaultValue = "15000")
     int httpRequestMsProp;
+    @ConfigProperty(name = "ussd.http.client.max-pool-size", defaultValue = "2048")
+    int httpClientMaxPoolProp;
     @ConfigProperty(name = "ussd.http.callback-path", defaultValue = "/as/callback")
     String httpCallbackPathProp;
     @ConfigProperty(name = "ussd.as.http.wire-format", defaultValue = "xml")
@@ -161,6 +163,11 @@ public class UssdConfigService {
 
     public int httpRequestTimeoutMs() {
         return integer(RuntimeConfigStore.Keys.HTTP_REQUEST_MS, httpRequestMsProp);
+    }
+
+    /** Vert.x WebClient max pool size for AS pull / callbacks. */
+    public int httpClientMaxPoolSize() {
+        return integer(RuntimeConfigStore.Keys.HTTP_CLIENT_MAX_POOL, httpClientMaxPoolProp);
     }
 
     public String httpCallbackPath() {

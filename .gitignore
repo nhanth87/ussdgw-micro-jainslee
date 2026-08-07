@@ -15,3 +15,5 @@ logs/
 .settings/
 tmp/
 dogfood-output/
+node_modules/
+tools/as-node/node_modules

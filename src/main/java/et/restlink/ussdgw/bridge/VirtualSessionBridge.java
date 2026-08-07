@@ -63,12 +63,14 @@ public class VirtualSessionBridge {
     }
 
     public void onAsResponse(AsResponse response, long latencyMs) {
-        Optional<VirtualSession> opt = store.acceptAsResponse(
-                response.correlationId(), response.generation());
+        String pushBackId = response == null ? null : response.resolvePushBackId();
+        Optional<VirtualSession> opt = pushBackId == null
+                ? Optional.empty()
+                : store.acceptAsResponse(pushBackId, response.generation());
         if (opt.isEmpty()) {
             zombieDrop.incrementAndGet();
             LOG.info("Drop late/zombie AS response corr={} gen={}",
-                    response.correlationId(), response.generation());
+                    pushBackId, response == null ? -1 : response.generation());
             return;
         }
         VirtualSession s = opt.get();
