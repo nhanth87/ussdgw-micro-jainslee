@@ -44,13 +44,22 @@ public class TenantService {
                                boolean enabled, String httpApiKey, String smppSystemId,
                                String asCallbackBase, int maxTps) {
         return upsert(tenantId, displayName, networkId, enabled, httpApiKey,
-                smppSystemId, null, asCallbackBase, maxTps);
+                smppSystemId, null, asCallbackBase, maxTps, null);
     }
 
     @Transactional
     public TenantEntity upsert(String tenantId, String displayName, int networkId,
                                boolean enabled, String httpApiKey, String smppSystemId,
                                String smppPasswordOrBlank, String asCallbackBase, int maxTps) {
+        return upsert(tenantId, displayName, networkId, enabled, httpApiKey,
+                smppSystemId, smppPasswordOrBlank, asCallbackBase, maxTps, null);
+    }
+
+    @Transactional
+    public TenantEntity upsert(String tenantId, String displayName, int networkId,
+                               boolean enabled, String httpApiKey, String smppSystemId,
+                               String smppPasswordOrBlank, String asCallbackBase, int maxTps,
+                               String httpAsWireFormat) {
         String id = tenantId.trim();
         TenantEntity e = TenantEntity.findById(id);
         Instant now = Instant.now();
@@ -73,6 +82,7 @@ public class TenantService {
         }
         e.asCallbackBase = blank(asCallbackBase);
         e.maxTps = maxTps <= 0 ? 50 : maxTps;
+        e.httpAsWireFormat = normalizeHttpAsWireFormat(httpAsWireFormat);
         e.updatedAt = now;
         e.persist();
         return e;
@@ -91,5 +101,14 @@ public class TenantService {
 
     private static String blank(String s) {
         return s == null || s.isBlank() ? null : s.trim();
+    }
+
+    /** Normalize to {@code XML} or {@code JSON}; null/blank/unknown → {@code XML}. */
+    static String normalizeHttpAsWireFormat(String httpAsWireFormat) {
+        if (httpAsWireFormat == null || httpAsWireFormat.isBlank()) {
+            return "XML";
+        }
+        String v = httpAsWireFormat.trim().toUpperCase();
+        return "JSON".equals(v) ? "JSON" : "XML";
     }
 }

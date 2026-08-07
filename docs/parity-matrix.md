@@ -7,8 +7,8 @@
 | Diameter USSD | — | **Live** MO (`DiameterUssdSbb`) + NI (`SendDiameterRequest`) when `ra-diameter` peer ready; STUB_QUEUED when peer down |
 | SMPP USSD TLV | — | Lab MO → AS pull; NI plain `submit_sm` when client bound; **local in-tree SMPP RA** |
 | SIP / USSI | SipClient/Server | **Live** MO (`SipUssiSbb` / MESSAGE) + NI (`SendMessage`) when `ra-sip-servlet` active; STUB_QUEUED when RA down |
-| HTTP pull AS | HttpClientSbb | HttpClientSbb + `JsonPostRequest` (raw body R/R) |
-| HTTP async callback / NI ingress | HttpServerSbb | HttpServerSbb + /as/callback |
+| HTTP pull AS | HttpClientSbb | HttpClientSbb + dual-mode pull body (XML default / JSON) |
+| HTTP async callback / NI ingress | HttpServerSbb | HttpServerSbb + `/as/callback` + classic NI sync path `/ussd` |
 | gRPC pull | GrpcClientSbb (50ms poll) | GrpcClientSbb callback-only |
 | gRPC server | GrpcServerSbb | GrpcServerSbb |
 | SRI for NI | SriSbb | SriSbb + MapSendRoutingInfoForSm |
@@ -18,18 +18,19 @@
 | CDR dual S1/S2 | USSDCDRState | CdrService + CdrDbFlusher (PG/H2); greenfield phase names |
 | In-flight saga | Infinispan VirtualSessionStore | **ProfileFacility `ussdTx`** (`UssdTxProfile`) |
 | Admin UI | Jolokia / management WAR | **OTA-shell** disk admin (`AdminPageRenderer` + `app/html/admin/`) + Monitor Hub |
-| AS wire format | XmlMAPDialog XML | Greenfield JSON/proto — **intentional non-port** |
+| AS wire format | XmlMAPDialog XML | **Dual-mode:** classic XmlMAPDialog-compatible **XML** (default) + greenfield **JSON**; classic NI sync with **JSESSIONID** in scope |
 | Runtime | WildFly 10 Mobicents SLEE | Quarkus + micro-jainslee |
 | Dist | WildFly DU | RestLink/Ussdgw fast-jar + `dist-package-script.sh` |
 | Jolokia | Classic ops | **Intentional non-port** — Monitor Hub + HTMX admin |
 
 ## Intentional non-ports
 
-- **XmlMAPDialog** AS wire — greenfield JSON/proto only ([`docs/as-contract/`](as-contract/)).
 - **Jolokia** management — replaced by Monitor Hub + disk admin shell.
 - **OTA fleet / CAP / `/sendota`** — not part of this USSD GW product.
 
-Scenario checklist (behavior): reuse classic `docs/e2e-grpc-ussd-test.md` §8 adaptive/bridge matrix as lab cases — not wire copy.
+**In scope (not a non-port):** classic XmlMAPDialog-compatible HTTP XML wire (default) alongside greenfield JSON — see [`docs/as-contract/classic-xml.md`](as-contract/classic-xml.md) and [`docs/as-contract/`](as-contract/).
+
+Scenario checklist (behavior): reuse classic `docs/e2e-grpc-ussd-test.md` §8 adaptive/bridge matrix as lab cases — not wire copy-only.
 
 Lab access checklist:
 
@@ -38,3 +39,4 @@ Lab access checklist:
 3. SIP: enable `ussd.sip.enabled`, RA active → `sip.live=true`; MESSAGE MO + NI `SIP_SENT`.
 4. Bridge S1/S2 + EWMA gate (classic matrix §8).
 5. CDR dual-leg phases visible in admin CDR page.
+6. HTTP AS: tenant/global wire-format XML (default) or JSON; NI sync cookie `JSESSIONID` on `/ussd`.

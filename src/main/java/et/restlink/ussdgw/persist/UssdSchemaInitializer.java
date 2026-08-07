@@ -51,6 +51,7 @@ public class UssdSchemaInitializer {
             new RequiredColumn("ussd_tenant", "http_api_key"),
             new RequiredColumn("ussd_tenant", "network_id"),
             new RequiredColumn("ussd_tenant", "max_tps"),
+            new RequiredColumn("ussd_tenant", "http_as_wire_format"),
             new RequiredColumn("ussd_admin_user", "role"),
             new RequiredColumn("ussd_admin_user", "tenant_id"),
             new RequiredColumn("ussd_cdr", "tenant_id"),
@@ -59,7 +60,8 @@ public class UssdSchemaInitializer {
     );
 
     static final List<String> MIGRATIONS = List.of(
-            "V1__ussdgw_baseline.sql"
+            "V1__ussdgw_baseline.sql",
+            "V2__tenant_http_as_wire_format.sql"
     );
 
     @Inject

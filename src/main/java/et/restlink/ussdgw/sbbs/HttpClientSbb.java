@@ -1,8 +1,9 @@
 package et.restlink.ussdgw.sbbs;
 
+import et.restlink.ussdgw.api.AsHttpWireFormat;
 import et.restlink.ussdgw.api.AsRequest;
 import et.restlink.ussdgw.api.AsResponse;
-import et.restlink.ussdgw.api.AsWireCodec;
+import et.restlink.ussdgw.bridge.VirtualSession;
 import et.restlink.ussdgw.events.PullHttpEvent;
 import et.restlink.ussdgw.logging.SleeEventTrace;
 import et.restlink.ussdgw.service.AsPullClient;
@@ -17,8 +18,8 @@ import com.microjainslee.api.annotations.InjectRa;
 import com.microjainslee.ra.httpclient.command.HttpCallbackCommand;
 import com.microjainslee.ra.httpclient.events.HttpCallbackCompletedEvent;
 
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /** HTTP pull toward AS — request/response via RA JsonPost (raw body, no poll). */
@@ -28,6 +29,7 @@ public final class HttpClientSbb implements Sbb, SleeEventHandler {
     private final Map<String, AtomicInteger> attempts = new ConcurrentHashMap<>();
     private final Map<String, String> urlByCorr = new ConcurrentHashMap<>();
     private final Map<String, String> payloadByCorr = new ConcurrentHashMap<>();
+    private final Map<String, AsHttpWireFormat> formatByCorr = new ConcurrentHashMap<>();
 
     @InjectRa(name = "http-callback-ra")
     private volatile RaCommandPort httpClient;
@@ -68,19 +70,22 @@ public final class HttpClientSbb implements Sbb, SleeEventHandler {
             svc().saga().onAsPullFailed(corr, admit.reason());
             return "circuit-open corr=" + corr;
         }
-        String payload = AsWireCodec.encodeRequestString(req);
+        String tenantId = svc().store().get(corr).map(VirtualSession::tenantId).orElse(null);
+        AsHttpWireFormat format = svc().wireFormatResolver().resolve(tenantId);
+        String payload = svc().wireFacade().encodePullRequest(req, format);
         startedAt.put(corr, System.currentTimeMillis());
         attempts.put(corr, new AtomicInteger(0));
         urlByCorr.put(corr, pull.asUrl());
         payloadByCorr.put(corr, payload);
+        formatByCorr.put(corr, format);
         RaCommandPort port = httpClient;
         if (port == null) {
             svc().asPull().recordFailure(pull.asUrl());
             svc().saga().onAsPullFailed(corr, "NO_HTTP_RA");
             return "no-ra";
         }
-        port.sendCommand(new HttpCallbackCommand.JsonPostRequest(corr, pull.asUrl(), payload));
-        return "submitted corr=" + corr;
+        submitPost(port, corr, pull.asUrl(), payload, format);
+        return "submitted corr=" + corr + " wire=" + format;
     }
 
     private String onCompleted(HttpCallbackCompletedEvent done) {
@@ -88,6 +93,7 @@ public final class HttpClientSbb implements Sbb, SleeEventHandler {
         Long start = startedAt.get(corr);
         long latency = start == null ? -1 : System.currentTimeMillis() - start;
         String url = urlByCorr.getOrDefault(corr, "");
+        AsHttpWireFormat format = formatByCorr.getOrDefault(corr, AsHttpWireFormat.XML);
         int status = done.getStatusCode();
         String err = done.getErrorMessage();
         AtomicInteger att = attempts.getOrDefault(corr, new AtomicInteger(0));
@@ -102,7 +108,7 @@ public final class HttpClientSbb implements Sbb, SleeEventHandler {
                 RaCommandPort port = httpClient;
                 if (port != null && payload != null) {
                     startedAt.put(corr, System.currentTimeMillis());
-                    port.sendCommand(new HttpCallbackCommand.JsonPostRequest(corr, url, payload));
+                    submitPost(port, corr, url, payload, format);
                     return "retry attempt=" + att.get() + " corr=" + corr;
                 }
             }
@@ -121,9 +127,18 @@ public final class HttpClientSbb implements Sbb, SleeEventHandler {
         }
         clear(corr);
         svc().asPull().recordSuccess(url);
-        AsResponse resp = AsWireCodec.decodeResponse(body, corr);
+        AsResponse resp = svc().wireFacade().decodePullResponse(body, format, corr);
+        // EWMA via bridge.onAsResponse(latency) only — avoid double-sample
         svc().bridge().onAsResponse(resp, latency);
-        return "ok latencyMs=" + latency;
+        return "ok latencyMs=" + latency + " wire=" + format;
+    }
+
+    /** POST raw AS pull body with format Content-Type (XML or JSON). */
+    private static void submitPost(RaCommandPort port, String corr, String url,
+                                   String payload, AsHttpWireFormat format) {
+        AsHttpWireFormat fmt = format == null ? AsHttpWireFormat.XML : format;
+        port.sendCommand(new HttpCallbackCommand.JsonPostRequest(
+                corr, url, payload, fmt.contentType()));
     }
 
     private void clear(String corr) {
@@ -131,5 +146,6 @@ public final class HttpClientSbb implements Sbb, SleeEventHandler {
         attempts.remove(corr);
         urlByCorr.remove(corr);
         payloadByCorr.remove(corr);
+        formatByCorr.remove(corr);
     }
 }

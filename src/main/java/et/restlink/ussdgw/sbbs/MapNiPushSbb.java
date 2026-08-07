@@ -74,13 +74,26 @@ public final class MapNiPushSbb implements Sbb, SleeEventHandler {
                 MapDialogHelper.mscSsn(cfg), MapDialogHelper.localSsn(cfg));
         svc().cdr().write(ni.correlationId(), CdrPhase.S2_PUSH, ni.msisdn(),
                 null, "NI_PUSH", text);
+        // HTTP-NI: keep session; AS HTTP stays parked until MS continue (MapUssdParent)
+        // or lab echo / AdaptiveTimeout gate. Do not completeParked here when MAP is live.
+        boolean httpNi = false;
+        try {
+            httpNi = svc().niHttpPark().isHttpNi(ni.correlationId());
+        } catch (Throwable ignored) { }
+        boolean keepHttpNi = httpNi;
         sess.ifPresent(s -> {
-            s.setState(VirtualSessionState.COMPLETED);
-            s.setPendingText(null);
-            s.setDialogAlive(false);
-            // Profile get() returns a detached snapshot — must write-through then drop.
-            svc().store().put(s);
-            svc().store().remove(s.correlationId());
+            if (keepHttpNi) {
+                s.setState(VirtualSessionState.ACTIVE);
+                s.setPendingText(null);
+                svc().store().put(s);
+            } else {
+                s.setState(VirtualSessionState.COMPLETED);
+                s.setPendingText(null);
+                s.setDialogAlive(false);
+                // Profile get() returns a detached snapshot — must write-through then drop.
+                svc().store().put(s);
+                svc().store().remove(s.correlationId());
+            }
         });
         svc().cdr().write(ni.correlationId(), CdrPhase.COMPLETED, ni.msisdn(),
                 null, "BRIDGED_DONE", null);

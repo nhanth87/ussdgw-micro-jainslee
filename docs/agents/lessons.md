@@ -25,7 +25,9 @@ Short memory for Digicom footguns. Prefer this + OTA peer [`lessons.md`](../../.
 | Corrupt jSS7 **`*sccp*.xml`** (`<1>` keys) | Validate parse; quarantine + seed; smoke Start. | [ss7-lab-pair.md](ss7-lab-pair.md) |
 | jSS7 sim as **`SMS_TEST_CLIENT`** blocking HLR SSN 6 | Prefer **SMS_TEST_SERVER**; allow SSN **6**. | [ss7-lab-pair.md](ss7-lab-pair.md) |
 | SBB catching only **`RuntimeException`** | Catch **`Throwable`**; always emit OUT trace. | root AGENTS |
-| AS pull via **`CallbackRequest`** envelope | Pull = raw `JsonPostRequest` body. | [skills.md](skills.md) |
+| AS pull via **`CallbackRequest`** envelope | Pull = raw body (XML or JSON). | [skills.md](skills.md) |
+| Assuming **JSON-only** HTTP AS wire | Default is classic **XML** (`ussd.as.http.wire-format` / tenant `http_as_wire_format`); JSON is opt-in. | [classic-xml.md](../as-contract/classic-xml.md) |
+| **`Thread.sleep`** (or blocking wait) on classic **NI sync** parked HTTP | Park with async/suspend + **`AdaptiveTimeout`**; keep `JSESSIONID` multi-turn. | [classic-xml.md](../as-contract/classic-xml.md) · root AGENTS |
 | HTTP/gRPC response via **50ms timer poll** | RA callbacks only. | root AGENTS |
 | **Silent FAKE** HLR under PROXY_* | Default PROXY_MAP fail-closed; FAKE only when ops set. | [ss7-lab-pair.md](ss7-lab-pair.md) |
 | `ussd.hlr.upper-gt` **== local ussdGt** | Loop guard aborts — set a real upper HLR GT. | [ss7-lab-pair.md](ss7-lab-pair.md) |

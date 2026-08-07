@@ -133,8 +133,10 @@ public class AdminCatalogHandler {
                     f.get("smppSystemId"),
                     f.get("smppPassword"),
                     f.get("asCallbackBase"),
-                    parseInt(f.get("maxTps"), 50));
+                    parseInt(f.get("maxTps"), 50),
+                    f.get("httpAsWireFormat"));
             String notice = "saved " + esc(e.tenantId) + " networkId=" + e.networkId
+                    + " wire=" + esc(e.httpAsWireFormat)
                     + " key=" + maskKey(e.httpApiKey);
             return AdminHttpHandler.HttpReply.html(tenantsHtml(notice));
         } catch (RuntimeException ex) {
@@ -245,13 +247,18 @@ public class AdminCatalogHandler {
         sb.append("<label>SMPP password <input name=\"smppPassword\" type=\"password\" autocomplete=\"new-password\" placeholder=\"write-only\"/></label>");
         sb.append("<label>AS callback base <input name=\"asCallbackBase\" size=\"40\"/></label>");
         sb.append("<label>maxTps <input name=\"maxTps\" type=\"number\" value=\"50\" min=\"1\"/></label>");
+        sb.append("<label>HTTP AS wire <select name=\"httpAsWireFormat\">")
+                .append("<option value=\"XML\" selected>XML</option>")
+                .append("<option value=\"JSON\">JSON</option></select></label>");
         sb.append("<label>enabled <select name=\"enabled\"><option>true</option><option>false</option></select></label>");
         sb.append("<input type=\"hidden\" name=\"action\" value=\"save\"/>");
         sb.append("<button type=\"submit\">Save tenant</button></form>");
-        sb.append("<table><tr><th>tenantId</th><th>name</th><th>networkId</th><th>smpp</th><th>key</th><th>tps</th><th>on</th><th></th></tr>");
+        sb.append("<table><tr><th>tenantId</th><th>name</th><th>networkId</th><th>wire</th>")
+                .append("<th>smpp</th><th>key</th><th>tps</th><th>on</th><th></th></tr>");
         for (TenantEntity t : tenants.list()) {
             sb.append("<tr><td>").append(esc(t.tenantId)).append("</td><td>")
                     .append(esc(t.displayName)).append("</td><td>").append(t.networkId).append("</td><td>")
+                    .append(esc(t.httpAsWireFormat)).append("</td><td>")
                     .append(esc(t.smppSystemId)).append("</td><td>").append(esc(maskKey(t.httpApiKey))).append("</td><td>")
                     .append(t.maxTps).append("</td><td>").append(t.enabled).append("</td><td>");
             sb.append("<form hx-post=\"/admin/tenants\" hx-target=\"#panel\" hx-swap=\"innerHTML\" ")

@@ -125,6 +125,10 @@ public class RuntimeConfigStore {
         public static final String HTTP_CONNECT_MS = "ussd.http.client.connect-timeout-ms";
         public static final String HTTP_REQUEST_MS = "ussd.http.client.request-timeout-ms";
         public static final String HTTP_CALLBACK_PATH = "ussd.http.callback-path";
+        /** AS HTTP wire: XML (classic dialog) or JSON (greenfield). */
+        public static final String AS_HTTP_WIRE_FORMAT = "ussd.as.http.wire-format";
+        /** HTTP NI push path appended to AS base URL. */
+        public static final String HTTP_NI_PATH = "ussd.http.ni-path";
 
         public static final String GRPC_CLIENT_ENABLED = "ussd.grpc.client.enabled";
         public static final String GRPC_SERVER_ENABLED = "ussd.grpc.server.enabled";

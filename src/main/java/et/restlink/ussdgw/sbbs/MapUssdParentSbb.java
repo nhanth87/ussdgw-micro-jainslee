@@ -178,6 +178,15 @@ public final class MapUssdParentSbb implements Sbb, SleeEventHandler {
         } catch (Exception e) {
             ussd = "";
         }
+        // Classic HTTP-NI sync: MS digits complete the parked AS HTTP (not AS pull).
+        if (svc().niHttpPark().isHttpNi(s.correlationId())) {
+            s.nextGeneration();
+            svc().store().put(s);
+            boolean done = svc().niHttpPark().completeParked(
+                    s.correlationId(), ussd, et.restlink.ussdgw.api.AsAction.CONTINUE);
+            return done ? "http-ni-ms-continue gen=" + s.generation()
+                    : "http-ni-no-park gen=" + s.generation();
+        }
         Optional<ShortCodeRule> rule = svc().routing().find(s.shortCode());
         if (rule.isEmpty()) {
             MapDialogHelper.replyAndEnd(ss7, dialogId, resp.getInvokeId(), "Session ended.");
