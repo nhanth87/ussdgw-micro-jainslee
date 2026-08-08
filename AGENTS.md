@@ -31,7 +31,7 @@ digicom = main + Digicom seeds  ──push──►  digicom-et/main  (PRIVATE)
 ```
 
 - **Local:** Digicom paths may exist on disk (gitignored on `main`) for Digicom package/rsync.
-- **Agents:** never `git push origin` alone when Digicom overlay also needs updating — run **`./build/push-dual.sh`**. Never force-add Digicom files onto `main` / never push them to nhanth87.
+- **Agents:** never `git push origin` alone when Digicom overlay also needs updating — run **`./build/push-dual.sh`**. Never force-add Digicom files onto `main` / never push them to nhanth87. Digicom tip **merges** `main` (FF-friendly); use **`--force-digicom`** only if digicom-et/main rejects a non-FF (private lease).
 - Legacy branch `private/digicom-carrier-seeds` is a seed backup; prefer **`digicom-et/main`** as the Digicom-inclusive tree.
 
 ## Topic index
