@@ -12,7 +12,8 @@ Pattern peer: OTA [`docs/agents/`](../../../../ota-service/ota-sim-push/docs/age
 | Admin UX | `app/html/admin/` + `AdminPageRenderer` (shell from ota-sim-push; USSD pages only) |
 | SS7 lab / HLR face / Digicom↔Balance Plus | [ss7-lab-pair.md](ss7-lab-pair.md) (live RC **12**, SCTP/IPSP server) |
 | Schema / H2+Postgres | [schema.md](schema.md) — Flyway V1 + `UssdSchemaInitializer` |
-| Bridge | Adaptive EWMA + Virtual Session Bridge |
+| Bridge | Adaptive EWMA + Virtual Session Bridge (**on top** of MAP NI) |
+| USSD 3GPP + NI layering | [../as-contract/ussd-3gpp-notes.md](../as-contract/ussd-3gpp-notes.md) — 22.090 / 23.090 / 29.002 (22.002 ≠ USSD) |
 | AS contract | [../as-contract/](../as-contract/) dual-mode XML default + JSON · [classic-xml.md](../as-contract/classic-xml.md) |
 | Parity | [../parity-matrix.md](../parity-matrix.md) |
 | Cutover | [../cutover.md](../cutover.md) |

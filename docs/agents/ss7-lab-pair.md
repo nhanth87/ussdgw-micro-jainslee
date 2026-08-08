@@ -7,11 +7,14 @@ Peer pattern mirrors OTA [`ss7-lab-pair.md`](../../../../ota-service/ota-sim-pus
 | Role | GT (example) | SSN |
 |------|--------------|-----|
 | GW USSD / SC | `ussd.map.ussd-gt` (e.g. `251900000100`) | **8** |
+| GW gsmSCF (Digicom MO peer) | same GT as USSD when peer dials SSN 147 | **147** (`services` name `gsmscf`) |
 | GW HLR face | same stack, listen SSN **6** | **6** (`ussd.map.hlr-ssn`) |
 | Upper HLR (PROXY_MAP) | `ussd.hlr.upper-gt` | 6 |
 | Peer SMSC / sim | PC 2 `SMS_TEST_SERVER` | 8 + 6 |
 
 **Loop guard:** `ussd.hlr.upper-gt` must **not** equal `ussd.map.ussd-gt` (or fake MSC). PROXY_MAP fail-closes with abort if it would loop.
+
+**Extra SSN / gsmSCF:** Lab stacks that only advertise SSN **8** (+ HLR **6**) will **UDTS Subsystem failure** when the peer’s Called SSN is **147**. Digicom Balance Plus MO does that. Declare `{name:gsmscf,ssn:147,protocol:map}` in `services`; `Ss7StackBuilder` calls TCAP `setExtraSsns` for every non-primary SSN. Boot must log `Registered SCCP listener with extra ssn 147`.
 
 ## HLR modes (`ussd.hlr.mode`)
 
@@ -49,13 +52,15 @@ Dedicated **`/admin/hlr`** (not SS7 JSON): mode, fake IMSI/MSC, upper GT, Diamet
 Outbound SRI-SM (NI `SriSbb` + PROXY_MAP face) CalledParty = resolved `ussd.hlr.upper-gt`
 (admin overlay when non-blank, else `application.properties`). Empty admin field → props default.
 
-## Digicom carrier (Balance Plus) — live server snapshot
+## Digicom carrier (Balance Plus) — prod-bound live host
+
+**Digicom is future production**, not a disposable test lab: real Balance Plus SS7 peer, **PostgreSQL** DB **`ussdgw`**, and live configs that must survive deploys.
 
 **Source of truth = Digicom host** (`digicom-nb`, APP_HOME `/home/app/ota-push-services/ussdgw-micro-jainslee/`).  
 Worktree seed `build/ss7-digicom-balance.json` must match server `configs/ss7-digicom-balance.json`.  
-Never overwrite live `configs/application.properties` on rsync — only jars/`lib`/`quarkus`/`app/html` (+ seed JSON when intentional).
+**Never** overwrite Digicom `configs/` on rsync (`application.properties`, `ss7-digicom-balance.json`, `ss7-persist/`) — ship **jars/`lib`/`quarkus`/`app/html` only** (+ seed JSON only when intentionally updating SS7). Digicom package = build-time **`db-kind=postgresql`**, then restore local **H2** for the dev tree.
 
-Lab localhost stack stays in `build/ss7-lab.json` (127.0.0.1:8013↔8014). **Do not** point local H2 lab props at the Digicom carrier JSON. Stop/disable `ussdgw-ss7sim` on Digicom (lab sim binds 8013/8014).
+Localhost stack stays in `build/ss7-lab.json` (127.0.0.1:8013↔8014). **Do not** point local H2 lab props at the Digicom carrier JSON. Stop/disable `ussdgw-ss7sim` on Digicom (lab sim binds 8013/8014).
 
 ### Roles (RFC / SP table — no compromise)
 
@@ -155,12 +160,15 @@ ussd.ss7.persist-dir=configs/ss7-persist
   },
   "services": [
     { "name": "primary", "ssn": 8, "protocol": "map" },
+    { "name": "gsmscf", "ssn": 147, "protocol": "map" },
     { "name": "hlr", "ssn": 6, "protocol": "map" }
   ]
 }
 ```
 
 **M3UA:** two separate AS; both `ipsp: server`, **`exchangeType: DE`** (dual exchange — Digicom may send ASPUP after SCTP UP; default SE waits forever if peer only HEARTBEATs), RC **12** via single field `routingContext`.
+
+**Services / SSN (MO pull):** `primary` **8**, **`gsmscf` 147**, `hlr` **6**. Without **147**, Balance Plus MO to Digicom GT gets SCCP UDTS (“no local SSN is present”) and never reaches `MapUssdParentSbb`. After Apply/restart, grep logs for `Registered SCCP listener with extra ssn 147`.
 
 ### Live status (2026-08-07) — RC12 ACTIVE
 
@@ -190,3 +198,39 @@ Proof pcap: [`build/pcap/m3ua-aspac-rc12-20260807-135839.pcap`](../../build/pcap
 **NI push prove (2026-08-08 retest):** `POST /ussd` notify MSISDN **251911230398** with `ss7.live=true` → log `USSD NI sent … mscGt=251971200146 imsi=…` + peer `unstructuredSSNotify_Response`. Wire proof: [`build/pcap/ussd-ni-push-msc-20260808-023952.pcap`](../../build/pcap/ussd-ni-push-msc-20260808-023952.pcap) (CalledParty **251971200146**). Handset screen = operator/UE confirm (server cannot see it).
 
 **NI push pcap (2026-08-08 02:51 UTC fresh):** [`build/pcap/ussd-ni-push-msc-20260808-025117.pcap`](../../build/pcap/ussd-ni-push-msc-20260808-025117.pcap) — SCTP **2011/2019**; SRI → HLR GT **251900000006**; result MSC **251971200146** / IMSI **636010024533522**; `unstructuredSS-Notify` CalledParty = MSC (not MSISDN); peer Notify response.
+
+### Ethiopia MO pull (`*101xxxxxx`) — prep (2026-08-08)
+
+SP will dial **pull** short codes like `*101123456#` (user-request / MO). Wire is the opposite of NI push:
+
+```text
+UE ──MAP processUnstructuredSS-Request──► GW (MapUssdParentSbb)
+  → extractShortCode → ShortCodeRoutingService.find (exact, else longest mark prefix)
+  → VirtualSession + startAwaitingAs (AdaptiveTimeout / bridge on top)
+  → AsPullRouter → HTTP POST AS raw XML (gen0 = processUnstructuredSSRequest_Request)
+  ← AS <dialog> CONTINUE/END (unstructuredSSRequest_Request or process…_Response)
+  → claimForAsResponse → MAP unstructuredSS-Request / processUnstructured reply → UE
+  (continue: UE unstructuredSS-Response → encodeContinue → same AS corr)
+```
+
+| Check | Digicom state |
+|-------|----------------|
+| `ss7.live` | must be **true** (peer carries MO in) |
+| Local SSN | **8 + 147 + 6** in seed (`gsmscf` **147**) — peer Called SSN is often **147**, not 8 |
+| Routing | **`*101` mark=true** → `http://127.0.0.1:8090/ussd/pull` (seeded live; **not** `*101*` — that misses `*101123456#`) |
+| AS sim | `tools/as-node` on **:8090** (`npm run pull:fast`) — real XmlMAPDialog; **not** webhook.cool alone |
+| Exact lab codes | `*100#` / `*123#` still exact → same AS |
+
+**Mark footgun:** `extractShortCode("*101123456#")` → `*101123456#`. Prefix match is `startsWith`. Use mark short_code **`*101`**. Do **not** seed `*101*` unless the MMI has a second asterisk.
+
+**AS / AdaptiveTimeout footgun:** HTTP 200 with **empty body** → `AS_EMPTY_BODY` (saga compensate). Handset “Please wait…” is easy to misread as the AdaptiveTimeout gate — it is not. Dump endpoints are not an AS; optional as-node `MIRROR_URL` can copy XML to a dump while as-node still replies.
+
+**Prove checklist (live peer or handset):**
+
+1. `ss7.live=true` + boot log `Registered SCCP listener with extra ssn 147` + as-node up on 8090.
+2. Handset / Balance Plus MO: dial `*101xxxxxx#` toward GW GT **251971200490** (Called SSN often **147**).
+3. Logs: `onProcessUnstructured` route (not UDTS / `no-route sc=…` / `dup-skip`) → HTTP pull → AS menu XML → MAP reply out. One dialog → one AS POST (dialogId dedup).
+4. Pcap: inbound `processUnstructuredSS-Request` string=`*101…#`; outbound Request/Response on same dialog. If AS is HTTPS, filter TLS SNI — not cleartext `http`.
+5. AS continue digits `1–4` / `0` exercise same-dialog bridge (as-node interactive menus).
+
+Lab AS XML smoke (no MAP): `POST http://127.0.0.1:8090/ussd/pull` with classic `processUnstructuredSSRequest_Request` body — expect `unstructuredSSRequest_Request` menu.

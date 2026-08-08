@@ -80,6 +80,9 @@ public class UssdConfigService {
     @ConfigProperty(name = "ussd.hlr.proxy.pending-ttl-ms", defaultValue = "15000")
     long hlrProxyPendingTtlMsProp = 15_000L;
 
+    @ConfigProperty(name = "ussd.map.enabled", defaultValue = "false")
+    boolean mapEnabledProp;
+
     @ConfigProperty(name = "ussd.grpc.client.enabled", defaultValue = "true")
     boolean grpcClientEnabledProp;
     @ConfigProperty(name = "ussd.grpc.server.enabled", defaultValue = "true")
@@ -254,7 +257,7 @@ public class UssdConfigService {
 
     /** MAP plane enabled (same key as SS7 apply {@code ussd.map.enabled}). */
     public boolean mapEnabled() {
-        return bool(RuntimeConfigStore.Keys.MAP_ENABLED, false);
+        return bool(RuntimeConfigStore.Keys.MAP_ENABLED, mapEnabledProp);
     }
 
     public boolean grpcClientEnabled() {

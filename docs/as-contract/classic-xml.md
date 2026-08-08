@@ -13,6 +13,8 @@ Detail: [`openapi-as.yaml`](openapi-as.yaml) (JSON schemas) · this file (XML).
 Classic oracle: WildFly `ussdgw` `XmlMAPDialog` / `EventsSerializeFactory` and
 [Chapter-HTTP_Architecture](../../../../ussdgateway/master/docs/adminguide/sources-asciidoc/src/main/asciidoc/Chapter-HTTP_Architecture.adoc).
 
+3GPP Stage 1/2 + MAP ops (and AdaptiveTimeout/Virtual bridge **on top** of MAP NI): [`ussd-3gpp-notes.md`](ussd-3gpp-notes.md).
+
 ## Root element
 
 Root is always `<dialog …>`. Common attributes (subset):
@@ -100,9 +102,11 @@ Attribute on NI/push `<dialog>` from the AS only:
 
 Meaning: GW opens an **empty** MAP dialog first; only after the peer accepts the dialog does it send the USSD payload. Omit or `false` for normal single-shot open+payload.
 
-## Adaptive gate
+## Adaptive gate (on top of MAP NI)
 
-`AdaptiveTimeout` (EWMA per `networkId`) gates how long GW waits for AS on pull and how long a **parked NI HTTP** response may stay open before abort/bridge policy. Floor/ceiling match classic (~1000–7000 ms lab defaults). Late AS after gate may hit Virtual Session Bridge (S1 wait text → S2 NI) when bridge is armed — same behavior matrix as classic §8.
+`AdaptiveTimeout` (EWMA per `networkId`) + **`ClassicNiHttpPark`** + **`VirtualSession` / BRIDGE** are the **top** AS park/gate layer. MAP NI (`unstructuredSS-Notify` / `-Request`, same-dialog continue, TC-END) sits **under** that layer — do not replace bridge/adaptive with “raw MAP only”. Detail + sequence: [`ussd-3gpp-notes.md`](ussd-3gpp-notes.md) §6.
+
+`AdaptiveTimeout` gates how long GW waits for AS on pull and how long a **parked NI HTTP** response may stay open before abort/bridge policy. Floor/ceiling match classic (~1000–7000 ms lab defaults). MAP **invoke** timer (UE think-time on Request) is orthogonal — see grill Q6 in the 3GPP notes. Late AS after gate may hit Virtual Session Bridge (S1 wait text → S2 NI) when bridge is armed — same behavior matrix as classic §8.
 
 ### Late-push metadata (RestLink additive)
 

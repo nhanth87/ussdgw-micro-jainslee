@@ -56,9 +56,34 @@ class MapDialogHelperTest {
     }
 
     @Test
+    void niContinueSendsMapUnstructuredSsContinue() {
+        CapturingPort port = new CapturingPort();
+        MapDialogHelper.niContinue(port, "corr-c", "next menu",
+                et.restlink.ussdgw.api.UssdAlphabet.AUTO, false);
+        assertThat(port.cmds).hasSize(1);
+        assertThat(port.cmds.get(0)).isInstanceOf(Ss7Command.MapUnstructuredSsContinue.class);
+        var c = (Ss7Command.MapUnstructuredSsContinue) port.cmds.get(0);
+        assertThat(c.dialogId()).isEqualTo("corr-c");
+        assertThat(c.text()).isEqualTo("next menu");
+        assertThat(c.notifyOnly()).isFalse();
+    }
+
+    @Test
+    void niCloseSendsMapDialogClose() {
+        CapturingPort port = new CapturingPort();
+        MapDialogHelper.niClose(port, "corr-x", true);
+        assertThat(port.cmds.get(0)).isInstanceOf(Ss7Command.MapDialogClose.class);
+        var c = (Ss7Command.MapDialogClose) port.cmds.get(0);
+        assertThat(c.dialogId()).isEqualTo("corr-x");
+        assertThat(c.prearrangedEnd()).isTrue();
+    }
+
+    @Test
     void nullPortIsNoOp() {
         MapDialogHelper.replyAndEnd(null, "d", 1, "x");
         MapDialogHelper.niPush(null, "c", "1", "2", "t", 0);
+        MapDialogHelper.niContinue(null, "c", "t", null, false);
+        MapDialogHelper.niClose(null, "c", true);
     }
 
     static final class CapturingPort implements RaCommandPort {

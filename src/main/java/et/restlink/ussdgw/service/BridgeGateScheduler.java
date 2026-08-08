@@ -1,6 +1,7 @@
 package et.restlink.ussdgw.service;
 
 import et.restlink.ussdgw.bridge.UssdSagaCoordinator;
+import et.restlink.ussdgw.bridge.AdaptiveTimeout;
 import et.restlink.ussdgw.bridge.VirtualSession;
 import et.restlink.ussdgw.bridge.VirtualSessionBridge;
 import et.restlink.ussdgw.bridge.VirtualSessionStore;
@@ -38,6 +39,7 @@ public class BridgeGateScheduler {
 
     @Inject VirtualSessionStore store;
     @Inject VirtualSessionBridge bridge;
+    @Inject AdaptiveTimeout adaptive;
     @Inject PendingSriRegistry pendingSri;
     @Inject HlrFaceService hlrFace;
     @Inject UssdSagaCoordinator saga;
@@ -120,7 +122,15 @@ public class BridgeGateScheduler {
         long now = System.currentTimeMillis();
         for (NiPushRequestEvent ni : pendingSri.sweepExpired(now)) {
             sriExpired.incrementAndGet();
-            cdr.write(ni.correlationId(), CdrPhase.FAILED, ni.msisdn(), null, "SRI_TIMEOUT", null);
+            Long ewma = null;
+            if (adaptive != null) {
+                double v = adaptive.observedLatencyMs(ni.networkId());
+                if (v > 0d) {
+                    ewma = Math.round(v);
+                }
+            }
+            cdr.write(ni.correlationId(), CdrPhase.FAILED, ni.msisdn(), null, "SRI_TIMEOUT",
+                    "service=BridgeGateScheduler", ni.networkId(), null, "MAP", null, ewma);
             saga.onNiFailed(ni.correlationId(), "SRI_TIMEOUT");
             try {
                 campaigns.onNiDone(ni.correlationId(), false, "SRI_TIMEOUT");

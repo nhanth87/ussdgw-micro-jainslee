@@ -11,8 +11,10 @@ import et.restlink.ussdgw.api.classic.ClassicNiHttpPark;
 import et.restlink.ussdgw.api.classic.ClassicNiIngress;
 import et.restlink.ussdgw.bridge.VirtualSession;
 import et.restlink.ussdgw.bridge.VirtualSessionState;
+import et.restlink.ussdgw.events.NiPushReadyEvent;
 import et.restlink.ussdgw.events.NiPushRequestEvent;
 import et.restlink.ussdgw.logging.SleeEventTrace;
+import et.restlink.ussdgw.service.MapDialogHelper;
 import et.restlink.ussdgw.service.SbbServices;
 import et.restlink.ussdgw.tenant.CallbackAuthService;
 import et.restlink.ussdgw.tenant.TenantGuard;
@@ -41,6 +43,9 @@ public final class HttpServerSbb implements Sbb, SleeEventHandler {
 
     @InjectRa(name = "http-server-ra")
     private volatile RaCommandPort http;
+
+    @InjectRa(name = "ra-jss7")
+    private volatile RaCommandPort ss7;
 
     public HttpServerSbb() { this(null); }
     public HttpServerSbb(SbbServices services) { this.services = services; }
@@ -255,10 +260,19 @@ public final class HttpServerSbb implements Sbb, SleeEventHandler {
         ClassicNiHttpPark.ParkRecord prior = opt.get();
         String corr = prior.correlationId();
         String text = ingress.text() == null ? "" : ingress.text();
+        String body = req.getBody();
+        boolean abort = looksLikeAbort(body);
         boolean endOrEmpty = text.isBlank()
-                || looksLikeEndDialog(req.getBody());
+                || looksLikeEndDialog(body)
+                || abort;
 
         if (endOrEmpty) {
+            // Classic pushToDevice: abort choice → abort; else close(prearrangedEnd).
+            if (abort) {
+                MapDialogHelper.abort(ss7, corr);
+            } else {
+                MapDialogHelper.niClose(ss7, corr, resolvePrearrangedEnd(body));
+            }
             park.unpark(corr);
             svc().store().get(corr).ifPresent(s -> {
                 s.setState(VirtualSessionState.COMPLETED);
@@ -267,9 +281,9 @@ public final class HttpServerSbb implements Sbb, SleeEventHandler {
                 svc().store().remove(corr);
             });
             String endBody = svc().wireFacade().encodeNiResponse(
-                    corr, text, AsAction.END, false, prior.format());
+                    corr, text, abort ? AsAction.ABORT : AsAction.END, false, prior.format());
             replyEx(req.getSessionId(), 200, prior.format().contentType(), endBody, setCookie(jsession));
-            return "ni-end";
+            return abort ? "ni-abort" : "ni-end";
         }
 
         AsResponse asResp = new AsResponse(corr, corr, 1, text, AsAction.CONTINUE, false);
@@ -282,13 +296,25 @@ public final class HttpServerSbb implements Sbb, SleeEventHandler {
         ClassicNiHttpPark.ParkRecord rec = park.park(
                 req.getSessionId(), jsession, corr, prior.format(), prior.networkId(), false);
         String msisdn = svc().store().get(corr).map(VirtualSession::msisdn).orElse("");
-        routeNiPush(corr, msisdn, text, prior.networkId(), ingress.notifyOnly());
+        Optional<VirtualSession> sess = svc().store().get(corr);
+        boolean reuse = sess.isPresent()
+                && sess.get().dialogAlive()
+                && sess.get().mscGt() != null
+                && !sess.get().mscGt().isBlank();
+        if (reuse) {
+            VirtualSession s = sess.get();
+            routeNiContinue(corr, msisdn, text, prior.networkId(), ingress.notifyOnly(),
+                    s.mscGt(), s.imsi());
+        } else {
+            // No MSC yet (first hop still in SRI) — keep SRI path.
+            routeNiPush(corr, msisdn, text, prior.networkId(), ingress.notifyOnly());
+        }
         if (!svc().config().mapEnabled()) {
             park.scheduleLabEcho(corr, text, LAB_ECHO_DELAY_MS);
         } else {
             park.scheduleAdaptiveGate(rec);
         }
-        return "ni-continue-parked";
+        return reuse ? "ni-continue-reuse" : "ni-continue-parked";
     }
 
     private void routeNiPush(String corr, String msisdn, String text, int networkId,
@@ -299,6 +325,19 @@ public final class HttpServerSbb implements Sbb, SleeEventHandler {
                     svc().container().createActivityContext("http-ni-" + corr));
         } catch (RuntimeException e) {
             // Lab / bootstrap without container — park gate or lab echo still covers reply.
+        }
+    }
+
+    /** Same MAP dialog continue — skips SriSbb / createNewDialog. */
+    private void routeNiContinue(String corr, String msisdn, String text, int networkId,
+                                 boolean notifyOnly, String mscGt, String imsi) {
+        try {
+            svc().container().routeEvent(
+                    NiPushReadyEvent.continueOnDialog(corr, msisdn, text, networkId,
+                            UssdAlphabet.AUTO, notifyOnly, mscGt, imsi),
+                    svc().container().createActivityContext("http-ni-cont-" + corr));
+        } catch (RuntimeException e) {
+            // Lab / bootstrap without container.
         }
     }
 
@@ -357,10 +396,35 @@ public final class HttpServerSbb implements Sbb, SleeEventHandler {
     private static boolean looksLikeEndDialog(String body) {
         if (body == null || body.isBlank()) return true;
         String t = body.trim().toLowerCase();
+        // Empty TC-END / explicit END / abort — not "Request + prearrangedEnd" (classic still
+        // processXml then close; P0 release path is empty/end/abort only).
         return t.contains("mapmessagessize=\"0\"")
-                || t.contains("prearrangedend=\"true\"")
                 || t.contains("\"action\":\"end\"")
-                || t.contains("\"action\": \"end\"");
+                || t.contains("\"action\": \"end\"")
+                || t.contains("type=\"end\"")
+                || looksLikeAbort(t);
+    }
+
+    private static boolean looksLikeAbort(String body) {
+        if (body == null || body.isBlank()) return false;
+        String t = body.trim().toLowerCase();
+        return t.contains("mapuserabortchoice")
+                || t.contains("\"action\":\"abort\"")
+                || t.contains("\"action\": \"abort\"")
+                || t.contains("type=\"abort\"");
+    }
+
+    /**
+     * Classic XmlMAPDialog: {@code prearrangedEnd=false} → close(false) after any payload;
+     * missing / true → close(true) for empty TC-END style release.
+     */
+    private static boolean resolvePrearrangedEnd(String body) {
+        if (body == null) return true;
+        String t = body.toLowerCase();
+        if (t.contains("prearrangedend=\"false\"")) {
+            return false;
+        }
+        return true;
     }
 
     private static boolean pathStartsWith(String path, String prefix) {

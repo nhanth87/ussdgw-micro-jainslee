@@ -62,7 +62,8 @@ public class VirtualSessionBridge {
         session.setGateDeadlineMs(session.pullStartedAtMs() + gate);
         session.setState(VirtualSessionState.AWAITING_AS);
         persist(session);
-        cdrWrite(session, CdrPhase.S1_ACTIVE, "AWAITING_AS", "gateMs=" + gate);
+        cdrWrite(session, CdrPhase.S1_ACTIVE, "GATED",
+                "service=VirtualSessionBridge|AdaptiveTimeout gateMs=" + gate);
     }
 
     /**
@@ -109,7 +110,8 @@ public class VirtualSessionBridge {
             s.setState(VirtualSessionState.PUSH_PENDING);
             persist(s);
             accessNi.requestNiPush(s, response.text());
-            cdrWrite(s, CdrPhase.S2_PUSH, "QUEUED", "late AS reconcile");
+            cdrWrite(s, CdrPhase.S2_PUSH, "QUEUED",
+                "service=VirtualSessionBridge late AS reconcile");
             return;
         }
         // MAP leg died while parked and no abort was observed: nothing is deliverable. Retire
@@ -145,7 +147,8 @@ public class VirtualSessionBridge {
                 cur.setDialogAlive(false);
             }
             persist(cur);
-            cdrWrite(cur, CdrPhase.FAILED, "GATE_NO_BRIDGE", null);
+            cdrWrite(cur, CdrPhase.FAILED, "GATE_NO_BRIDGE",
+                    "service=VirtualSessionBridge|AdaptiveTimeout");
             return true;
         }
         bridgeCount.incrementAndGet();
@@ -157,7 +160,8 @@ public class VirtualSessionBridge {
             // from this detached snapshot would revert a concurrent claim.
             store.setDialogAlive(cur.correlationId(), false);
         }
-        cdrWrite(cur, CdrPhase.S1_RELEASED, "BRIDGED", "asyncWait");
+        cdrWrite(cur, CdrPhase.S1_RELEASED, "BRIDGED",
+                "service=VirtualSessionBridge|AdaptiveTimeout asyncWait");
         LOG.info("Bridging slow AS corr={} dialogId={} orig={}",
                 cur.correlationId(), cur.dialogId(), cur.originationType());
         return true;
@@ -259,7 +263,8 @@ public class VirtualSessionBridge {
             case ABORT -> CdrPhase.FAILED;
             case END -> CdrPhase.COMPLETED;
         };
-        cdrWrite(s, phase, action.name(), httpNi ? "http-ni" : "sync");
+        cdrWrite(s, phase, action.name(),
+                "service=VirtualSessionBridge " + (httpNi ? "http-ni" : "sync"));
     }
 
     /** Write Profile row; remove when terminal (COMPLETED/ABORTED/FAILED/ZOMBIE). */

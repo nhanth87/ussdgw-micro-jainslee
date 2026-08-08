@@ -37,6 +37,29 @@ class ShortCodeRoutingServiceTest {
         assertThat(svc.find("*10#")).isEmpty();
     }
 
+    /**
+     * Ethiopia MO lab: dial {@code *101xxxxxx#} (digits after 101, no second '*').
+     * Mark prefix must be {@code *101} — {@code *101*} would not match.
+     */
+    @Test
+    void ethiopiaStar101MarkPrefixWithoutSecondAsterisk() {
+        ShortCodeRoutingService svc = new ShortCodeRoutingService();
+        svc.put(new ShortCodeRule("*101", RuleType.HTTP, "http://127.0.0.1:8090/ussd/pull",
+                true, null, 0, true));
+
+        String dialed = ShortCodeRoutingService.extractShortCode("*101123456#");
+        assertThat(dialed).isEqualTo("*101123456#");
+        assertThat(svc.find(dialed)).isPresent()
+                .get().extracting(ShortCodeRule::shortCode).isEqualTo("*101");
+        assertThat(svc.find("*101#")).isPresent();
+        assertThat(svc.find("*101*99#")).isPresent(); // still starts with *101
+        assertThat(svc.find("*102123#")).isEmpty();
+
+        ShortCodeRoutingService wrongStar = new ShortCodeRoutingService();
+        wrongStar.put(new ShortCodeRule("*101*", RuleType.HTTP, "http://as/wrong", true, null, 0, true));
+        assertThat(wrongStar.find("*101123456#")).isEmpty();
+    }
+
     @Test
     void exactBeatsShorterMarkPrefix() {
         ShortCodeRoutingService svc = new ShortCodeRoutingService();

@@ -28,6 +28,7 @@ public class UssdSagaCoordinator {
 
     @Inject VirtualSessionStore store;
     @Inject VirtualSessionBridge bridge;
+    @Inject AdaptiveTimeout adaptive;
     @Inject CdrService cdr;
     @Inject UssdConfigService config;
 
@@ -60,20 +61,26 @@ public class UssdSagaCoordinator {
         Optional<VirtualSession> opt = store.get(correlationId);
         if (opt.isEmpty()) {
             cdr.write(correlationId, CdrPhase.FAILED, null, null,
-                    reason == null ? "NI_FAIL" : reason, null);
+                    reason == null ? "NI_FAIL" : reason,
+                    "service=UssdSagaCoordinator");
             return;
         }
         compensate(opt.get(), reason == null ? "NI_FAIL" : reason, false);
     }
 
     private void compensate(VirtualSession s, String reason, boolean useWaitMessage) {
-        LOG.warn("Saga compensate corr={} state={} reason={}",
-                s.correlationId(), s.state(), reason);
+        LOG.warn("Saga compensate corr={} state={} reason={} shortCode={}",
+                s.correlationId(), s.state(), reason,
+                s.shortCode() == null || s.shortCode().isBlank() ? "-" : s.shortCode());
         if (s.originationType() == OriginationType.MAP && s.dialogAlive()) {
             RaCommandPort port = ss7();
             if (useWaitMessage) {
-                MapDialogHelper.replyAndEnd(port, s.dialogId(), s.invokeId(),
-                        config.asyncWaitMessage());
+                // Empty/HTTP AS body is a hard AS failure — not AdaptiveTimeout gate expiry.
+                // "Please wait..." here misleads operators into chasing bridge/gate.
+                String text = isHardAsFailure(reason)
+                        ? hardFailMessage()
+                        : config.asyncWaitMessage();
+                MapDialogHelper.replyAndEnd(port, s.dialogId(), s.invokeId(), text);
             } else {
                 MapDialogHelper.abort(port, s.dialogId());
             }
@@ -82,9 +89,40 @@ public class UssdSagaCoordinator {
         s.setState(VirtualSessionState.FAILED);
         store.put(s);
         store.remove(s.correlationId());
+        Long gate = s.gateMs() > 0 ? s.gateMs() : null;
         cdr.write(s.correlationId(), CdrPhase.FAILED, s.msisdn(), s.shortCode(),
-                reason, "saga-compensate", s.networkId(), s.tenantId(),
-                s.originationType().name());
+                reason, "service=UssdSagaCoordinator saga-compensate",
+                s.networkId(), s.tenantId(), s.originationType().name(),
+                gate, observedEwmaMs(s.networkId()));
+    }
+
+    private static boolean isHardAsFailure(String reason) {
+        if (reason == null || reason.isBlank()) {
+            return false;
+        }
+        return reason.startsWith("AS_EMPTY")
+                || reason.startsWith("AS_HTTP_")
+                || reason.startsWith("AS_TRANSPORT");
+    }
+
+    private String hardFailMessage() {
+        try {
+            String msg = config.asyncHardFailMessage();
+            if (msg != null && !msg.isBlank()) {
+                return msg;
+            }
+        } catch (RuntimeException ignored) {
+            // fall through
+        }
+        return "Service temporarily unavailable. Please try again.";
+    }
+
+    private Long observedEwmaMs(int networkId) {
+        if (adaptive == null) {
+            return null;
+        }
+        double v = adaptive.observedLatencyMs(networkId);
+        return v > 0d ? Math.round(v) : null;
     }
 
     private RaCommandPort ss7() {

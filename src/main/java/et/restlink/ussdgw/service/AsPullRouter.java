@@ -12,6 +12,7 @@ import et.restlink.ussdgw.bridge.VirtualSessionStore;
 import et.restlink.ussdgw.config.UssdConfigService;
 import et.restlink.ussdgw.events.PullGrpcEvent;
 import et.restlink.ussdgw.events.PullHttpEvent;
+import et.restlink.ussdgw.logging.Pii;
 import et.restlink.ussdgw.persist.SipTrunkEntity;
 import et.restlink.ussdgw.persist.TenantEntity;
 import et.restlink.ussdgw.routing.RuleType;
@@ -72,6 +73,9 @@ public class AsPullRouter {
             throw new IllegalArgumentException("AS URL empty for shortCode=" + rule.shortCode());
         }
 
+        String tenantId = resolveTenantId(rule, corr);
+        logPullRoute(rule, asReq, corr, tenantId, url);
+
         if (rule.ruleType() == RuleType.SIP) {
             return routeSip(rule, asReq, corr);
         }
@@ -100,6 +104,16 @@ public class AsPullRouter {
         container.routeEvent(new PullGrpcEvent(target, method, enriched),
                 container.createActivityContext(pullActivityName(corr)));
         return "routed GRPC sc=" + asReq.shortCode();
+    }
+
+    /** Ops-visible short-code → AS URL route (no full MSISDN). */
+    private void logPullRoute(ShortCodeRule rule, AsRequest asReq, String corr,
+                              String tenantId, String url) {
+        int networkId = asReq != null ? asReq.networkId() : rule.networkId();
+        LOG.info("AS pull route shortCode={} asUrl={} ruleType={} networkId={} tenantId={} corr={} {}",
+                rule.shortCode(), url, rule.ruleType(), networkId,
+                tenantId == null || tenantId.isBlank() ? "-" : tenantId,
+                corr, Pii.msisdnDetail(asReq == null ? null : asReq.msisdn()));
     }
 
     private String routeSip(ShortCodeRule rule, AsRequest asReq, String corr) {

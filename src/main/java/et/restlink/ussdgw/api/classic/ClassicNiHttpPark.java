@@ -5,6 +5,10 @@ import et.restlink.ussdgw.api.AsHttpWireFormat;
 import et.restlink.ussdgw.api.AsResponse;
 import et.restlink.ussdgw.api.AsWireFacade;
 import et.restlink.ussdgw.bridge.AdaptiveTimeout;
+import et.restlink.ussdgw.bridge.VirtualSession;
+import et.restlink.ussdgw.bridge.VirtualSessionStore;
+import et.restlink.ussdgw.cdr.CdrPhase;
+import et.restlink.ussdgw.cdr.CdrService;
 import et.restlink.ussdgw.config.UssdConfigService;
 
 import com.microjainslee.api.RaCommandPort;
@@ -48,6 +52,8 @@ public class ClassicNiHttpPark {
         /** Wins exactly one HTTP reply (completeParked vs adaptive gate). */
         private final AtomicBoolean settled = new AtomicBoolean(false);
         private volatile ScheduledFuture<?> gateFuture;
+        /** Adaptive gate delay that was scheduled for this park (ms). */
+        private volatile long appliedGateMs;
 
         ParkRecord(String httpSessionId, String jsessionId, String correlationId,
                    AsHttpWireFormat format, int networkId, long parkedAtMs,
@@ -70,6 +76,7 @@ public class ClassicNiHttpPark {
         public long parkedAtMs() { return parkedAtMs; }
         public boolean emptyHandshake() { return emptyHandshake; }
         public boolean expired() { return settled.get(); }
+        public long appliedGateMs() { return appliedGateMs; }
         /** @return true when this caller owns the single HTTP reply */
         boolean trySettle() { return settled.compareAndSet(false, true); }
     }
@@ -77,6 +84,8 @@ public class ClassicNiHttpPark {
     @Inject AdaptiveTimeout adaptive;
     @Inject UssdConfigService config;
     @Inject AsWireFacade wireFacade;
+    @Inject CdrService cdr;
+    @Inject VirtualSessionStore store;
 
     private final ConcurrentHashMap<String, ParkRecord> byJsession = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<String, ParkRecord> byCorr = new ConcurrentHashMap<>();
@@ -145,7 +154,7 @@ public class ClassicNiHttpPark {
 
     /**
      * Schedule AdaptiveTimeout gate; on fire, if still parked, reply ABORT dialog + Set-Cookie
-     * and unpark.
+     * and unpark. Stamps {@code gate_ms}/{@code observed_ewma_ms} onto CDR (GATED / GATE_EXPIRED).
      */
     public void scheduleAdaptiveGate(ParkRecord rec) {
         if (rec == null) {
@@ -155,7 +164,11 @@ public class ClassicNiHttpPark {
                 rec.networkId(),
                 config.asyncGateTimeoutMs(),
                 config.dialogTimeoutMs());
+        rec.appliedGateMs = gateMs;
+        stampSessionGate(rec, gateMs);
         scheduleGate(rec, gateMs);
+        cdrWrite(rec, CdrPhase.S1_ACTIVE, "GATED",
+                "service=ClassicNiHttpPark|AdaptiveTimeout");
     }
 
     public void scheduleGate(ParkRecord rec, long gateMs) {
@@ -164,6 +177,9 @@ public class ClassicNiHttpPark {
         }
         cancelGate(rec);
         long delay = Math.max(1L, gateMs);
+        if (rec.appliedGateMs <= 0) {
+            rec.appliedGateMs = delay;
+        }
         rec.gateFuture = scheduler.schedule(() -> onGateExpired(rec.correlationId()), delay, TimeUnit.MILLISECONDS);
     }
 
@@ -210,6 +226,30 @@ public class ClassicNiHttpPark {
         return completeParked(correlationId, response.text(), response.action());
     }
 
+    /**
+     * Settle parked HTTP with a pre-encoded body (e.g. classic Notify_Response), cancel gate,
+     * keep {@code JSESSIONID}→corr for AS END / continue. Wins the same CAS as {@link #completeParked}.
+     */
+    public boolean completeParkedEncoded(String correlationId, String encodedBody) {
+        Optional<ParkRecord> opt = findByCorr(correlationId);
+        if (opt.isEmpty()) {
+            return false;
+        }
+        ParkRecord rec = opt.get();
+        cancelGate(rec);
+        String httpId = rec.httpSessionId();
+        if (httpId == null || httpId.isBlank()) {
+            return false;
+        }
+        if (!rec.trySettle()) {
+            return false;
+        }
+        rec.setHttpSessionId(null);
+        String body = encodedBody == null ? "" : encodedBody;
+        reply(rec, httpId, 200, body);
+        return true;
+    }
+
     public boolean isHttpNi(String correlationId) {
         return findByCorr(correlationId).isPresent();
     }
@@ -229,13 +269,72 @@ public class ClassicNiHttpPark {
             // completeParked (or another gate tick) already owns the HTTP reply.
             return;
         }
-        LOG.info("NI HTTP park gate expired corr={} jsession={}",
-                correlationId, rec.jsessionId());
+        LOG.info("NI HTTP park gate expired corr={} jsession={} gateMs={}",
+                correlationId, rec.jsessionId(), rec.appliedGateMs());
+        cdrWrite(rec, CdrPhase.FAILED, "GATE_EXPIRED",
+                "service=ClassicNiHttpPark|AdaptiveTimeout");
         String body = wireFacade.encodeNiResponse(
                 rec.correlationId(), "", AsAction.ABORT, false, rec.format());
         if (unpark(correlationId).isPresent()) {
             reply(rec, httpId, 200, body);
         }
+    }
+
+    private void stampSessionGate(ParkRecord rec, long gateMs) {
+        if (store == null || rec == null || gateMs <= 0) {
+            return;
+        }
+        try {
+            store.get(rec.correlationId()).ifPresent(s -> {
+                s.setGateMs(gateMs);
+                if (s.pullStartedAtMs() <= 0) {
+                    s.setPullStartedAtMs(rec.parkedAtMs());
+                }
+                store.put(s);
+            });
+        } catch (RuntimeException e) {
+            LOG.debug("NI park gate stamp skipped corr={}: {}", rec.correlationId(), e.toString());
+        }
+    }
+
+    private void cdrWrite(ParkRecord rec, CdrPhase phase, String status, String detail) {
+        if (cdr == null || rec == null) {
+            return;
+        }
+        String msisdn = null;
+        String shortCode = null;
+        String tenantId = null;
+        String origin = "MAP";
+        int networkId = rec.networkId();
+        Long gate = rec.appliedGateMs() > 0 ? rec.appliedGateMs() : null;
+        if (store != null) {
+            try {
+                VirtualSession s = store.get(rec.correlationId()).orElse(null);
+                if (s != null) {
+                    msisdn = s.msisdn();
+                    shortCode = s.shortCode();
+                    tenantId = s.tenantId();
+                    networkId = s.networkId();
+                    origin = s.originationType() == null ? "MAP" : s.originationType().name();
+                    if (gate == null && s.gateMs() > 0) {
+                        gate = s.gateMs();
+                    }
+                }
+            } catch (RuntimeException ignored) {
+                // CDR enrichment is best-effort; park reply must still proceed.
+            }
+        }
+        Long ewma = observedEwmaMs(networkId);
+        cdr.write(rec.correlationId(), phase, msisdn, shortCode, status, detail,
+                networkId, tenantId, origin, gate, ewma);
+    }
+
+    private Long observedEwmaMs(int networkId) {
+        if (adaptive == null) {
+            return null;
+        }
+        double v = adaptive.observedLatencyMs(networkId);
+        return v > 0d ? Math.round(v) : null;
     }
 
     private void reply(ParkRecord rec, String httpSessionId, int status, String body) {

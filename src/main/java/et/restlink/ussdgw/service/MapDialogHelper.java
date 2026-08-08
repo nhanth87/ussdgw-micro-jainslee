@@ -70,6 +70,32 @@ public final class MapDialogHelper {
         ss7.sendCommand(new Ss7Command.MapDialogAbort(dialogId));
     }
 
+    /**
+     * Same-dialog NI continue — Request/Notify on the live MAP dialog keyed by correlation id.
+     * Does not create a new dialog or re-run SRI.
+     */
+    public static void niContinue(RaCommandPort ss7, String correlationId, String text,
+                                  UssdAlphabet alphabet, boolean notifyOnly) {
+        if (ss7 == null) {
+            LOG.warn("niContinue: no ra-jss7");
+            return;
+        }
+        int dcs = SmsTextCodec.chooseCbsDataCoding(text, alphabet == null ? UssdAlphabet.AUTO : alphabet);
+        ss7.sendCommand(new Ss7Command.MapUnstructuredSsContinue(
+                correlationId, text, notifyOnly, dcs));
+    }
+
+    /**
+     * Close the live MAP dialog for this correlation ({@code prearrangedEnd} per classic XML).
+     */
+    public static void niClose(RaCommandPort ss7, String correlationId, boolean prearrangedEnd) {
+        if (ss7 == null) {
+            LOG.warn("niClose: no ra-jss7");
+            return;
+        }
+        ss7.sendCommand(new Ss7Command.MapDialogClose(correlationId, prearrangedEnd));
+    }
+
     public static void niPush(RaCommandPort ss7, String correlationId,
                               String mscGt, String localGt, String text, int networkId) {
         niPush(ss7, correlationId, mscGt, localGt, text, networkId, UssdAlphabet.AUTO,

@@ -1,5 +1,6 @@
 package et.restlink.ussdgw.sbbs;
 
+import et.restlink.ussdgw.bridge.VirtualSession;
 import et.restlink.ussdgw.bridge.VirtualSessionState;
 import et.restlink.ussdgw.cdr.CdrPhase;
 import et.restlink.ussdgw.events.NiPushReadyEvent;
@@ -18,6 +19,7 @@ import com.microjainslee.api.annotations.InjectRa;
 /**
  * S2 NI push after SRI — UnstructuredSS-Request/Notify via ra-jss7 toward
  * SRI {@code networkNodeNumber} (MSC), with IMSI destReference (classic + TS 29.002).
+ * Same-dialog continue when {@link NiPushReadyEvent#reuseExistingDialog()} is true.
  */
 public final class MapNiPushSbb implements Sbb, SleeEventHandler {
     private final SbbServices services;
@@ -60,6 +62,10 @@ public final class MapNiPushSbb implements Sbb, SleeEventHandler {
         String text = ni.text();
         if (text != null && text.length() > 200) text = text.substring(0, 200);
 
+        if (ni.reuseExistingDialog()) {
+            return continuePush(ni, text);
+        }
+
         var cfg = svc().config();
         String localGt = MapDialogHelper.localGt(cfg);
         var sess = svc().store().get(ni.correlationId());
@@ -87,8 +93,7 @@ public final class MapNiPushSbb implements Sbb, SleeEventHandler {
         // Lab (ss7 down): allow MSISDN fallback so NI park/echo still exercises the path.
         if (mscGt == null || mscGt.isBlank()) {
             if (ss7Live) {
-                svc().cdr().write(ni.correlationId(), CdrPhase.FAILED, ni.msisdn(), null,
-                        "NI_NO_MSC", null);
+                writeCdr(ni, CdrPhase.FAILED, "NI_NO_MSC", null);
                 svc().saga().onNiFailed(ni.correlationId(), "NI_NO_MSC");
                 return "ni-no-msc";
             }
@@ -99,16 +104,69 @@ public final class MapNiPushSbb implements Sbb, SleeEventHandler {
                 ni.alphabet() == null ? et.restlink.ussdgw.api.UssdAlphabet.AUTO : ni.alphabet(),
                 ni.notifyOnly(), imsi,
                 MapDialogHelper.mscSsn(cfg), MapDialogHelper.localSsn(cfg));
-        svc().cdr().write(ni.correlationId(), CdrPhase.S2_PUSH, ni.msisdn(),
-                null, ni.notifyOnly() ? "NI_NOTIFY" : "NI_PUSH", text);
-        // HTTP-NI: keep session; AS HTTP stays parked until MS continue (MapUssdParent)
-        // or lab echo / AdaptiveTimeout gate. Do not completeParked here when MAP is live.
+        writeCdr(ni, CdrPhase.S2_PUSH, ni.notifyOnly() ? "NI_NOTIFY" : "NI_PUSH", text);
+        keepOrCompleteSession(ni);
+        writeCdr(ni, CdrPhase.COMPLETED, "BRIDGED_DONE",
+                "service=MapNiPushSbb|VirtualSessionBridge");
+        return "ni-sent msc=" + Pii.maskMsisdn(mscGt)
+                + (ni.notifyOnly() ? " notify" : " request")
+                + (imsi == null || imsi.isBlank() ? "" : " imsi");
+    }
+
+    private String continuePush(NiPushReadyEvent ni, String text) {
+        try {
+            MapDialogHelper.niContinue(ss7, ni.correlationId(), text,
+                    ni.alphabet() == null ? et.restlink.ussdgw.api.UssdAlphabet.AUTO : ni.alphabet(),
+                    ni.notifyOnly());
+        } catch (Throwable t) {
+            org.apache.logging.log4j.LogManager.getLogger(MapNiPushSbb.class)
+                    .warn("NI continue no live dialog corr={}: {}",
+                            ni.correlationId(), t.toString());
+            writeCdr(ni, CdrPhase.FAILED, "NI_CONTINUE_NO_DIALOG", t.getMessage());
+            try {
+                svc().saga().onNiFailed(ni.correlationId(), "NI_CONTINUE_NO_DIALOG");
+            } catch (Throwable ignored) { }
+            return "ni-continue-no-dialog";
+        }
+        writeCdr(ni, CdrPhase.S2_PUSH, ni.notifyOnly() ? "NI_CONTINUE_NOTIFY" : "NI_CONTINUE", text);
+        keepOrCompleteSession(ni);
+        writeCdr(ni, CdrPhase.COMPLETED, "BRIDGED_DONE",
+                "service=MapNiPushSbb|VirtualSessionBridge");
+        return "ni-continue"
+                + (ni.notifyOnly() ? " notify" : " request")
+                + (ni.mscGt() == null || ni.mscGt().isBlank()
+                ? "" : " msc=" + Pii.maskMsisdn(ni.mscGt()));
+    }
+
+    /** Stamp adaptive gate / EWMA onto NI push CDR rows when the session was gated. */
+    private void writeCdr(NiPushReadyEvent ni, CdrPhase phase, String status, String detail) {
+        var sess = svc().store().get(ni.correlationId());
+        Long gate = sess.map(s -> s.gateMs() > 0 ? s.gateMs() : null).orElse(null);
+        int networkId = sess.map(VirtualSession::networkId).orElse(ni.networkId());
+        String tenant = sess.map(VirtualSession::tenantId).orElse(null);
+        String shortCode = sess.map(VirtualSession::shortCode).orElse(null);
+        String origin = sess.map(s -> s.originationType() == null
+                ? "MAP" : s.originationType().name()).orElse("MAP");
+        Long ewma = null;
+        try {
+            double v = svc().adaptive().observedLatencyMs(networkId);
+            if (v > 0d) {
+                ewma = Math.round(v);
+            }
+        } catch (Throwable ignored) { }
+        svc().cdr().write(ni.correlationId(), phase, ni.msisdn(), shortCode, status, detail,
+                networkId, tenant, origin, gate, ewma);
+    }
+
+    private void keepOrCompleteSession(NiPushReadyEvent ni) {
+        // HTTP-NI: keep session; AS HTTP stays parked until peer Notify RESULT /
+        // MS continue (MapUssdParent) or AdaptiveTimeout gate. Do not completeParked here.
         boolean httpNi = false;
         try {
             httpNi = svc().niHttpPark().isHttpNi(ni.correlationId());
         } catch (Throwable ignored) { }
         boolean keepHttpNi = httpNi;
-        sess.ifPresent(s -> {
+        svc().store().get(ni.correlationId()).ifPresent(s -> {
             if (keepHttpNi) {
                 s.setState(VirtualSessionState.ACTIVE);
                 s.setPendingText(null);
@@ -122,10 +180,5 @@ public final class MapNiPushSbb implements Sbb, SleeEventHandler {
                 svc().store().remove(s.correlationId());
             }
         });
-        svc().cdr().write(ni.correlationId(), CdrPhase.COMPLETED, ni.msisdn(),
-                null, "BRIDGED_DONE", null);
-        return "ni-sent msc=" + Pii.maskMsisdn(mscGt)
-                + (ni.notifyOnly() ? " notify" : " request")
-                + (imsi == null || imsi.isBlank() ? "" : " imsi");
     }
 }

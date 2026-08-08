@@ -63,7 +63,8 @@ public class CdrService {
         String d = detail == null ? null : (detail.length() > 1000 ? detail.substring(0, 1000) : detail);
         String phaseName = phase == null ? "UNKNOWN" : phase.name();
         String st = status == null ? "UNKNOWN" : status;
-        String csv = formatCsv(correlationId, phaseName, msisdn, shortCode, st, d, networkId, tenantId);
+        String csv = formatCsv(correlationId, phaseName, msisdn, shortCode, st, d,
+                networkId, tenantId, gateMs, observedEwmaMs);
         CDR.info(csv);
 
         CdrEntity row = new CdrEntity();
@@ -198,6 +199,12 @@ public class CdrService {
 
     static String formatCsv(String corr, String phase, String msisdn, String sc,
                             String status, String detail, int networkId, String tenantId) {
+        return formatCsv(corr, phase, msisdn, sc, status, detail, networkId, tenantId, null, null);
+    }
+
+    static String formatCsv(String corr, String phase, String msisdn, String sc,
+                            String status, String detail, int networkId, String tenantId,
+                            Long gateMs, Long observedEwmaMs) {
         return String.join("|",
                 corr == null ? "" : corr,
                 phase == null ? "" : phase,
@@ -206,6 +213,8 @@ public class CdrService {
                 status == null ? "" : status,
                 detail == null ? "" : detail.replace('|', '/'),
                 Integer.toString(networkId),
-                tenantId == null ? "" : tenantId);
+                tenantId == null ? "" : tenantId,
+                gateMs == null ? "" : Long.toString(gateMs),
+                observedEwmaMs == null ? "" : Long.toString(observedEwmaMs));
     }
 }

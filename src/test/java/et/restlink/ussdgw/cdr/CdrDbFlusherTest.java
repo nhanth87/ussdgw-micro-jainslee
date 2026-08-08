@@ -39,6 +39,8 @@ class CdrDbFlusherTest {
                         network_id        INT,
                         tenant_id         VARCHAR(128),
                         origination_type  VARCHAR(32),
+                        gate_ms           BIGINT,
+                        observed_ewma_ms  BIGINT,
                         csv_line          VARCHAR(4000) NOT NULL
                     )
                     """);
@@ -73,6 +75,28 @@ class CdrDbFlusherTest {
              ResultSet rs = st.executeQuery("select count(*) from ussd_cdr")) {
             assertThat(rs.next()).isTrue();
             assertThat(rs.getInt(1)).isEqualTo(3);
+        }
+    }
+
+    @Test
+    void flushPersistsGateAndEwmaColumns() throws Exception {
+        CdrEntity e = sample("gated");
+        e.gateMs = 3500L;
+        e.observedEwmaMs = 2100L;
+        e.status = "GATED";
+        e.detail = "service=VirtualSessionBridge|AdaptiveTimeout";
+        flusher.enqueue(e);
+        assertThat(flusher.flushOnce()).isEqualTo(1);
+
+        try (Connection c = ds.getConnection();
+             Statement st = c.createStatement();
+             ResultSet rs = st.executeQuery(
+                     "select status, gate_ms, observed_ewma_ms, detail from ussd_cdr where msisdn='gated'")) {
+            assertThat(rs.next()).isTrue();
+            assertThat(rs.getString("status")).isEqualTo("GATED");
+            assertThat(rs.getLong("gate_ms")).isEqualTo(3500L);
+            assertThat(rs.getLong("observed_ewma_ms")).isEqualTo(2100L);
+            assertThat(rs.getString("detail")).contains("AdaptiveTimeout");
         }
     }
 

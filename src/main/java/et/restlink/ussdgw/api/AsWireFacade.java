@@ -59,6 +59,16 @@ public class AsWireFacade {
         return ClassicDialogXmlCodec.encodeNiSnapshot(correlationId, text, action, emptyHandshake);
     }
 
+    /** Peer MAP Notify RESULT → classic AS XML {@code unstructuredSSNotify_Response}. */
+    public String encodeNiNotifyResponse(String correlationId, AsHttpWireFormat format) {
+        AsHttpWireFormat fmt = format == null ? AsHttpWireFormat.XML : format;
+        if (fmt == AsHttpWireFormat.JSON) {
+            AsResponse resp = new AsResponse(correlationId, correlationId, 1, "", AsAction.CONTINUE, false);
+            return new String(AsWireCodec.encodeResponse(resp), java.nio.charset.StandardCharsets.UTF_8);
+        }
+        return ClassicDialogXmlCodec.encodeNiNotifyResponse(correlationId);
+    }
+
     /**
      * AS→GW NI ingress: XML classic dialog or JSON AsRequest-like / AsResponse-like body.
      */

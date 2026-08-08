@@ -87,6 +87,30 @@ public class AsPullClient {
         return b.state(System.currentTimeMillis(), openMs);
     }
 
+    /**
+     * Ops-visible HTTP AS pull completion (status / body empty / Content-Type when known).
+     * Called from {@code HttpClientSbb} so SBB boundaries stay on {@code SleeEventTrace} only.
+     */
+    public void logHttpPullComplete(String corr, String url, String shortCode,
+                                    int networkId, String tenantId,
+                                    int status, int bodyLen, boolean bodyEmpty,
+                                    String contentType, String outcome) {
+        String tid = tenantId == null || tenantId.isBlank() ? "-" : tenantId;
+        String sc = shortCode == null || shortCode.isBlank() ? "-" : shortCode;
+        String ct = contentType == null || contentType.isBlank() ? "-" : contentType;
+        String asUrl = url == null || url.isBlank() ? "-" : url;
+        if (bodyEmpty || "AS_EMPTY_BODY".equals(outcome)) {
+            LOG.warn("AS pull AS_EMPTY_BODY corr={} url={} shortCode={} status={} bodyLen={} "
+                            + "bodyEmpty=true networkId={} tenantId={} contentType={}",
+                    corr, asUrl, sc, status, bodyLen, networkId, tid, ct);
+            return;
+        }
+        LOG.info("AS pull HTTP done corr={} url={} shortCode={} status={} bodyLen={} "
+                        + "bodyEmpty={} networkId={} tenantId={} contentType={} outcome={}",
+                corr, asUrl, sc, status, bodyLen, bodyEmpty, networkId, tid, ct,
+                outcome == null ? "-" : outcome);
+    }
+
     private Breaker breaker(String asUrl) {
         return breakers.computeIfAbsent(normalize(asUrl), k -> new Breaker());
     }

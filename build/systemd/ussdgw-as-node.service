@@ -14,6 +14,8 @@ Environment=DELAY_MS=0
 Environment=MODE=sync
 Environment=INTERACTIVE=true
 Environment=PORT=8090
+# Optional dump mirror (drop-in): Environment=MIRROR_URL=https://….webhook.cool
+# Optional classic wire: Environment=WIRE=xml
 ExecStartPre=/usr/bin/test -f package.json
 ExecStart=/home/app/.local/share/mise/installs/node/20/bin/npm run pull:fast
 Restart=on-failure

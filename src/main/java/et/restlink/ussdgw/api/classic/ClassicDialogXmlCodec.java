@@ -119,6 +119,20 @@ public final class ClassicDialogXmlCodec {
      * ABORT → mapUserAbortChoice; END → processUnstructuredSSRequest_Response;
      * CONTINUE → unstructuredSSRequest_Request; emptyHandshake sets emptyDialogHandshake.
      */
+    /**
+     * Classic XmlMAPDialog after peer {@code unstructuredSS-Notify} RESULT: wrap Notify_Response
+     * so the parked AS HTTP can END / continue without waiting for AdaptiveTimeout alone.
+     */
+    public static String encodeNiNotifyResponse(String correlationId) {
+        StringBuilder sb = new StringBuilder(160);
+        sb.append("<dialog");
+        appendIdentityAttrs(sb, correlationId, null, null, null, null);
+        sb.append(" mapMessagesSize=\"1\">");
+        sb.append("<unstructuredSSNotify_Response/>");
+        sb.append("</dialog>");
+        return sb.toString();
+    }
+
     public static String encodeNiSnapshot(String correlationId, String text, AsAction action,
                                           boolean emptyHandshake) {
         return encodeNiSnapshot(correlationId, text, action, emptyHandshake, null, null, null);

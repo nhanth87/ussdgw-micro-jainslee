@@ -12,7 +12,8 @@ import { listMenus, nextMenuResponse } from './menus.mjs';
  *   INTERACTIVE=true|false (default true when ACTION=CONTINUE),
  *   MENU_PICK=hash|random|rotate|main|lang|promo|help,
  *   MENU_TEXT / END_TEXT — used only when INTERACTIVE=false,
- *   GW_CALLBACK, CALLBACK_DELAY_MS, API_KEY
+ *   GW_CALLBACK, CALLBACK_DELAY_MS, API_KEY,
+ *   MIRROR_URL — optional fire-and-forget POST of the raw pull body (e.g. webhook.cool dump)
  */
 export async function startPullServer(opts = {}) {
   const port = Number(opts.port ?? process.env.PORT ?? 8090);
@@ -42,6 +43,7 @@ export async function startPullServer(opts = {}) {
       (delayMs > 0 ? delayMs : 100),
   );
   const apiKey = opts.apiKey ?? process.env.API_KEY ?? process.env.USSD_API_KEY ?? '';
+  const mirrorUrl = String(opts.mirrorUrl ?? process.env.MIRROR_URL ?? '').trim();
 
   const app = Fastify({ logger: true });
 
@@ -98,6 +100,27 @@ export async function startPullServer(opts = {}) {
     const turn = resolveTurn({ ...parsed, correlationId: corr });
     const textForAction = turn.text;
     const responseAction = turn.action;
+
+    if (mirrorUrl) {
+      const mirrorCt =
+        ct && String(ct).trim()
+          ? String(ct)
+          : wire === 'json'
+            ? 'application/json; charset=utf-8'
+            : 'text/xml; charset=utf-8';
+      // Fire-and-forget: dump bins (webhook.cool) return empty 200 and must not block AS reply.
+      fetch(mirrorUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': mirrorCt, Accept: '*/*' },
+        body: raw,
+      })
+        .then((r) =>
+          request.log.info({ status: r.status, mirrorUrl, corr }, 'pull mirrored'),
+        )
+        .catch((err) =>
+          request.log.warn({ err, mirrorUrl, corr }, 'pull mirror failed'),
+        );
+    }
 
     request.log.info(
       {
@@ -211,6 +234,7 @@ export async function startPullServer(opts = {}) {
     menuPick,
     menus: listMenus(),
     gwCallback,
+    mirrorUrl: mirrorUrl || null,
   }));
 
   app.post('/ussd/pull', handlePull);

@@ -20,6 +20,8 @@ import com.microjainslee.api.annotations.InjectRa;
 import com.microjainslee.ra.httpclient.command.HttpCallbackCommand;
 import com.microjainslee.ra.httpclient.events.HttpCallbackCompletedEvent;
 
+import java.util.Optional;
+
 /**
  * HTTP pull toward AS — request/response via RA JsonPost (raw body, no poll).
  *
@@ -111,6 +113,13 @@ public final class HttpClientSbb implements Sbb, SleeEventHandler {
         // the bridge fall back to its own pull clock; inventing a URL would merge every AS onto
         // one breaker.
         long latency = state == null ? -1L : state.latencyMsAt(System.currentTimeMillis());
+        Optional<VirtualSession> sess = svc().store().get(corr);
+        String shortCode = sess.map(VirtualSession::shortCode).orElse(null);
+        int networkId = sess.map(VirtualSession::networkId).orElse(0);
+        String tenantId = sess.map(VirtualSession::tenantId).orElse(null);
+        String url = target == null ? null : target.url();
+        // Response Content-Type is not on HttpCallbackCompletedEvent — log request CT when known.
+        String contentType = target == null ? null : target.format().contentType();
 
         boolean transportFail = (err != null && !err.isBlank() && status <= 0);
         boolean httpFail = status >= 400;
@@ -135,27 +144,40 @@ public final class HttpClientSbb implements Sbb, SleeEventHandler {
                 // mid-flight) — never leave an orphan behind on a terminal failure.
                 svc().asPullState().close(corr);
             }
+            String body = done.getResponseBody();
+            int bodyLen = body == null ? 0 : body.length();
+            svc().asPull().logHttpPullComplete(corr, url, shortCode, networkId, tenantId,
+                    status, bodyLen, body == null || body.isBlank(), contentType, reason);
             svc().saga().onAsPullFailed(corr, reason);
-            return "fail " + (err == null ? status : err);
+            return "fail " + (err == null ? status : err)
+                    + " corr=" + corr + (url == null ? "" : " url=" + url);
         }
 
         String body = done.getResponseBody();
+        int bodyLen = body == null ? 0 : body.length();
         if (body == null || body.isBlank()) {
             svc().asPullState().close(corr);
             if (target != null) {
                 svc().asPull().recordFailure(target.url());
             }
+            svc().asPull().logHttpPullComplete(corr, url, shortCode, networkId, tenantId,
+                    status, bodyLen, true, contentType, "AS_EMPTY_BODY");
             svc().saga().onAsPullFailed(corr, "AS_EMPTY_BODY");
-            return "empty-body";
+            return "empty-body corr=" + corr
+                    + (url == null ? "" : " url=" + url)
+                    + (shortCode == null || shortCode.isBlank() ? "" : " sc=" + shortCode);
         }
         svc().asPullState().close(corr);
         if (target != null) {
             svc().asPull().recordSuccess(target.url());
         }
+        svc().asPull().logHttpPullComplete(corr, url, shortCode, networkId, tenantId,
+                status, bodyLen, false, contentType, "ok");
         AsResponse resp = svc().wireFacade().decodePullResponse(body, format, corr);
         // EWMA via bridge.onAsResponse(latency) only — avoid double-sample
         svc().bridge().onAsResponse(resp, latency);
-        return "ok latencyMs=" + latency + " wire=" + format;
+        return "ok latencyMs=" + latency + " wire=" + format
+                + " status=" + status + " bodyLen=" + bodyLen;
     }
 
     /** POST raw AS pull body with format Content-Type (XML or JSON). */

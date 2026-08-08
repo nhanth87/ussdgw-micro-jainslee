@@ -4,6 +4,8 @@ import et.restlink.ussdgw.api.AsAction;
 import et.restlink.ussdgw.api.AsHttpWireFormat;
 import et.restlink.ussdgw.api.AsWireFacade;
 import et.restlink.ussdgw.bridge.AdaptiveTimeout;
+import et.restlink.ussdgw.cdr.CdrPhase;
+import et.restlink.ussdgw.cdr.CdrService;
 import et.restlink.ussdgw.config.UssdConfigService;
 
 import com.microjainslee.api.OutboundCommand;
@@ -47,6 +49,19 @@ class ClassicNiHttpParkTest {
     }
 
     @Test
+    void completeParkedEncodedSettlesAndKeepsJsession() {
+        park.park("http-n", "js-n", "corr-n", AsHttpWireFormat.XML, 0, false);
+        String body = ClassicDialogXmlCodec.encodeNiNotifyResponse("corr-n");
+        assertThat(park.completeParkedEncoded("corr-n", body)).isTrue();
+        assertThat(http.last).isInstanceOf(HttpServerCommand.HttpResponseExCommand.class);
+        var ex = (HttpServerCommand.HttpResponseExCommand) http.last;
+        assertThat(ex.textBody()).contains("unstructuredSSNotify_Response");
+        assertThat(park.findByJsession("js-n")).isPresent();
+        assertThat(park.findByCorr("corr-n").orElseThrow().httpSessionId()).isNull();
+        assertThat(park.completeParkedEncoded("corr-n", body)).isFalse();
+    }
+
+    @Test
     void parkFindUnparkByCorrAndJsession() {
         ClassicNiHttpPark.ParkRecord rec = park.park(
                 "http-1", "js-1", "corr-1", AsHttpWireFormat.XML, 0, false);
@@ -86,6 +101,22 @@ class ClassicNiHttpParkTest {
                 "http-new", "js-2", "corr-2", AsHttpWireFormat.XML, 1, false);
         assertThat(again.httpSessionId()).isEqualTo("http-new");
         assertThat(park.findByJsession("js-2").orElseThrow().httpSessionId()).isEqualTo("http-new");
+    }
+
+    @Test
+    void scheduleAdaptiveGateWritesGatedCdrWithGateMs() {
+        CapturingCdr cdr = new CapturingCdr();
+        set(park, "cdr", cdr);
+
+        ClassicNiHttpPark.ParkRecord rec = park.park(
+                "http-g", "js-g", "corr-g", AsHttpWireFormat.XML, 0, false);
+        park.scheduleAdaptiveGate(rec);
+
+        assertThat(rec.appliedGateMs()).isGreaterThanOrEqualTo(AdaptiveTimeout.FLOOR_MS);
+        assertThat(cdr.gateMs).isEqualTo(rec.appliedGateMs());
+        assertThat(cdr.status).isEqualTo("GATED");
+        assertThat(cdr.phase.name()).isEqualTo("S1_ACTIVE");
+        assertThat(cdr.detail).contains("AdaptiveTimeout");
     }
 
     @Test
@@ -218,6 +249,26 @@ class ClassicNiHttpParkTest {
             last = command;
             lastRef.set(command);
             all.add(command);
+        }
+    }
+
+    private static final class CapturingCdr extends CdrService {
+        volatile CdrPhase phase;
+        volatile String status;
+        volatile String detail;
+        volatile Long gateMs;
+        volatile Long ewmaMs;
+
+        @Override
+        public void write(String correlationId, CdrPhase phase, String msisdn,
+                          String shortCode, String status, String detail,
+                          int networkId, String tenantId, String originationType,
+                          Long gateMs, Long observedEwmaMs) {
+            this.phase = phase;
+            this.status = status;
+            this.detail = detail;
+            this.gateMs = gateMs;
+            this.ewmaMs = observedEwmaMs;
         }
     }
 }

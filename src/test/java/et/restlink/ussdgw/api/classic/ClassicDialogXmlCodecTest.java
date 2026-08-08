@@ -80,6 +80,16 @@ class ClassicDialogXmlCodecTest {
     }
 
     @Test
+    void encodeNiNotifyResponse() {
+        String xml = ClassicDialogXmlCodec.encodeNiNotifyResponse("corr-ntfy");
+        assertThat(xml)
+                .contains("localId=\"corr-ntfy\"")
+                .contains("mapMessagesSize=\"1\"")
+                .contains("<unstructuredSSNotify_Response/>")
+                .doesNotContain("unstructuredSSRequest_Request");
+    }
+
+    @Test
     void encodeNiSnapshotAndDecodeNiRequest() {
         String ni = ClassicDialogXmlCodec.encodeNiSnapshot("ni-1", "Push text", AsAction.CONTINUE, true);
         assertThat(ni).contains("emptyDialogHandshake=\"true\"")

@@ -1,7 +1,9 @@
 package et.restlink.ussdgw.sbbs;
 
 import et.restlink.ussdgw.access.OriginationType;
+import et.restlink.ussdgw.api.AsHttpWireFormat;
 import et.restlink.ussdgw.api.AsRequest;
+import et.restlink.ussdgw.api.classic.ClassicNiHttpPark;
 import et.restlink.ussdgw.bridge.VirtualSession;
 import et.restlink.ussdgw.cdr.CdrPhase;
 import et.restlink.ussdgw.events.InboundSriSmEvent;
@@ -32,6 +34,7 @@ import org.restcomm.protocols.ss7.map.api.service.sms.LocationInfoWithLMSI;
 import org.restcomm.protocols.ss7.map.api.service.sms.SendRoutingInfoForSMRequest;
 import org.restcomm.protocols.ss7.map.api.service.sms.SendRoutingInfoForSMResponse;
 import org.restcomm.protocols.ss7.map.api.service.supplementary.ProcessUnstructuredSSRequest;
+import org.restcomm.protocols.ss7.map.api.service.supplementary.UnstructuredSSNotifyResponse;
 import org.restcomm.protocols.ss7.map.api.service.supplementary.UnstructuredSSResponse;
 
 public final class MapUssdParentSbb implements Sbb, SleeEventHandler {
@@ -173,6 +176,9 @@ public final class MapUssdParentSbb implements Sbb, SleeEventHandler {
                 && svc.message() instanceof UnstructuredSSResponse resp) {
             return onUserContinue(svc.dialogId(), resp);
         }
+        if (type == MAPMessageType.unstructuredSSNotify_Response) {
+            return onNotifyResponse(svc.dialogId(), svc.message());
+        }
         if (type == MAPMessageType.sendRoutingInfoForSM_Request
                 && svc.message() instanceof SendRoutingInfoForSMRequest sriReq) {
             return onInboundSriRequest(svc, sriReq);
@@ -206,6 +212,14 @@ public final class MapUssdParentSbb implements Sbb, SleeEventHandler {
     }
 
     private String onProcessUnstructured(String dialogId, ProcessUnstructuredSSRequest req) {
+        // jSS7 / IES can deliver the same processUnstructured component twice on one dialog.
+        // Second pass must not open a second ussdTx / dual AS POST.
+        if (dialogId != null && !dialogId.isBlank()) {
+            Optional<VirtualSession> existing = svc().store().byDialogId(dialogId);
+            if (existing.isPresent()) {
+                return "dup-skip dialog=" + dialogId + " corr=" + existing.get().correlationId();
+            }
+        }
         String ussd = MapDialogHelper.ussdString(req);
         String shortCode = ShortCodeRoutingService.extractShortCode(ussd);
         String msisdn = MapDialogHelper.msisdnHint(req);
@@ -247,8 +261,49 @@ public final class MapUssdParentSbb implements Sbb, SleeEventHandler {
         return svc().asPullRouter().route(r, asReq, corr);
     }
 
+    /**
+     * Peer MAP Notify RESULT (TS 23.090 §5.2.5 / 29.002 §11.11) — classic
+     * {@code HttpServerSbb.onUnstructuredSSNotifyResponse} → parked HTTP with Notify_Response.
+     * Settles AdaptiveTimeout park early; keeps JSESSIONID for AS END. Bridge stays on top.
+     */
+    private String onNotifyResponse(String dialogId, MAPMessage msg) {
+        Optional<VirtualSession> opt = resolveNiSession(dialogId);
+        if (opt.isEmpty()) {
+            return "notify-ack-no-session";
+        }
+        VirtualSession s = opt.get();
+        if (msg instanceof UnstructuredSSNotifyResponse ntfy) {
+            try {
+                s.setInvokeId(ntfy.getInvokeId());
+            } catch (Throwable ignored) { }
+        }
+        s.setDialogAlive(true);
+        svc().store().put(s);
+        if (!svc().niHttpPark().isHttpNi(s.correlationId())) {
+            return "notify-ack-not-http-ni";
+        }
+        var parkRec = svc().niHttpPark().findByCorr(s.correlationId());
+        var format = parkRec.map(ClassicNiHttpPark.ParkRecord::format)
+                .orElse(AsHttpWireFormat.XML);
+        String body = svc().wireFacade().encodeNiNotifyResponse(s.correlationId(), format);
+        boolean done = svc().niHttpPark().completeParkedEncoded(s.correlationId(), body);
+        return done ? "http-ni-notify-ack" : "http-ni-notify-no-park";
+    }
+
+    /** NI events publish dialogId = correlationId (ra-jss7 ussd correlate). */
+    private Optional<VirtualSession> resolveNiSession(String dialogId) {
+        if (dialogId == null || dialogId.isBlank()) {
+            return Optional.empty();
+        }
+        Optional<VirtualSession> byDialog = svc().store().byDialogId(dialogId);
+        if (byDialog.isPresent()) {
+            return byDialog;
+        }
+        return svc().store().get(dialogId);
+    }
+
     private String onUserContinue(String dialogId, UnstructuredSSResponse resp) {
-        Optional<VirtualSession> opt = svc().store().byDialogId(dialogId);
+        Optional<VirtualSession> opt = resolveNiSession(dialogId);
         if (opt.isEmpty()) return "no-session";
         VirtualSession s = opt.get();
         s.setInvokeId(resp.getInvokeId());
