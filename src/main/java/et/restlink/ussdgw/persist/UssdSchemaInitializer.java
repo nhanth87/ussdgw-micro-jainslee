@@ -91,7 +91,8 @@ public class UssdSchemaInitializer {
             "V7__sip_trunk.sql",
             "V8__short_code_app_username_unique.sql",
             "V9__short_code_map2map.sql",
-            "V10__short_code_reroute.sql"
+            "V10__short_code_reroute.sql",
+            "V11__short_code_hop_dest.sql"
     );
 
     @Inject
