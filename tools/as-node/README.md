@@ -36,6 +36,8 @@ npm install
 |--------|-------------------|
 | `npm run pull:fast` | `DELAY_MS=0` SYNC interactive menus inside AdaptiveTimeout gate |
 | `npm run pull:bridge` | `DELAY_MS=8000` SYNC — late body → VirtualSessionBridge |
+| `npm run pull:map2map` | MAP2MAP Test AS — enrich assert + hop echo + gated notify ACK |
+| `npm run pull:map2map:bridge` | Same + `DELAY_MS=8000` (prove AdaptiveTimeout / gate) |
 | `npm run pull:async` | `MODE=async_ack` + `WIRE=json` — ACK then `/as/callback` |
 | `npm run push:ni` | Classic NI interactive menu → GW `/ussd` + `JSESSIONID` multi-turn |
 | `npm run push:ni:static` | NI one-shot (`INTERACTIVE=false`) |
@@ -138,3 +140,5 @@ tools/ss7-simulator/
 ```
 
 Python peers: `tools/as-http-sim.py`, `tools/as-grpc-json-sim.py`.
+
+MAP2MAP SP lab (`*875#` / GT `251971200201` / SSN `6`): see [`../map2map-lab/README.md`](../map2map-lab/README.md).

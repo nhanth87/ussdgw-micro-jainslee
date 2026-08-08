@@ -115,11 +115,29 @@ components:
         msisdn: { type: string }
         shortCode: { type: string }
         ussdString: { type: string }
+        originatedUssd: { type: string, description: Full UE dialed string (MAP2MAP / MO) }
+        codeKind: { type: string, enum: [SHORT, LONG], description: Mark-matched longer dial = LONG }
         networkId: { type: integer }
         virtualBridgeId: { type: string, description: Bridge arm id when armed (usually = correlationId) }
         adaptiveTimeoutMs: { type: integer, format: int64, description: Effective AdaptiveTimeout gate ms }
         asMode: { type: string, enum: [SYNC, ASYNC_ACK, BRIDGE], description: Pull mode hint }
-    AsResponse:
+        jsessionId: { type: string, description: Classic NI Cookie JSESSIONID when prior session was gated (HTTP-NI) }
+        gateReason: { type: string, description: GATE_EXPIRED | BRIDGED | GATE_NO_BRIDGE when prior session was gated }
+        observedEwmaMs: { type: integer, format: int64, description: Observed EWMA latency ms for networkId when known }
+    AsGatedNotify:
+      type: object
+      description: |
+        GW→AS classic XML (preferred) or JSON body POSTed to short-code asUrl when AdaptiveTimeout/bridge gate fires.
+        XML encoder ClassicDialogXmlCodec.encodeGatedPush. HTTP client session id gated-{correlationId}.
+      properties:
+        correlationId: { type: string }
+        sessionId: { type: string }
+        virtualBridgeId: { type: string }
+        jsessionId: { type: string }
+        adaptiveTimeoutMs: { type: integer, format: int64 }
+        observedEwmaMs: { type: integer, format: int64 }
+        gateReason: { type: string }
+        action: { type: string, enum: [ABORT] }
       type: object
       description: |
         AS→GW pull response or callback. Echo correlationId (required for push-back);

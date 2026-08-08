@@ -53,6 +53,12 @@ public class UssdSchemaInitializer {
             new RequiredColumn("ussd_short_code", "network_id"),
             new RequiredColumn("ussd_short_code", "mark"),
             new RequiredColumn("ussd_short_code", "app_username"),
+            new RequiredColumn("ussd_short_code", "bypass"),
+            new RequiredColumn("ussd_short_code", "map2map_gt"),
+            new RequiredColumn("ussd_short_code", "reroute_enable"),
+            new RequiredColumn("ussd_short_code", "hlr_mode"),
+            new RequiredColumn("ussd_short_code", "hop_dest_gt"),
+            new RequiredColumn("ussd_short_code", "hop_dest_ssn"),
             new RequiredColumn("ussd_tenant", "http_api_key"),
             new RequiredColumn("ussd_tenant", "network_id"),
             new RequiredColumn("ussd_tenant", "max_tps"),
@@ -83,7 +89,9 @@ public class UssdSchemaInitializer {
             "V5__cdr_gate_metrics.sql",
             "V6__app_user_routing_campaign.sql",
             "V7__sip_trunk.sql",
-            "V8__short_code_app_username_unique.sql"
+            "V8__short_code_app_username_unique.sql",
+            "V9__short_code_map2map.sql",
+            "V10__short_code_reroute.sql"
     );
 
     @Inject

@@ -74,6 +74,8 @@ When deploying to Digicom:
 
 Localhost stack: `build/ss7-lab.json` (127.0.0.1:8013↔8014). **Do not** point public lab props at a Digicom carrier JSON.
 
+**Dedicated pull-lab pair** (isolated from `:8013`): `build/ss7-lab-sim-pull.json` (**8023** server) + jSS7 sim XML `tools/ss7-simulator/data/ussdgw_lab_pull_client.xml` (**8024** client). Services SSN **8+147+6**. Helper: [`tools/ss7-simulator/pull-lab.sh`](../../tools/ss7-simulator/pull-lab.sh) (`apply-ss7` → as-node → `reseed-pull` → `sim` → `dial-pull '*100#'`). Re-seeds classic MO pull `*100#` / `*123#` / mark `*101` → `http://127.0.0.1:8090/ussd/pull`.
+
 ### Ethiopia MO pull (`*101xxxxxx`) — prep (2026-08-08)
 
 SP will dial **pull** short codes like `*101123456#` (user-request / MO). Wire is the opposite of NI push:

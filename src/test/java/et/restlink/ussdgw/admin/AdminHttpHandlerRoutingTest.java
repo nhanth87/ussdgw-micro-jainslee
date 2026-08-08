@@ -49,6 +49,16 @@ class AdminHttpHandlerRoutingTest {
             public java.util.List<et.restlink.ussdgw.cdr.CdrRecord> listRecords(int limit, String tenantId, String msisdn) {
                 return java.util.List.of();
             }
+            @Override
+            public java.util.List<et.restlink.ussdgw.cdr.CdrRecord> listRecords(
+                    int limit, String tenantId, String msisdn, String correlationId) {
+                return java.util.List.of();
+            }
+            @Override
+            public java.util.List<et.restlink.ussdgw.cdr.CdrRecord> listRecords(
+                    int limit, String tenantId, String msisdn, String correlationId, String status) {
+                return java.util.List.of();
+            }
         });
         set(handler, "bridge", new VirtualSessionBridge());
         set(handler, "store", new VirtualSessionStore());

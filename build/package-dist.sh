@@ -243,6 +243,11 @@ if [[ -f "$APP_DIR/build/ss7-lab.json" ]]; then
     "$APP_DIR/build/ss7-lab.json" \
     "$DIST_ROOT/configs/ss7-lab.json"
 fi
+if [[ -f "$APP_DIR/build/ss7-lab-sim-pull.json" ]]; then
+  "$SCRIPT_DIR/install-config.sh" \
+    "$APP_DIR/build/ss7-lab-sim-pull.json" \
+    "$DIST_ROOT/configs/ss7-lab-sim-pull.json"
+fi
 rm -f "$DIST_ROOT/application.properties"
 cp -f "$APP_DIR/build/run-dist.sh" "$DIST_ROOT/run.sh"
 chmod +x "$DIST_ROOT/run.sh"

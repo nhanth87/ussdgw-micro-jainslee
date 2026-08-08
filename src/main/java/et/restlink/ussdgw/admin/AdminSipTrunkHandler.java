@@ -128,24 +128,16 @@ public class AdminSipTrunkHandler {
 
     private AdminHttpHandler.HttpReply rowsOk(String message) {
         return AdminHttpHandler.HttpReply.html(rowsHtml())
-                .withHeader("HX-Trigger", toast(message, "ok"))
+                .withHeader("HX-Trigger", AdminHtmx.triggerToast(
+                        message, "ok", "/admin/sip/trunks", "#sip-trunk-rows"))
                 .withHeader("Vary", "HX-Request");
     }
 
     private AdminHttpHandler.HttpReply rowsErr(String message) {
         return AdminHttpHandler.HttpReply.html(rowsHtml())
-                .withHeader("HX-Trigger", toast(message, "error"))
+                .withHeader("HX-Trigger", AdminHtmx.triggerToast(
+                        message, "error", "/admin/sip/trunks", "#sip-trunk-rows"))
                 .withHeader("Vary", "HX-Request");
-    }
-
-    private static String toast(String message, String kind) {
-        return "{\"ussdToast\":{\"message\":" + jsonStr(message) + ",\"kind\":" + jsonStr(kind) + "}}";
-    }
-
-    private static String jsonStr(String s) {
-        if (s == null) return "\"\"";
-        return "\"" + s.replace("\\", "\\\\").replace("\"", "\\\"")
-                .replace("\n", "\\n").replace("\r", "") + "\"";
     }
 
     private static int parseInt(String s, int def) {

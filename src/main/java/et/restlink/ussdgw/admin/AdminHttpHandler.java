@@ -8,16 +8,20 @@ import et.restlink.ussdgw.bridge.VirtualSessionBridge;
 import et.restlink.ussdgw.bridge.VirtualSessionStore;
 import et.restlink.ussdgw.cdr.CdrRecord;
 import et.restlink.ussdgw.cdr.CdrService;
+import et.restlink.ussdgw.cdr.CdrStatuses;
 import et.restlink.ussdgw.config.SmppConfigSupport;
 import et.restlink.ussdgw.config.Ss7ConfigSupport;
 import et.restlink.ussdgw.config.UssdConfigService;
 import et.restlink.ussdgw.ra.smpp.SmppEndpointRegistry;
 import et.restlink.ussdgw.service.AsPullClient;
 import et.restlink.ussdgw.service.BridgeGateScheduler;
+import et.restlink.ussdgw.service.GatedAsNotifyService;
 import et.restlink.ussdgw.service.GrpcApplyService;
 import et.restlink.ussdgw.service.HttpApplyService;
+import et.restlink.ussdgw.service.PendingMap2MapRegistry;
 import et.restlink.ussdgw.service.SmppApplyService;
 import et.restlink.ussdgw.service.Ss7ApplyService;
+import et.restlink.ussdgw.telemetry.Map2MapTelemetry;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.microjainslee.admin.RaAdminHttpResponse;
@@ -77,6 +81,9 @@ public class AdminHttpHandler {
     @Inject BridgeGateScheduler bridgeGate;
     @Inject AsPullClient asPull;
     @Inject UssdSagaCoordinator saga;
+    @Inject Map2MapTelemetry map2MapTelemetry;
+    @Inject PendingMap2MapRegistry pendingMap2Map;
+    @Inject GatedAsNotifyService gatedAsNotify;
 
     /**
      * {@code Secure} on the admin session cookie. Defaults to on; the plain-HTTP Digicom lab
@@ -519,14 +526,19 @@ public class AdminHttpHandler {
         StringBuilder strip = new StringBuilder();
         strip.append("<section class=\"mb-8 rounded-lg border border-ink-line bg-ink-panel/80 p-4\">");
         strip.append("<p class=\"text-xs uppercase tracking-[0.25em] text-signal\">Monitor strip</p>");
-        strip.append("<div class=\"mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-4 font-mono text-xs\">");
+        strip.append("<div class=\"mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 font-mono text-xs\">");
         strip.append(monitorCell("ss7.live", feed.get("ss7.live")));
         strip.append(monitorCell("smpp.live", feed.get("smpp.live")));
         strip.append(monitorCell("http.niPushUrl", feed.get("http.niPushUrl")));
         strip.append(monitorCell("grpc.pushEndpoint", feed.get("grpc.pushEndpoint")));
+        strip.append(monitorCell("map2map.armed", feed.get("map2map.armed")));
+        strip.append(monitorCell("map2map.pending", feed.get("map2map.pending")));
+        strip.append(monitorCell("scheduler.gateTicks", feed.get("scheduler.gateTicks")));
+        strip.append(monitorCell("map2map.gatedDuringHop", feed.get("map2map.gatedDuringHop")));
         strip.append("</div>");
         strip.append("<p class=\"mt-3 text-sm text-ink-mute\">Truth from LinkStatusService · ")
                 .append("<a class=\"text-signal hover:underline\" href=\"/admin/monitor-feed\">JSON feed</a> · ")
+                .append("<a class=\"text-signal hover:underline\" href=\"/admin/status.json\">status.json</a> · ")
                 .append("<a class=\"text-signal hover:underline\" href=\"/telemetry/?tab=ss7\">Monitor Hub</a></p>");
         strip.append("</section>");
         return Map.of("{{MONITOR_STRIP}}", strip.toString());
@@ -548,6 +560,19 @@ public class AdminHttpHandler {
         m.put("links.ss7", "/admin/ss7");
         m.put("links.http", "/admin/http");
         m.put("links.grpc", "/admin/grpc");
+        if (bridgeGate != null) {
+            m.put("scheduler.gateTicks", bridgeGate.gateTicks());
+            m.put("scheduler.map2mapExpired", bridgeGate.map2mapExpired());
+            m.put("scheduler.sriExpired", bridgeGate.sriExpired());
+        }
+        if (map2MapTelemetry != null) {
+            int pending = pendingMap2Map != null ? pendingMap2Map.size() : 0;
+            m.putAll(map2MapTelemetry.snapshot(pending));
+        }
+        if (gatedAsNotify != null) {
+            m.put("gated.asPushed", gatedAsNotify.pushed());
+            m.put("gated.asSkipped", gatedAsNotify.skipped());
+        }
         return m;
     }
 
@@ -777,10 +802,21 @@ public class AdminHttpHandler {
         cards.append(metricCard("Adaptive", String.valueOf(ewma),
                 "EWMA · floor " + AdaptiveTimeout.FLOOR_MS + "ms · dialog "
                         + config.dialogTimeoutMs() + "ms"));
+        long m2mArmed = map2MapTelemetry != null ? map2MapTelemetry.armedCount() : 0L;
+        long m2mPending = pendingMap2Map != null ? pendingMap2Map.size() : 0;
+        long m2mGated = map2MapTelemetry != null ? map2MapTelemetry.gatedDuringHopCount() : 0L;
+        long m2mAfterBridge = map2MapTelemetry != null
+                ? map2MapTelemetry.timeoutAfterBridgeCount() : 0L;
+        cards.append(metricCard("MAP2MAP", String.valueOf(m2mArmed),
+                "armed · pending " + m2mPending
+                        + " · gated-hop " + m2mGated
+                        + " · TTL-after-bridge " + m2mAfterBridge
+                        + " · hops " + (map2MapTelemetry != null
+                        ? map2MapTelemetry.hopStartedCount() : 0L)));
 
         StringBuilder sb = new StringBuilder();
         sb.append("<div class=\"status\">");
-        sb.append("<div class=\"grid gap-3 sm:grid-cols-2 lg:grid-cols-5\">")
+        sb.append("<div class=\"grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6\">")
                 .append(cards).append("</div>");
         sb.append("<div class=\"table-wrap mt-8\">");
         sb.append("<p class=\"text-xs uppercase tracking-[0.25em] text-signal\">Planes</p>");
@@ -808,12 +844,20 @@ public class AdminHttpHandler {
         for (String k : new String[]{
                 "ss7.live", "ss7.detail", "smpp.detail", "http.detail", "grpc.detail",
                 "diameter.live", "diameter.detail", "sip.live", "sip.detail",
-                "sessions", "bridge.count", "bridge.enabled", "scheduler.gateTicks", "adaptive.ewma"}) {
+                "sessions", "bridge.count", "bridge.enabled", "scheduler.gateTicks",
+                "adaptive.ewma", "map2map.armed", "map2map.pending", "map2map.gatedDuringHop",
+                "map2map.timeoutAfterBridge", "scheduler.map2mapExpired"}) {
             Object v = "sessions".equals(k) ? sessions
                     : "bridge.count".equals(k) ? bridgeCount
                     : "bridge.enabled".equals(k) ? config.bridgeEnabled()
                     : "scheduler.gateTicks".equals(k) ? (bridgeGate != null ? bridgeGate.gateTicks() : 0L)
                     : "adaptive.ewma".equals(k) ? ewma
+                    : "map2map.armed".equals(k) ? m2mArmed
+                    : "map2map.pending".equals(k) ? m2mPending
+                    : "map2map.gatedDuringHop".equals(k) ? m2mGated
+                    : "map2map.timeoutAfterBridge".equals(k) ? m2mAfterBridge
+                    : "scheduler.map2mapExpired".equals(k)
+                    ? (bridgeGate != null ? bridgeGate.map2mapExpired() : 0L)
                     : m.get(k);
             if (v != null) {
                 sb.append(esc(k)).append(" = ").append(esc(String.valueOf(v))).append('\n');
@@ -848,6 +892,9 @@ public class AdminHttpHandler {
             m.put("scheduler.gateExpired", bridgeGate.gateExpired());
             m.put("scheduler.reclaimCount", bridgeGate.reclaimCount());
             m.put("scheduler.gateTickMs", bridgeGate.configuredGateTickMs());
+            m.put("scheduler.sriExpired", bridgeGate.sriExpired());
+            m.put("scheduler.map2mapExpired", bridgeGate.map2mapExpired());
+            m.put("scheduler.hlrProxyExpired", bridgeGate.hlrProxyExpired());
         }
         if (asPull != null) {
             m.put("as.circuitOpenRejects", asPull.openRejects());
@@ -856,18 +903,29 @@ public class AdminHttpHandler {
             m.put("saga.niFail", saga.niFailCount());
             m.put("saga.pullFail", saga.pullFailCount());
         }
+        if (map2MapTelemetry != null) {
+            int pending = pendingMap2Map != null ? pendingMap2Map.size() : 0;
+            m.putAll(map2MapTelemetry.snapshot(pending));
+        }
+        if (gatedAsNotify != null) {
+            m.put("gated.asPushed", gatedAsNotify.pushed());
+            m.put("gated.asSkipped", gatedAsNotify.skipped());
+        }
         return HttpReply.json(200, m);
     }
 
     private Map<String, String> cdrPageVars(Map<String, String> query, AdminAuthService.Principal who) {
         String msisdn = query == null ? "" : query.getOrDefault("msisdn", "");
         String corr = query == null ? "" : query.getOrDefault("corr", "");
+        String status = query == null ? "" : query.getOrDefault("status", "");
         int limit = CdrService.clampLimit(query == null ? null : query.get("limit"));
-        String rows = cdrRowsHtml(msisdn, corr, limit, who);
+        String rows = cdrRowsHtml(msisdn, corr, status, limit, who);
         Map<String, String> m = new LinkedHashMap<>();
         m.put("{{ROWS}}", rows);
         m.put("{{MSISDN}}", esc(msisdn == null ? "" : msisdn));
         m.put("{{CORR}}", esc(corr == null ? "" : corr));
+        m.put("{{STATUS}}", esc(status == null ? "" : status));
+        m.put("{{STATUS_OPTIONS}}", cdrStatusOptionsHtml(status));
         m.put("{{LIMIT}}", Integer.toString(limit));
         m.put("{{ROW_COUNT}}", Integer.toString(countCdrRowPairs(rows)));
         return m;
@@ -876,23 +934,27 @@ public class AdminHttpHandler {
     private HttpReply cdrRowsReply(Map<String, String> query, AdminAuthService.Principal who) {
         String msisdn = query == null ? null : query.get("msisdn");
         String corr = query == null ? null : query.get("corr");
+        String status = query == null ? null : query.get("status");
         int limit = CdrService.clampLimit(query == null ? null : query.get("limit"));
-        return HttpReply.html(cdrRowsHtml(msisdn, corr, limit, who))
+        return HttpReply.html(cdrRowsHtml(msisdn, corr, status, limit, who))
                 .withHeader("Vary", "HX-Request");
     }
 
     /**
      * CDR ledger rows for HTMX partial + shell seed. Columns mirror classic CDR IA
      * (when / corr / bridge phase / MSISDN / service code / result) plus greenfield
-     * gate/EWMA in the expand panel.
+     * gate/EWMA in the expand panel. Status filter supports exact or {@code *} prefix
+     * ({@code MAP2MAP_*}, {@code GATED*}).
      */
-    private String cdrRowsHtml(String msisdn, String corr, int limit, AdminAuthService.Principal who) {
+    private String cdrRowsHtml(String msisdn, String corr, String status, int limit,
+                               AdminAuthService.Principal who) {
         String scope = who != null && who.isTenantScoped() ? who.tenantId() : null;
         StringBuilder sb = new StringBuilder();
-        var rows = cdr.listRecords(limit, scope, msisdn, corr);
+        var rows = cdr.listRecords(limit, scope, msisdn, corr, status);
         if (rows.isEmpty()) {
             sb.append("<tr class=\"cdr-empty\"><td colspan=\"7\" class=\"px-3 py-6 text-ink-mute\">")
-                    .append("No CDR rows for this filter. Try MSISDN, correlation id, or raise limit.")
+                    .append("No CDR rows for this filter. Try MSISDN, correlation, status ")
+                    .append("(e.g. MAP2MAP_* / GATED*), or raise limit.")
                     .append("</td></tr>");
             return sb.toString();
         }
@@ -951,6 +1013,31 @@ public class AdminHttpHandler {
         return sb.toString();
     }
 
+    private static String cdrStatusOptionsHtml(String selected) {
+        String sel = selected == null ? "" : selected.trim();
+        StringBuilder sb = new StringBuilder();
+        for (CdrStatuses.StatusPreset p : CdrStatuses.ADMIN_PRESETS) {
+            sb.append("<option value=\"").append(esc(p.value())).append('"');
+            if (sel.equals(p.value())) {
+                sb.append(" selected");
+            }
+            sb.append('>').append(esc(p.label())).append("</option>");
+        }
+        // Free-typed value not in presets — keep it selectable.
+        boolean known = false;
+        for (CdrStatuses.StatusPreset p : CdrStatuses.ADMIN_PRESETS) {
+            if (sel.equals(p.value())) {
+                known = true;
+                break;
+            }
+        }
+        if (!sel.isEmpty() && !known) {
+            sb.append("<option value=\"").append(esc(sel)).append("\" selected>")
+                    .append(esc(sel)).append("</option>");
+        }
+        return sb.toString();
+    }
+
     private static void cdrDetailItem(StringBuilder sb, String label, String value) {
         sb.append("<div><dt>").append(esc(label)).append("</dt><dd>")
                 .append(esc(nullToDash(value))).append("</dd></div>");
@@ -987,8 +1074,17 @@ public class AdminHttpHandler {
         if ("FAILED".equals(phase) || (status != null && status.toUpperCase().contains("FAIL"))) {
             return "cdr-status--fail";
         }
-        if ("COMPLETED".equals(phase) || "SUCCESS".equalsIgnoreCase(status)) {
+        if ("COMPLETED".equals(phase) || "SUCCESS".equalsIgnoreCase(status)
+                || (status != null && (status.equals("MAP2MAP_OK")
+                || status.equals("MAP2MAP_COMPLETE_AFTER_GATE")
+                || status.equals("BRIDGED_DONE")))) {
             return "cdr-status--ok";
+        }
+        if (CdrStatuses.isMap2MapFamily(status)) {
+            return "cdr-status--map2map";
+        }
+        if (CdrStatuses.isGateFamily(status)) {
+            return "cdr-status--gated";
         }
         return "cdr-status--live";
     }

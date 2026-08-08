@@ -36,6 +36,7 @@
   <link rel="stylesheet" href="/admin/static/admin.css"/>
   <script defer src="/admin/static/ussd-shell.js"></script>
   <script defer src="/admin/static/alpine.min.js"></script>
+  <style>[x-cloak]{display:none!important}</style>
 </head>
 <body x-data class="min-h-full bg-ink font-display text-slate-200 antialiased"
       style="background-image:radial-gradient(ellipse 80% 50% at 10% -10%,rgba(232,163,23,0.08),transparent),radial-gradient(ellipse 60% 40% at 100% 0%,rgba(56,100,160,0.12),transparent)">
@@ -55,9 +56,17 @@
       <section class="form-card mb-10 rounded-lg border border-ink-line bg-ink-panel/80 p-5">
         <h2 class="mt-1 text-xl font-semibold text-slate-50">Short-code rule</h2>
         <p class="mt-1 mb-4 text-sm text-slate-300">
-          Bind short code → HTTP/gRPC AS URL. Optional tenantId / networkId (inherits networkId from tenant when left 0).
-          <strong>Mark=true</strong> = prefix key (classic exactMatch=false): e.g. code <code class="font-mono text-signal">*100*</code>
-          matches <code class="font-mono text-signal">*100*123456#</code> and any longer dial. Save updates the live map immediately.
+          One rule model for short and long dials. <strong>Mark=true</strong> = prefix key
+          (classic exactMatch=false): e.g. code <code class="font-mono text-signal">*101</code>
+          matches <code class="font-mono text-signal">*101#</code> and
+          <code class="font-mono text-signal">*101123456#</code> (Ethiopia MO). Exact
+          (mark=false) wins on equality; longest mark prefix otherwise.
+          <strong>Type = re-route</strong> = MAP2MAP Case 2: redirect USSD to upper HLR, then
+          HTTP AS via <code class="font-mono text-signal">as_url</code>.
+          Hop HLR blank → HLR Face <code class="font-mono text-signal">ussd.hlr.upper-gt</code>
+          (SSN 6). HTTP / gRPC / SIP = direct AS pull (no Case 2 hop).
+          Values like <code class="font-mono text-signal">*875#</code> in placeholders are
+          <strong>examples only</strong>. Save updates the live map.
         </p>
         <form method="post" action="/admin/routing" class="mb-4"
               hx-post="/admin/routing"
@@ -70,6 +79,7 @@
             Reload from DB
           </button>
         </form>
+        <div x-data="{ ruleType: 'HTTP', asPullType: 'HTTP' }">
         <form method="post" action="/admin/routing" class="space-y-3"
               hx-post="/admin/routing"
               hx-target="#rule-rows"
@@ -82,23 +92,46 @@
           </div>
           <div>
             <label class="block text-xs uppercase tracking-wider text-ink-mute">Type</label>
-            <select name="ruleType" class="mt-1 w-full rounded-md border border-ink-line bg-ink px-3 py-2 text-sm focus:border-signal focus:outline-none">
+            <select name="ruleType" x-model="ruleType"
+                    class="mt-1 w-full rounded-md border border-ink-line bg-ink px-3 py-2 text-sm focus:border-signal focus:outline-none">
               <option value="HTTP">HTTP</option>
               <option value="GRPC">GRPC</option>
               <option value="SIP">SIP (asUrl = trunkId)</option>
+              <option value="RE_ROUTE">re-route (MAP2MAP Case 2 → upper HLR)</option>
             </select>
+            <p class="mt-1 text-xs text-ink-mute">
+              <span x-show="ruleType === 'RE_ROUTE'" x-cloak>
+                Case 2 hop + AdaptiveTimeout / Virtual Bridge at ingress; after hop,
+                micro-jainslee routes AS via <strong>HTTP / gRPC / SIP</strong> (SLEE events).
+              </span>
+              <span x-show="ruleType !== 'RE_ROUTE'">
+                Direct to AS — no upper-HLR USSD hop. Plane = Type (HTTP|GRPC|SIP).
+              </span>
+            </p>
+          </div>
+          <div x-show="ruleType === 'RE_ROUTE'" x-cloak>
+            <label class="block text-xs uppercase tracking-wider text-ink-mute">AS plane after hop</label>
+            <select name="asPullType" x-model="asPullType"
+                    class="mt-1 w-full rounded-md border border-ink-line bg-ink px-3 py-2 text-sm focus:border-signal focus:outline-none">
+              <option value="HTTP">HTTP — PullHttpEvent / HttpClientSbb</option>
+              <option value="GRPC">GRPC — PullGrpcEvent / GrpcClientSbb</option>
+              <option value="SIP">SIP — MESSAGE / SipUssiSbb</option>
+            </select>
+            <p class="mt-1 text-xs text-ink-mute">
+              Persisted as rule_type (HTTP|GRPC|SIP) + reroute_enable. Not a separate wire invent.
+            </p>
           </div>
           <div>
             <label class="block text-xs uppercase tracking-wider text-ink-mute">AS URL</label>
             <input name="asUrl" required placeholder="http://as.example/ussd/pull"
                    class="mt-1 w-full rounded-md border border-ink-line bg-ink px-3 py-2 font-mono text-sm focus:border-signal focus:outline-none focus:ring-1 focus:ring-signal/40"/>
+            <p x-show="ruleType === 'RE_ROUTE'" x-cloak class="mt-1 text-xs text-ink-mute">
+              After hop completes, <code class="font-mono">AsPullRouter</code> pulls this target
+              on the AS plane above (HTTP URL / gRPC host|method / SIP trunkId).
+            </p>
           </div>
           {{TENANT_FIELD}}
-          <div>
-            <label class="block text-xs uppercase tracking-wider text-ink-mute">appUsername (optional)</label>
-            <input name="appUsername" placeholder="API app user ownership"
-                   class="mt-1 w-full rounded-md border border-ink-line bg-ink px-3 py-2 font-mono text-sm focus:border-signal focus:outline-none focus:ring-1 focus:ring-signal/40"/>
-          </div>
+          {{APP_USER_FIELD}}
           <div>
             <label class="block text-xs uppercase tracking-wider text-ink-mute">networkId</label>
             <input name="networkId" type="number" min="0" value="0"
@@ -107,9 +140,45 @@
           <div>
             <label class="block text-xs uppercase tracking-wider text-ink-mute">Mark (prefix)</label>
             <select name="mark" class="mt-1 w-full rounded-md border border-ink-line bg-ink px-3 py-2 text-sm focus:border-signal focus:outline-none">
-              <option value="false">false — exact match</option>
-              <option value="true">true — prefix (*100* → *100*…)</option>
+              <option value="false">false — exact match (short)</option>
+              <option value="true">true — prefix (long + short under same rule)</option>
             </select>
+          </div>
+          <!-- Type encodes Case 2; keep form field for HTMX submit + legacy HTTP+flag saves -->
+          <input type="hidden" name="rerouteEnable" :value="ruleType === 'RE_ROUTE' ? 'true' : 'false'"/>
+          <div x-show="ruleType === 'RE_ROUTE'" x-cloak class="space-y-3">
+            <p class="text-xs uppercase tracking-wider text-ink-mute">MAP2MAP Case 2</p>
+            <div>
+              <label class="block text-xs uppercase tracking-wider text-ink-mute">Redirect USSD message to upper HLR</label>
+              <input name="redirectUssd" placeholder="example *875#"
+                     class="mt-1 w-full rounded-md border border-ink-line bg-ink px-3 py-2 font-mono text-sm focus:border-signal focus:outline-none focus:ring-1 focus:ring-signal/40"/>
+              <p class="mt-1 text-xs text-ink-mute">Outbound MAP UnstructuredSS-Request text (not SCCP GT) before AS pull.</p>
+            </div>
+            <div>
+              <label class="block text-xs uppercase tracking-wider text-ink-mute">Hop HLR</label>
+              <input name="hopDestGt" placeholder="{{UPPER_HLR_GT_PLACEHOLDER}}"
+                     class="mt-1 w-full rounded-md border border-ink-line bg-ink px-3 py-2 font-mono text-sm focus:border-signal focus:outline-none focus:ring-1 focus:ring-signal/40"/>
+              <p class="mt-1 text-xs text-ink-mute">
+                Optional SCCP CalledParty GT. Blank → HLR Face upper-gt
+                <code class="font-mono text-signal">{{UPPER_HLR_GT}}</code>
+                from <a class="text-signal underline" href="/admin/hlr">/admin/hlr</a> (SSN 6). Never SRI/FAKE→MSC.
+              </p>
+            </div>
+            <div>
+              <label class="block text-xs uppercase tracking-wider text-ink-mute">Hop dest SSN (optional)</label>
+              <input name="hopDestSsn" type="number" min="1" max="255" placeholder="6"
+                     class="mt-1 w-full rounded-md border border-ink-line bg-ink px-3 py-2 font-mono text-sm focus:border-signal focus:outline-none focus:ring-1 focus:ring-signal/40"/>
+              <p class="mt-1 text-xs text-ink-mute">Optional; default 6 for upper-gt / fixed hop.</p>
+            </div>
+          </div>
+          <div x-show="ruleType !== 'RE_ROUTE'">
+            <label class="block text-xs uppercase tracking-wider text-ink-mute">HLR mode (per-rule)</label>
+            <select name="hlrMode" class="mt-1 w-full rounded-md border border-ink-line bg-ink px-3 py-2 text-sm focus:border-signal focus:outline-none">
+              <option value="INHERIT">INHERIT — HLR Face global</option>
+              <option value="FAKE">FAKE — fake IMSI/MSC (NI / Case 1)</option>
+              <option value="PROXY_MAP">PROXY_MAP — SRI then NI (Case 1)</option>
+            </select>
+            <p class="mt-1 text-xs text-ink-mute">Used by NI / HLR face SRI paths (not MAP2MAP Case 2).</p>
           </div>
           <div>
             <label class="block text-xs uppercase tracking-wider text-ink-mute">enabled</label>
@@ -123,6 +192,7 @@
             Save rule
           </button>
         </form>
+        </div>
       </section>
     </div>
 
@@ -154,6 +224,11 @@
                 <th class="px-3 py-2.5 font-medium">net</th>
                 <th class="px-3 py-2.5 font-medium">appUser</th>
                 <th class="px-3 py-2.5 font-medium">mark</th>
+                <th class="px-3 py-2.5 font-medium">reroute</th>
+                <th class="px-3 py-2.5 font-medium">redirect</th>
+                <th class="px-3 py-2.5 font-medium">hopGt</th>
+                <th class="px-3 py-2.5 font-medium">hopSsn</th>
+                <th class="px-3 py-2.5 font-medium">hlr</th>
                 <th class="px-3 py-2.5 font-medium">on</th>
                 <th class="px-3 py-2.5 font-medium"></th>
               </tr>

@@ -4,11 +4,15 @@ import et.restlink.ussdgw.api.AsHttpWireFormat;
 import et.restlink.ussdgw.api.AsRequest;
 import et.restlink.ussdgw.api.AsResponse;
 import et.restlink.ussdgw.bridge.VirtualSession;
+import et.restlink.ussdgw.cdr.CdrPhase;
+import et.restlink.ussdgw.cdr.CdrStatuses;
+import et.restlink.ussdgw.events.GatedAsNotifyEvent;
 import et.restlink.ussdgw.events.PullHttpEvent;
 import et.restlink.ussdgw.logging.SleeEventTrace;
 import et.restlink.ussdgw.service.AsPullClient;
 import et.restlink.ussdgw.service.AsPullState;
 import et.restlink.ussdgw.service.AsPullTarget;
+import et.restlink.ussdgw.service.GatedAsNotifyService;
 import et.restlink.ussdgw.service.SbbServices;
 
 import com.microjainslee.api.ActivityContextInterface;
@@ -48,6 +52,14 @@ public final class HttpClientSbb implements Sbb, SleeEventHandler {
 
     @Override
     public void onEvent(SleeEvent event, ActivityContextInterface aci) {
+        if (event instanceof GatedAsNotifyEvent gated) {
+            SleeEventTrace.inSbb("HttpClientSbb", event, "gated-url=" + gated.asUrl());
+            String detail;
+            try { detail = sendGatedNotify(gated); }
+            catch (Throwable t) { detail = "error=" + t.getClass().getSimpleName(); }
+            SleeEventTrace.outSbb("HttpClientSbb", event, detail);
+            return;
+        }
         if (event instanceof PullHttpEvent pull) {
             SleeEventTrace.inSbb("HttpClientSbb", event, "url=" + pull.asUrl());
             String detail;
@@ -63,6 +75,36 @@ public final class HttpClientSbb implements Sbb, SleeEventHandler {
             catch (Throwable t) { detail = "error=" + t.getClass().getSimpleName(); }
             SleeEventTrace.outSbb("HttpClientSbb", event, detail);
         }
+    }
+
+    /**
+     * Fire-and-forget classic XML POST to AS asUrl. Uses {@code gated-{corr}} as the
+     * HTTP client session id so completion never merges into an in-flight pull.
+     */
+    private String sendGatedNotify(GatedAsNotifyEvent gated) {
+        if (gated == null || !gated.isValid()) {
+            return "invalid";
+        }
+        String corr = gated.meta().correlationId();
+        String sessionId = GatedAsNotifyEvent.httpSessionId(corr);
+        AsPullClient.Admit admit = svc().asPull().tryAdmit(gated.asUrl());
+        if (!admit.allow()) {
+            return "circuit-open corr=" + corr;
+        }
+        RaCommandPort port = httpClient;
+        if (port == null) {
+            svc().asPull().recordFailure(gated.asUrl());
+            return "no-ra";
+        }
+        AsHttpWireFormat format = GatedAsNotifyService.wireFormat();
+        try {
+            port.sendCommand(new HttpCallbackCommand.JsonPostRequest(
+                    sessionId, gated.asUrl(), gated.xmlBody(), format.contentType()));
+        } catch (RuntimeException e) {
+            svc().asPull().recordFailure(gated.asUrl());
+            throw e;
+        }
+        return "gated-submitted corr=" + corr + " reason=" + gated.meta().gateReason();
     }
 
     private String sendPull(PullHttpEvent pull) {
@@ -102,6 +144,19 @@ public final class HttpClientSbb implements Sbb, SleeEventHandler {
 
     private String onCompleted(HttpCallbackCompletedEvent done) {
         String corr = done.getSessionId();
+        // Gated AS notify completions are advisory — never drive bridge/saga.
+        if (corr != null && corr.startsWith("gated-")) {
+            int status = done.getStatusCode();
+            String err = done.getErrorMessage();
+            boolean ok = (err == null || err.isBlank()) && status > 0 && status < 400;
+            String realCorr = corr.substring("gated-".length());
+            writeGatedAsCdr(realCorr, ok, status, err);
+            if (ok) {
+                return "gated-ack status=" + status;
+            }
+            return "gated-fail status=" + status
+                    + (err == null || err.isBlank() ? "" : " err=" + err);
+        }
         int status = done.getStatusCode();
         String err = done.getErrorMessage();
 
@@ -184,5 +239,38 @@ public final class HttpClientSbb implements Sbb, SleeEventHandler {
     private static void submitPost(RaCommandPort port, String corr, AsPullTarget.Http target) {
         port.sendCommand(new HttpCallbackCommand.JsonPostRequest(
                 corr, target.url(), target.body(), target.format().contentType()));
+    }
+
+    /** Advisory CDR for gated-{corr} HTTP completion (does not touch bridge/saga). */
+    private void writeGatedAsCdr(String correlationId, boolean ok, int httpStatus, String err) {
+        if (correlationId == null || correlationId.isBlank()) {
+            return;
+        }
+        try {
+            Optional<VirtualSession> sess = svc().store().get(correlationId);
+            String msisdn = sess.map(VirtualSession::msisdn).orElse(null);
+            String shortCode = sess.map(VirtualSession::shortCode).orElse(null);
+            int networkId = sess.map(VirtualSession::networkId).orElse(0);
+            String tenantId = sess.map(VirtualSession::tenantId).orElse(null);
+            String origin = sess.map(s -> s.originationType() == null
+                    ? "MAP" : s.originationType().name()).orElse("MAP");
+            Long gate = sess.filter(s -> s.gateMs() > 0).map(VirtualSession::gateMs).orElse(null);
+            Long ewma = null;
+            try {
+                double v = svc().adaptive().observedLatencyMs(networkId);
+                if (v > 0d) {
+                    ewma = Math.round(v);
+                }
+            } catch (Throwable ignored) { }
+            String detail = ok
+                    ? ("service=HttpClientSbb|gated-ack|http=" + httpStatus)
+                    : ("service=HttpClientSbb|gated-fail|http=" + httpStatus
+                            + (err == null || err.isBlank() ? "" : "|err=" + err));
+            svc().cdr().write(correlationId,
+                    ok ? CdrPhase.S1_RELEASED : CdrPhase.FAILED,
+                    msisdn, shortCode,
+                    ok ? CdrStatuses.GATED_AS_ACK : CdrStatuses.GATED_AS_FAIL,
+                    detail, networkId, tenantId, origin, gate, ewma);
+        } catch (Throwable ignored) { }
     }
 }

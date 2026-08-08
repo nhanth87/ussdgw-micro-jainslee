@@ -1,5 +1,5 @@
 [Unit]
-Description=Digicom-ET USSDGW (micro-jainslee / Quarkus)
+Description=nhanth87 USSDGW (micro-jainslee / Quarkus)
 After=network-online.target postgresql.service
 Wants=network-online.target
 

@@ -119,6 +119,9 @@ GW includes these on **PULL** encode (HTTP XML attrs / JSON fields; gRPC JSON by
 | `virtualBridgeId` | `virtualBridgeId` | Bridge arm identity when armed (usually equals `correlationId`). |
 | `adaptiveTimeoutMs` | `adaptiveTimeoutMs` | Effective adaptive gate ms for this network/session (`AdaptiveTimeout.effectiveGateMs`). |
 | `asMode` | `asMode` | Hint: `SYNC` \| `BRIDGE` (ASYNC_ACK is AS response `async=true`). |
+| `shortCode` | `shortCode` | Matched routing-rule key. |
+| `originatedUssd` | `originatedUssd` | Full UE dialed string (MAP2MAP keeps hop text in `ussdString`). |
+| `codeKind` | `codeKind` | `SHORT` \| `LONG` (mark + longer dial → LONG). |
 
 Classic AS may ignore unknown attributes. RestLink also accepts `async="true"` on response `<dialog>` for XML ASYNC_ACK.
 
@@ -132,6 +135,36 @@ Example pull fragment:
 </dialog>
 ```
 
+### Gated session push (GW → AS, RestLink additive)
+
+When AdaptiveTimeout / bridge **gate fires**, GW POSTs a **new** classic `<dialog>` XML to the short-code rule **`asUrl`** (same HTTP AS endpoint as MO pull). This is independent of the parked NI HTTP reply and of any in-flight pull (HTTP client session id = `gated-{correlationId}`).
+
+Additive attrs on the dialog (classic AS may ignore unknowns):
+
+| Attr | Meaning |
+|------|---------|
+| `virtualBridgeId` | Bridge / push-back id (usually = `localId` / correlation) |
+| `adaptiveTimeoutMs` | Gate ms that fired |
+| `observedEwmaMs` | Observed EWMA latency sample for `networkId` (when known) |
+| `jsessionId` | Classic NI Cookie `JSESSIONID` when the gated leg was HTTP-NI park |
+| `gateReason` | `GATE_EXPIRED` (NI park) \| `BRIDGED` (MO bridge wait) \| `GATE_NO_BRIDGE` |
+
+Body uses one-shot `unstructuredSSNotify_Request` whose `string` echoes `gateReason` (prior session was gated — AS may re-push with the same `jsessionId` / `virtualBridgeId`).
+
+```xml
+<dialog appCntx="networkUnstructuredSsContext" localId="corr-1"
+        sessionId="vs-1" virtualBridgeId="corr-1"
+        adaptiveTimeoutMs="4200" observedEwmaMs="2800"
+        asMode="BRIDGE" jsessionId="js-abc" gateReason="GATE_EXPIRED"
+        networkId="0" mapMessagesSize="1">
+  <unstructuredSSNotify_Request dataCodingScheme="15" string="GATE_EXPIRED">
+    <msisdn nai="international_number" npi="ISDN" number="251911000001"/>
+  </unstructuredSSNotify_Request>
+</dialog>
+```
+
+Encoder: `ClassicDialogXmlCodec.encodeGatedPush` · dispatcher: `GatedAsNotifyService` → `GatedAsNotifyEvent` → `HttpClientSbb`.
+
 ## Mapping to greenfield JSON
 
 | XML signal | JSON `AsResponse` / `AsRequest` |
@@ -139,7 +172,7 @@ Example pull fragment:
 | `unstructuredSSRequest_Request` text | `action=CONTINUE`, `text=…` |
 | `processUnstructuredSSRequest_Response` / empty end | `action=END` |
 | abort attrs / user abort | `action=ABORT` |
-| MSISDN / shortCode / ussdString on pull | `AsRequest` fields |
+| MSISDN / shortCode / ussdString / originatedUssd / codeKind on pull | `AsRequest` fields (+ XML dialog attrs) |
 | `localId` | `correlationId` (**push-back key**) |
 | `sessionId` / `virtualBridgeId` / `adaptiveTimeoutMs` / `asMode` | same JSON field names |
 | `async` late reconcile | Prefer `/as/callback` or gRPC Callback (+ optional `X-Ussd-Request-Id` bridge headers) |

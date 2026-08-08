@@ -1,6 +1,8 @@
 package et.restlink.ussdgw.api;
 
 import et.restlink.ussdgw.bridge.AdaptiveTimeout;
+import et.restlink.ussdgw.bridge.GatedSessionMeta;
+import et.restlink.ussdgw.bridge.GatedSessionRegistry;
 import et.restlink.ussdgw.bridge.VirtualSession;
 
 import org.junit.jupiter.api.Test;
@@ -33,5 +35,26 @@ class AsPullMetadataTest {
         assertThat(out.virtualBridgeId()).isNull();
         assertThat(out.asMode()).isEqualTo("SYNC");
         assertThat(out.adaptiveTimeoutMs()).isEqualTo(1000L);
+    }
+
+    @Test
+    void enrichAppliesPriorGatedHintWithJsession() {
+        VirtualSession s = new VirtualSession("vs-1", "corr-1", "r1", "2519", 3, "dlg", "*123#");
+        s.setGateMs(4200);
+        s.setAdaptiveBridgeArm(true);
+        GatedSessionRegistry gated = new GatedSessionRegistry();
+        gated.stamp(GatedSessionMeta.niPark(
+                "corr-prior", "js-abc", 5100L, 2800L, 3, "2519", "*123#", "vs-prior"));
+
+        AsRequest out = AsPullMetadata.enrich(
+                new AsRequest("vs-1", "corr-1", "r1", 1, "2519", "*123#", "1", 3),
+                s, new AdaptiveTimeout(), null, true, gated);
+
+        assertThat(out.virtualBridgeId()).isEqualTo("corr-prior");
+        assertThat(out.adaptiveTimeoutMs()).isEqualTo(5100L);
+        assertThat(out.jsessionId()).isEqualTo("js-abc");
+        assertThat(out.gateReason()).isEqualTo(GatedSessionMeta.REASON_GATE_EXPIRED);
+        assertThat(out.observedEwmaMs()).isEqualTo(2800L);
+        assertThat(out.asMode()).isEqualTo("BRIDGE");
     }
 }

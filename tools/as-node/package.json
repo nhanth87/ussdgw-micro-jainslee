@@ -12,6 +12,8 @@
     "pull:fast": "DELAY_MS=0 MODE=sync INTERACTIVE=true node src/index.mjs pull",
     "pull:bridge": "DELAY_MS=8000 MODE=sync INTERACTIVE=true node src/index.mjs pull",
     "pull:async": "MODE=async_ack CALLBACK_DELAY_MS=8000 WIRE=json INTERACTIVE=true node src/index.mjs pull",
+    "pull:map2map": "MAP2MAP=true ASSERT_ENRICH=true ECHO_HOP=true GATED_ACK=true DELAY_MS=0 MODE=sync INTERACTIVE=false ACTION=CONTINUE MENU_TEXT='Welcome MAP2MAP lab' node src/index.mjs pull",
+    "pull:map2map:bridge": "MAP2MAP=true ASSERT_ENRICH=true ECHO_HOP=true GATED_ACK=true DELAY_MS=8000 MODE=sync INTERACTIVE=false ACTION=CONTINUE MENU_TEXT='Late MAP2MAP lab' node src/index.mjs pull",
     "push:ni": "INTERACTIVE=true node src/index.mjs ni",
     "push:ni:static": "INTERACTIVE=false node src/index.mjs ni"
   },

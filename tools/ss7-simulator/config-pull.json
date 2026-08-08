@@ -1,0 +1,27 @@
+{
+  "shortCode": "*100#",
+  "digits": "1,2,3,4",
+  "digitDelayMs": 400,
+  "mode": "sequential",
+  "msisdns": [
+    "251911000001",
+    "251911000002",
+    "251911000003"
+  ],
+  "userGapMs": 1500,
+  "jmx": {
+    "url": "service:jmx:rmi:///jndi/rmi://127.0.0.1:9999/server",
+    "hostObjectName": "SS7_Simulator_main:type=TesterHost",
+    "ussdClientObjectName": "SS7_Simulator_main:type=TestUssdClientMan"
+  },
+  "peer": {
+    "note": "Match ussdgw ss7-lab-sim-pull.json: GW SCTP server 127.0.0.1:8023, sim client :8024, DPC=1 OPC=2, SSN 8 (GW also advertises 147+6)",
+    "localPort": 8024,
+    "remotePort": 8023,
+    "localHost": "127.0.0.1",
+    "remoteHost": "127.0.0.1",
+    "opc": 2,
+    "dpc": 1,
+    "ssn": 8
+  }
+}

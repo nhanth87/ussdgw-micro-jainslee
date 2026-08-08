@@ -5,6 +5,7 @@ import et.restlink.ussdgw.api.AsPullMetadata;
 import et.restlink.ussdgw.api.AsRequest;
 import et.restlink.ussdgw.api.AsWireFacade;
 import et.restlink.ussdgw.bridge.AdaptiveTimeout;
+import et.restlink.ussdgw.bridge.GatedSessionRegistry;
 import et.restlink.ussdgw.bridge.VirtualSession;
 import et.restlink.ussdgw.bridge.VirtualSessionBridge;
 import et.restlink.ussdgw.bridge.VirtualSessionState;
@@ -61,6 +62,7 @@ public class AsPullRouter {
     @Inject SipApplyService sipApply;
     @Inject AsWireFacade wireFacade;
     @Inject TenantService tenants;
+    @Inject GatedSessionRegistry gatedSessions;
 
     public String route(ShortCodeRule rule, AsRequest asReq, String correlationId) {
         if (rule == null || asReq == null) {
@@ -74,13 +76,15 @@ public class AsPullRouter {
         }
 
         String tenantId = resolveTenantId(rule, corr);
-        logPullRoute(rule, asReq, corr, tenantId, url);
+        // SLEE AS plane only (HTTP|GRPC|SIP) — RE_ROUTE / Case 2 is orthogonal hop flag.
+        RuleType plane = rule.asPullType();
+        logPullRoute(rule, asReq, corr, tenantId, url, plane);
 
-        if (rule.ruleType() == RuleType.SIP) {
+        if (plane == RuleType.SIP) {
             return routeSip(rule, asReq, corr);
         }
 
-        boolean http = rule.ruleType() == RuleType.HTTP;
+        boolean http = plane.usesHttpAsPull();
         boolean bridgeArmed = false;
         if (config != null) {
             bridgeArmed = http
@@ -88,7 +92,8 @@ public class AsPullRouter {
                     : config.grpcClientBridgeEnabled();
         }
         VirtualSession session = store == null ? null : store.get(corr).orElse(null);
-        AsRequest enriched = AsPullMetadata.enrich(asReq, session, adaptive, config, bridgeArmed);
+        AsRequest enriched = AsPullMetadata.enrich(asReq, session, adaptive, config, bridgeArmed,
+                gatedSessions);
 
         if (http) {
             container.routeEvent(new PullHttpEvent(url, enriched),
@@ -108,10 +113,10 @@ public class AsPullRouter {
 
     /** Ops-visible short-code → AS URL route (no full MSISDN). */
     private void logPullRoute(ShortCodeRule rule, AsRequest asReq, String corr,
-                              String tenantId, String url) {
+                              String tenantId, String url, RuleType plane) {
         int networkId = asReq != null ? asReq.networkId() : rule.networkId();
-        LOG.info("AS pull route shortCode={} asUrl={} ruleType={} networkId={} tenantId={} corr={} {}",
-                rule.shortCode(), url, rule.ruleType(), networkId,
+        LOG.info("AS pull route shortCode={} asUrl={} ruleType={} asPull={} networkId={} tenantId={} corr={} {}",
+                rule.shortCode(), url, rule.ruleType(), plane, networkId,
                 tenantId == null || tenantId.isBlank() ? "-" : tenantId,
                 corr, Pii.msisdnDetail(asReq == null ? null : asReq.msisdn()));
     }
@@ -131,7 +136,8 @@ public class AsPullRouter {
         boolean bridgeArmed = config != null && config.bridgeEnabled();
         VirtualSession session = store == null || corr == null || corr.isBlank()
                 ? null : store.get(corr).orElse(null);
-        AsRequest enriched = AsPullMetadata.enrich(asReq, session, adaptive, config, bridgeArmed);
+        AsRequest enriched = AsPullMetadata.enrich(asReq, session, adaptive, config, bridgeArmed,
+                gatedSessions);
         String from = sipTrunks.resolveFromUri(trunk, sipApply.fromUri());
         String to = sipTrunks.resolveToUri(trunk, enriched.msisdn(),
                 config == null ? null : config.sipRequestUriTemplate());
@@ -182,7 +188,9 @@ public class AsPullRouter {
                 forEncode = new AsRequest(asReq.sessionId(), corr, asReq.requestId(),
                         asReq.generation(), asReq.msisdn(), asReq.shortCode(),
                         asReq.ussdString(), asReq.networkId(), asReq.virtualBridgeId(),
-                        asReq.adaptiveTimeoutMs(), asReq.asMode());
+                        asReq.adaptiveTimeoutMs(), asReq.asMode(), asReq.jsessionId(),
+                        asReq.gateReason(), asReq.observedEwmaMs(),
+                        asReq.originatedUssd(), asReq.codeKind());
             }
             String ct = format == AsHttpWireFormat.JSON ? SIP_CT_JSON : SIP_CT_XML;
             return new SipPullBody(ct, wireFacade.encodePullRequest(forEncode, format));

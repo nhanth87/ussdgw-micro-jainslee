@@ -1,5 +1,5 @@
 [Unit]
-Description=Digicom-ET USSDGW lab AS (as-node pull:fast)
+Description=nhanth87 USSDGW lab AS (as-node pull:fast)
 After=network-online.target
 Wants=network-online.target
 

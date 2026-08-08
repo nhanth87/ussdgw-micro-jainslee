@@ -119,10 +119,21 @@ public class CdrService {
      */
     @Transactional
     public List<CdrEntity> list(int limit, String tenantId, String msisdn, String correlationId) {
+        return list(limit, tenantId, msisdn, correlationId, null);
+    }
+
+    /**
+     * Admin list + optional status filter. Status: exact (case-insensitive) or trailing
+     * {@code *} prefix ({@code MAP2MAP_*}, {@code GATED*}) for gated / re-route Digicom queries.
+     */
+    @Transactional
+    public List<CdrEntity> list(int limit, String tenantId, String msisdn, String correlationId,
+                                String status) {
         int lim = Math.min(Math.max(limit, 1), MAX_LIMIT);
         String tid = tenantId == null || tenantId.isBlank() ? null : tenantId.trim();
         String msisdnFilter = normalizeMsisdnFilter(msisdn);
         String corrFilter = normalizeCorrFilter(correlationId);
+        StatusFilter stFilter = normalizeStatusFilter(status);
         StringBuilder jpql = new StringBuilder("SELECT c FROM CdrEntity c WHERE 1=1");
         if (tid != null) {
             jpql.append(" AND c.tenantId = :tid");
@@ -132,6 +143,13 @@ public class CdrService {
         }
         if (corrFilter != null) {
             jpql.append(" AND c.correlationId = :corr");
+        }
+        if (stFilter != null) {
+            if (stFilter.prefix()) {
+                jpql.append(" AND UPPER(c.status) LIKE :st");
+            } else {
+                jpql.append(" AND UPPER(c.status) = :st");
+            }
         }
         jpql.append(" ORDER BY c.recordedAt DESC");
         TypedQuery<CdrEntity> q = em.createQuery(jpql.toString(), CdrEntity.class);
@@ -144,25 +162,34 @@ public class CdrService {
         if (corrFilter != null) {
             q.setParameter("corr", corrFilter);
         }
+        if (stFilter != null) {
+            q.setParameter("st", stFilter.pattern());
+        }
         q.setMaxResults(lim);
         return q.getResultList();
     }
 
     /** Backward-compatible view for admin HTML (phase/status fields). */
     public List<CdrRecord> listRecords(int limit) {
-        return listRecords(limit, null, null, null);
+        return listRecords(limit, null, null, null, null);
     }
 
     public List<CdrRecord> listRecords(int limit, String tenantId) {
-        return listRecords(limit, tenantId, null, null);
+        return listRecords(limit, tenantId, null, null, null);
     }
 
     public List<CdrRecord> listRecords(int limit, String tenantId, String msisdn) {
-        return listRecords(limit, tenantId, msisdn, null);
+        return listRecords(limit, tenantId, msisdn, null, null);
     }
 
     public List<CdrRecord> listRecords(int limit, String tenantId, String msisdn, String correlationId) {
-        return list(limit, tenantId, msisdn, correlationId).stream().map(CdrRecord::fromEntity).toList();
+        return listRecords(limit, tenantId, msisdn, correlationId, null);
+    }
+
+    public List<CdrRecord> listRecords(int limit, String tenantId, String msisdn,
+                                       String correlationId, String status) {
+        return list(limit, tenantId, msisdn, correlationId, status).stream()
+                .map(CdrRecord::fromEntity).toList();
     }
 
     /** Clamp limit for admin UI; blank/invalid → default. */
@@ -196,6 +223,33 @@ public class CdrService {
         String t = correlationId.trim();
         return t.isEmpty() ? null : t;
     }
+
+    /**
+     * Parse admin status filter. Trailing {@code *} → SQL {@code LIKE} prefix (uppercased).
+     * Catalog statuses use {@code _} as a literal separator; LIKE {@code _} is one-char
+     * wildcard but still matches our {@code MAP2MAP_*} / {@code GATE_*} rows in practice.
+     */
+    static StatusFilter normalizeStatusFilter(String status) {
+        if (status == null) {
+            return null;
+        }
+        String t = status.trim();
+        if (t.isEmpty()) {
+            return null;
+        }
+        boolean prefix = t.endsWith("*");
+        String body = prefix ? t.substring(0, t.length() - 1) : t;
+        if (body.isEmpty()) {
+            return null;
+        }
+        String upper = body.toUpperCase();
+        if (prefix) {
+            return new StatusFilter(upper + "%", true);
+        }
+        return new StatusFilter(upper, false);
+    }
+
+    record StatusFilter(String pattern, boolean prefix) {}
 
     static String formatCsv(String corr, String phase, String msisdn, String sc,
                             String status, String detail, int networkId, String tenantId) {

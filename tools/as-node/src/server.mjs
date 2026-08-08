@@ -1,5 +1,11 @@
 import Fastify from 'fastify';
-import { encodeResponse, parsePullRequest, sleep } from './dialog.mjs';
+import {
+  assertMap2MapEnrich,
+  encodeGatedNotifyAck,
+  encodeResponse,
+  parsePullRequest,
+  sleep,
+} from './dialog.mjs';
 import { postCallback } from './callback.mjs';
 import { listMenus, nextMenuResponse } from './menus.mjs';
 
@@ -14,6 +20,11 @@ import { listMenus, nextMenuResponse } from './menus.mjs';
  *   MENU_TEXT / END_TEXT — used only when INTERACTIVE=false,
  *   GW_CALLBACK, CALLBACK_DELAY_MS, API_KEY,
  *   MIRROR_URL — optional fire-and-forget POST of the raw pull body (e.g. webhook.cool dump)
+ *   MAP2MAP=true — Test AS for MAP2MAP enrich (originatedUssd/shortCode/codeKind) + gated notify
+ *   ASSERT_ENRICH=true — fail pull with 422 when MAP2MAP attrs missing (or EXPECT_* mismatch)
+ *   EXPECT_MSISDN / EXPECT_ORIGINATED / EXPECT_SHORT_CODE / EXPECT_CODE_KIND — optional exact checks
+ *   ECHO_HOP=true — prefix AS menu with hop ussdString (MAP2MAP hop text)
+ *   GATED_ACK=true — answer unstructuredSSNotify_Request (gate push) with Notify_Response
  */
 export async function startPullServer(opts = {}) {
   const port = Number(opts.port ?? process.env.PORT ?? 8090);
@@ -44,6 +55,39 @@ export async function startPullServer(opts = {}) {
   );
   const apiKey = opts.apiKey ?? process.env.API_KEY ?? process.env.USSD_API_KEY ?? '';
   const mirrorUrl = String(opts.mirrorUrl ?? process.env.MIRROR_URL ?? '').trim();
+  const map2map =
+    opts.map2map != null
+      ? !!opts.map2map
+      : String(process.env.MAP2MAP ?? 'false').toLowerCase() === 'true';
+  const assertEnrich =
+    opts.assertEnrich != null
+      ? !!opts.assertEnrich
+      : String(process.env.ASSERT_ENRICH ?? (map2map ? 'true' : 'false')).toLowerCase() ===
+        'true';
+  const echoHop =
+    opts.echoHop != null
+      ? !!opts.echoHop
+      : String(process.env.ECHO_HOP ?? (map2map ? 'true' : 'false')).toLowerCase() === 'true';
+  const gatedAck =
+    opts.gatedAck != null
+      ? !!opts.gatedAck
+      : String(process.env.GATED_ACK ?? 'true').toLowerCase() !== 'false';
+  const expectEnrich = {
+    msisdn: opts.expectMsisdn ?? process.env.EXPECT_MSISDN ?? '',
+    originatedUssd: opts.expectOriginated ?? process.env.EXPECT_ORIGINATED ?? '',
+    shortCode: opts.expectShortCode ?? process.env.EXPECT_SHORT_CODE ?? '',
+    codeKind: opts.expectCodeKind ?? process.env.EXPECT_CODE_KIND ?? '',
+    requirePresence:
+      assertEnrich &&
+      !(
+        process.env.EXPECT_MSISDN ||
+        process.env.EXPECT_ORIGINATED ||
+        process.env.EXPECT_SHORT_CODE ||
+        process.env.EXPECT_CODE_KIND
+      ),
+  };
+  /** Last gated notify seen — useful for lab curls / health. */
+  const lastGated = { at: null, corr: null, gateReason: null, jsessionId: null };
 
   const app = Fastify({ logger: true });
 
@@ -72,9 +116,26 @@ export async function startPullServer(opts = {}) {
       return { text: endText, action: 'END', menuId: '-', screen: 'end' };
     }
     if (!interactive) {
-      return { text: menuText, action: 'CONTINUE', menuId: 'static', screen: 'root' };
+      let text = menuText;
+      if (echoHop && parsed.ussdString) {
+        text = `[hop=${parsed.ussdString}]\n${menuText}`;
+      }
+      if (map2map && parsed.originatedUssd) {
+        text =
+          `MAP2MAP AS ok\norig=${parsed.originatedUssd}` +
+          ` sc=${parsed.shortCode || '-'} kind=${parsed.codeKind || '-'}\n` +
+          text;
+      }
+      return { text, action: 'CONTINUE', menuId: 'static', screen: 'root' };
     }
-    return nextMenuResponse(parsed, { menuPick });
+    const turn = nextMenuResponse(parsed, { menuPick });
+    if (echoHop && parsed.ussdString && turn.screen === 'root') {
+      return {
+        ...turn,
+        text: `[hop=${parsed.ussdString}]\n${turn.text}`,
+      };
+    }
+    return turn;
   };
 
   const handlePull = async (request, reply) => {
@@ -96,6 +157,44 @@ export async function startPullServer(opts = {}) {
     const sessionId = parsed.sessionId || '';
     const virtualBridgeId = parsed.virtualBridgeId || corr;
     const adaptiveTimeoutMs = parsed.adaptiveTimeoutMs;
+
+    // Gated XML push from BridgeGate (encodeGatedPush) — ack Notify, do not run menus.
+    if (parsed.gatedNotify && gatedAck) {
+      lastGated.at = Date.now();
+      lastGated.corr = corr;
+      lastGated.gateReason = parsed.gateReason || parsed.ussdString || '';
+      lastGated.jsessionId = parsed.jsessionId || '';
+      request.log.info(
+        {
+          corr,
+          gateReason: lastGated.gateReason,
+          jsessionId: lastGated.jsessionId,
+          virtualBridgeId,
+          adaptiveTimeoutMs,
+          asMode: parsed.asMode,
+        },
+        'gated notify inbound (MAP2MAP / bridge)',
+      );
+      const ack = encodeGatedNotifyAck(wire, {
+        correlationId: corr,
+        sessionId,
+        virtualBridgeId,
+      });
+      reply.code(200).header('Content-Type', ack.contentType).send(ack.body);
+      return;
+    }
+
+    if (assertEnrich && !parsed.gatedNotify) {
+      const missing = assertMap2MapEnrich(parsed, expectEnrich);
+      if (missing.length > 0) {
+        request.log.warn({ corr, missing, parsed }, 'MAP2MAP enrich assert failed');
+        reply
+          .code(422)
+          .header('Content-Type', 'application/json; charset=utf-8')
+          .send({ error: 'MAP2MAP_ENRICH_ASSERT', missing, corr });
+        return;
+      }
+    }
 
     const turn = resolveTurn({ ...parsed, correlationId: corr });
     const textForAction = turn.text;
@@ -129,6 +228,7 @@ export async function startPullServer(opts = {}) {
         mode,
         delayMs,
         interactive,
+        map2map,
         menuId: turn.menuId,
         screen: turn.screen,
         corr,
@@ -138,6 +238,9 @@ export async function startPullServer(opts = {}) {
         asMode: parsed.asMode,
         msisdn: parsed.msisdn,
         ussd: parsed.ussdString,
+        originatedUssd: parsed.originatedUssd,
+        shortCode: parsed.shortCode,
+        codeKind: parsed.codeKind,
         generation: parsed.generation,
         responseAction,
       },
@@ -235,6 +338,11 @@ export async function startPullServer(opts = {}) {
     menus: listMenus(),
     gwCallback,
     mirrorUrl: mirrorUrl || null,
+    map2map,
+    assertEnrich,
+    echoHop,
+    gatedAck,
+    lastGated,
   }));
 
   app.post('/ussd/pull', handlePull);
@@ -243,7 +351,8 @@ export async function startPullServer(opts = {}) {
   await app.listen({ port, host });
   app.log.info(
     `AS pull sim listening http://${host}:${port}/ussd/pull ` +
-      `(mode=${mode} delayMs=${delayMs} wire=${wirePref} interactive=${interactive} menuPick=${menuPick})`,
+      `(mode=${mode} delayMs=${delayMs} wire=${wirePref} interactive=${interactive}` +
+      ` menuPick=${menuPick} map2map=${map2map} assertEnrich=${assertEnrich})`,
   );
   return app;
 }

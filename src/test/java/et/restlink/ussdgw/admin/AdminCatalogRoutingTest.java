@@ -1,5 +1,6 @@
 package et.restlink.ussdgw.admin;
 
+import et.restlink.ussdgw.persist.AppUserEntity;
 import et.restlink.ussdgw.persist.SipTrunkEntity;
 import et.restlink.ussdgw.persist.TenantEntity;
 import et.restlink.ussdgw.routing.RuleType;
@@ -13,6 +14,7 @@ import org.junit.jupiter.api.Test;
 
 import java.util.Collection;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -48,7 +50,11 @@ class AdminCatalogRoutingTest {
                 "action=save&shortCode=%2A999%23&ruleType=HTTP&asUrl=http%3A%2F%2Fas%2Fpull&enabled=true",
                 null);
         assertThat(new String(saved.body())).contains("*999#").contains("http://as/pull");
-        assertThat(saved.headers().get("HX-Trigger")).contains("saved").contains("live");
+        String hx = saved.headers().get("HX-Trigger");
+        assertThat(hx).contains("saved").contains("live");
+        assertThat(hx).doesNotContain("\u2014");
+        assertThat(hx).contains("ussdCatalogChanged").contains("/admin/routing/partial").contains("#rule-rows");
+        assertThat(saved.headers().get("Vary")).isEqualTo("HX-Request");
         assertThat(routing.find("*999#")).isPresent();
 
         AdminHttpHandler.HttpReply get = catalog.routingGet(null);
@@ -65,6 +71,151 @@ class AdminCatalogRoutingTest {
         assertThat(routing.find("*100*123456#")).isPresent()
                 .get().extracting(ShortCodeRule::asUrl).isEqualTo("http://as/mark");
         assertThat(routing.find("*100*123456#").get().mark()).isTrue();
+    }
+
+    @Test
+    void saveRerouteEnableAndRedirectUssd() {
+        AdminHttpHandler.HttpReply saved = catalog.routingPost(
+                "action=save&shortCode=%2A804%23&ruleType=HTTP&asUrl=http%3A%2F%2Fas%2Fuserinfo"
+                        + "&enabled=true&rerouteEnable=true&redirectUssd=%2A8744%23&hlrMode=FAKE",
+                null);
+        assertThat(saved.headers().get("HX-Trigger")).contains("saved");
+        ShortCodeRule r = routing.find("*804#").orElseThrow();
+        assertThat(r.rerouteEnable()).isTrue();
+        assertThat(r.map2mapArmed()).isTrue();
+        assertThat(r.redirectUssdString()).isEqualTo("*8744#");
+        assertThat(r.hlrMode()).isEqualTo("FAKE");
+        assertThat(r.bypass()).isFalse();
+        assertThat(r.fixedHopArmed()).isFalse();
+        assertThat(new String(saved.body())).contains("true").contains("*8744#").contains("FAKE");
+    }
+
+    @Test
+    void saveTypeReRouteImpliesRerouteAndStoresAsPullPlaneHttp() {
+        AdminHttpHandler.HttpReply saved = catalog.routingPost(
+                "action=save&shortCode=%2A804%23&ruleType=RE_ROUTE&asUrl=http%3A%2F%2Fas%2Fuserinfo"
+                        + "&enabled=true&redirectUssd=%2A875%23",
+                null);
+        assertThat(saved.headers().get("HX-Trigger")).contains("saved");
+        ShortCodeRule r = routing.find("*804#").orElseThrow();
+        // jainslee: RE_ROUTE form → persist HTTP|GRPC|SIP + reroute (default HTTP)
+        assertThat(r.ruleType()).isEqualTo(RuleType.HTTP);
+        assertThat(r.asPullType()).isEqualTo(RuleType.HTTP);
+        assertThat(r.rerouteEnable()).isTrue();
+        assertThat(r.map2mapArmed()).isTrue();
+        assertThat(r.redirectUssdString()).isEqualTo("*875#");
+        assertThat(r.ruleType().usesHttpAsPull()).isTrue();
+        assertThat(new String(saved.body())).contains("RE_ROUTE/HTTP").contains("*875#");
+    }
+
+    @Test
+    void saveTypeReRouteWithGrpcAsPullPlane() {
+        AdminHttpHandler.HttpReply saved = catalog.routingPost(
+                "action=save&shortCode=%2A807%23&ruleType=RE_ROUTE&asPullType=GRPC"
+                        + "&asUrl=127.0.0.1%3A9000%7Cet.restlink.ussdgw.as.UssdAs%2FPull"
+                        + "&enabled=true&redirectUssd=%2A875%23",
+                null);
+        assertThat(saved.headers().get("HX-Trigger")).contains("saved");
+        ShortCodeRule r = routing.find("*807#").orElseThrow();
+        assertThat(r.ruleType()).isEqualTo(RuleType.GRPC);
+        assertThat(r.asPullType()).isEqualTo(RuleType.GRPC);
+        assertThat(r.rerouteEnable()).isTrue();
+        assertThat(r.map2mapArmed()).isTrue();
+        assertThat(new String(saved.body())).contains("RE_ROUTE/GRPC");
+    }
+
+    @Test
+    void saveTypeReRouteAliasReDashRoute() {
+        AdminHttpHandler.HttpReply saved = catalog.routingPost(
+                "action=save&shortCode=%2A806%23&ruleType=re-route&asUrl=http%3A%2F%2Fas%2Fx"
+                        + "&enabled=true&redirectUssd=%2A875%23&hopDestGt=251971200201",
+                null);
+        assertThat(saved.headers().get("HX-Trigger")).contains("saved");
+        ShortCodeRule r = routing.find("*806#").orElseThrow();
+        assertThat(r.ruleType()).isEqualTo(RuleType.HTTP);
+        assertThat(r.rerouteEnable()).isTrue();
+        assertThat(r.hopDestGt()).isEqualTo("251971200201");
+    }
+
+    @Test
+    void saveTypeReRouteWithoutRedirectRejected() {
+        AdminHttpHandler.HttpReply r = catalog.routingPost(
+                "action=save&shortCode=%2A804%23&ruleType=RE_ROUTE&asUrl=http%3A%2F%2Fas%2Fx"
+                        + "&enabled=true",
+                null);
+        assertThat(r.headers().get("HX-Trigger")).contains("error");
+        assertThat(routing.find("*804#")).isEmpty();
+    }
+
+    @Test
+    void routingPageVarsSeedUpperHlrGtPlaceholder() {
+        set(catalog, "config", new et.restlink.ussdgw.config.UssdConfigService() {
+            @Override
+            public String hlrUpperGt() {
+                return "251971200201";
+            }
+        });
+        Map<String, String> vars = catalog.routingPageVars(null);
+        assertThat(vars.get("{{UPPER_HLR_GT}}")).isEqualTo("251971200201");
+        assertThat(vars.get("{{UPPER_HLR_GT_PLACEHOLDER}}")).isEqualTo("251971200201");
+    }
+
+    @Test
+    void routingPageVarsUpperHlrFallbackWhenConfigAbsent() {
+        Map<String, String> vars = catalog.routingPageVars(null);
+        assertThat(vars.get("{{UPPER_HLR_GT}}")).isEqualTo("");
+        assertThat(vars.get("{{UPPER_HLR_GT_PLACEHOLDER}}"))
+                .isEqualTo("HLR number (ussd.hlr.upper-gt)");
+    }
+
+    @Test
+    void saveFixedHopDestGtAndSsn() {
+        AdminHttpHandler.HttpReply saved = catalog.routingPost(
+                "action=save&shortCode=%2A804%23&ruleType=HTTP&asUrl=http%3A%2F%2Fas%2Fsp"
+                        + "&enabled=true&rerouteEnable=true&redirectUssd=%2A875%23"
+                        + "&hopDestGt=251971200201&hopDestSsn=6",
+                null);
+        assertThat(saved.headers().get("HX-Trigger")).contains("saved");
+        ShortCodeRule r = routing.find("*804#").orElseThrow();
+        assertThat(r.map2mapArmed()).isTrue();
+        assertThat(r.fixedHopArmed()).isTrue();
+        assertThat(r.redirectUssdString()).isEqualTo("*875#");
+        assertThat(r.hopDestGt()).isEqualTo("251971200201");
+        assertThat(r.hopDestSsn()).isEqualTo(6);
+        assertThat(new String(saved.body())).contains("251971200201").contains("*875#");
+    }
+
+    @Test
+    void saveHopDestSsnAloneWithRerouteUsesUpperGtSsn() {
+        AdminHttpHandler.HttpReply saved = catalog.routingPost(
+                "action=save&shortCode=%2A804%23&ruleType=HTTP&asUrl=http%3A%2F%2Fas%2Fx"
+                        + "&enabled=true&rerouteEnable=true&redirectUssd=%2A875%23&hopDestSsn=6",
+                null);
+        assertThat(saved.headers().get("HX-Trigger")).contains("saved");
+        ShortCodeRule r = routing.find("*804#").orElseThrow();
+        assertThat(r.map2mapArmed()).isTrue();
+        assertThat(r.fixedHopArmed()).isFalse();
+        assertThat(r.hopDestSsn()).isEqualTo(6);
+    }
+
+    @Test
+    void saveHopDestSsnWithoutGtRejectedWhenRerouteOff() {
+        AdminHttpHandler.HttpReply r = catalog.routingPost(
+                "action=save&shortCode=%2A804%23&ruleType=HTTP&asUrl=http%3A%2F%2Fas%2Fx"
+                        + "&enabled=true&rerouteEnable=false&hopDestSsn=6",
+                null);
+        assertThat(r.headers().get("HX-Trigger")).contains("error");
+        assertThat(routing.find("*804#")).isEmpty();
+    }
+
+    @Test
+    void saveRerouteWithoutRedirectRejected() {
+        AdminHttpHandler.HttpReply r = catalog.routingPost(
+                "action=save&shortCode=%2A804%23&ruleType=HTTP&asUrl=http%3A%2F%2Fas%2Fx"
+                        + "&enabled=true&rerouteEnable=true",
+                null);
+        assertThat(r.headers().get("HX-Trigger")).contains("error");
+        assertThat(routing.find("*804#")).isEmpty();
     }
 
     @Test
@@ -145,25 +296,149 @@ class AdminCatalogRoutingTest {
     }
 
     @Test
-    void sipRouteAllowsSharedTrunk() {
-        SipTrunkEntity shared = new SipTrunkEntity();
-        shared.trunkId = "shared-trunk";
-        shared.enabled = true;
-        shared.tenantId = null;
-        set(catalog, "sipTrunkService", new SipTrunkService() {
+    void routingPageVarsUseTenantAndAppUserSelectsWithDigicomDefaults() {
+        TenantEntity digicom = new TenantEntity();
+        digicom.tenantId = "digicom-push";
+        digicom.displayName = "Digicom NI Push";
+        digicom.enabled = true;
+        digicom.networkId = 0;
+        TenantEntity other = new TenantEntity();
+        other.tenantId = "bank1";
+        other.displayName = "Bank";
+        other.enabled = true;
+        set(catalog, "tenants", new TenantService() {
             @Override
-            public Optional<SipTrunkEntity> byId(String trunkId) {
-                return "shared-trunk".equals(trunkId) ? Optional.of(shared) : Optional.empty();
+            public List<TenantEntity> list() {
+                return List.of(other, digicom);
+            }
+
+            @Override
+            public Optional<TenantEntity> byId(String tenantId) {
+                return list().stream().filter(t -> t.tenantId.equals(tenantId)).findFirst();
             }
         });
-        AdminAuthService.Principal tenant = new AdminAuthService.Principal("TENANT", "bank1");
-        AdminHttpHandler.HttpReply r = catalog.routingPost(
-                "action=save&shortCode=%2A9%23&ruleType=SIP&asUrl=shared-trunk&enabled=true",
-                tenant);
-        assertThat(r.headers().get("HX-Trigger")).contains("saved");
-        assertThat(routing.find("*9#")).isPresent()
-                .get().extracting(ShortCodeRule::asUrl).isEqualTo("shared-trunk");
+        AppUserEntity ni = new AppUserEntity();
+        ni.username = "ni-push";
+        ni.tenantId = "digicom-push";
+        ni.enabled = true;
+        AppUserEntity bankApp = new AppUserEntity();
+        bankApp.username = "bank-app-a";
+        bankApp.tenantId = "bank1";
+        bankApp.enabled = true;
+        set(catalog, "appUsers", new et.restlink.ussdgw.tenant.AppUserService() {
+            @Override
+            public List<et.restlink.ussdgw.persist.AppUserEntity> list(String tenantScope) {
+                if (tenantScope == null || tenantScope.isBlank()) {
+                    return List.of(ni, bankApp);
+                }
+                return List.of(ni, bankApp).stream()
+                        .filter(u -> tenantScope.equals(u.tenantId)).toList();
+            }
+
+            @Override
+            public Optional<et.restlink.ussdgw.persist.AppUserEntity> byUsername(String username) {
+                return List.of(ni, bankApp).stream()
+                        .filter(u -> u.username.equals(username)).findFirst();
+            }
+        });
+
+        Map<String, String> vars = catalog.routingPageVars(new AdminAuthService.Principal("ADMIN", null));
+        assertThat(vars.get("{{TENANT_FIELD}}"))
+                .contains("<select name=\"tenantId\"")
+                .contains("value=\"digicom-push\" selected")
+                .contains("value=\"bank1\"")
+                .doesNotContain("list=\"tenant-ids\"");
+        assertThat(vars.get("{{APP_USER_FIELD}}"))
+                .contains("<select name=\"appUsername\"")
+                .contains("value=\"ni-push\" selected")
+                .contains("bank-app-a")
+                .contains("App users");
+        assertThat(catalog.resolveDefaultTenantId(null)).isEqualTo("digicom-push");
     }
+
+    @Test
+    void tenantScopedRoutingLocksTenantAndFiltersAppUsers() {
+        TenantEntity digicom = new TenantEntity();
+        digicom.tenantId = "digicom-push";
+        digicom.enabled = true;
+        set(catalog, "tenants", new TenantService() {
+            @Override
+            public List<TenantEntity> list() {
+                return List.of(digicom);
+            }
+
+            @Override
+            public Optional<TenantEntity> byId(String tenantId) {
+                return Optional.of(digicom);
+            }
+        });
+        AppUserEntity ni = new AppUserEntity();
+        ni.username = "ni-push";
+        ni.tenantId = "digicom-push";
+        ni.enabled = true;
+        AppUserEntity foreign = new AppUserEntity();
+        foreign.username = "other-app";
+        foreign.tenantId = "bank1";
+        foreign.enabled = true;
+        set(catalog, "appUsers", new et.restlink.ussdgw.tenant.AppUserService() {
+            @Override
+            public List<et.restlink.ussdgw.persist.AppUserEntity> list(String tenantScope) {
+                if ("digicom-push".equals(tenantScope)) {
+                    return List.of(ni);
+                }
+                return List.of(ni, foreign);
+            }
+
+            @Override
+            public Optional<et.restlink.ussdgw.persist.AppUserEntity> byUsername(String username) {
+                if ("ni-push".equals(username)) return Optional.of(ni);
+                if ("other-app".equals(username)) return Optional.of(foreign);
+                return Optional.empty();
+            }
+        });
+        AdminAuthService.Principal tenant = new AdminAuthService.Principal("TENANT", "digicom-push");
+        Map<String, String> vars = catalog.routingPageVars(tenant);
+        assertThat(vars.get("{{TENANT_FIELD}}"))
+                .contains("type=\"hidden\"")
+                .contains("value=\"digicom-push\"")
+                .doesNotContain("<select name=\"tenantId\"");
+        assertThat(vars.get("{{APP_USER_FIELD}}"))
+                .contains("ni-push")
+                .doesNotContain("other-app");
+
+        AdminHttpHandler.HttpReply rejected = catalog.routingPost(
+                "action=save&shortCode=%2A9%23&ruleType=HTTP&asUrl=http%3A%2F%2Fas%2Fx"
+                        + "&enabled=true&appUsername=other-app",
+                tenant);
+        assertThat(rejected.headers().get("HX-Trigger")).contains("forbidden");
+        assertThat(routing.find("*9#")).isEmpty();
+
+        AdminHttpHandler.HttpReply ok = catalog.routingPost(
+                "action=save&shortCode=%2A9%23&ruleType=HTTP&asUrl=http%3A%2F%2Fas%2Fx"
+                        + "&enabled=true&tenantId=ignored&appUsername=ni-push",
+                tenant);
+        assertThat(ok.headers().get("HX-Trigger")).contains("saved");
+        ShortCodeRule r = routing.find("*9#").orElseThrow();
+        assertThat(r.tenantId()).isEqualTo("digicom-push");
+        assertThat(r.appUsername()).isEqualTo("ni-push");
+    }
+
+    @Test
+    void saveRejectsUnknownAppUsername() {
+        set(catalog, "appUsers", new et.restlink.ussdgw.tenant.AppUserService() {
+            @Override
+            public Optional<et.restlink.ussdgw.persist.AppUserEntity> byUsername(String username) {
+                return Optional.empty();
+            }
+        });
+        AdminHttpHandler.HttpReply r = catalog.routingPost(
+                "action=save&shortCode=%2A9%23&ruleType=HTTP&asUrl=http%3A%2F%2Fas%2Fx"
+                        + "&enabled=true&tenantId=digicom-push&appUsername=missing",
+                new AdminAuthService.Principal("ADMIN", null));
+        assertThat(r.headers().get("HX-Trigger")).contains("unknown appUsername");
+        assertThat(routing.find("*9#")).isEmpty();
+    }
+
 
     static final class MemoryRouting extends ShortCodeRoutingService {
         final ConcurrentHashMap<String, ShortCodeRule> map = new ConcurrentHashMap<>();

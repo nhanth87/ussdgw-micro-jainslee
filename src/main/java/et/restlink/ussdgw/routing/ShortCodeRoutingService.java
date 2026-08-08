@@ -49,13 +49,18 @@ public class ShortCodeRoutingService {
         for (ShortCodeEntity e : rows) {
             RuleType type;
             try {
-                type = RuleType.valueOf(e.ruleType);
+                type = RuleType.parse(e.ruleType);
             } catch (RuntimeException ex) {
                 continue;
             }
+            boolean reroute = type.impliesReroute()
+                    || e.rerouteEnable
+                    || (!e.bypass && e.map2mapGt != null && !e.map2mapGt.isBlank());
             rules.put(mapKey(e.shortCode, e.appUsername),
-                    new ShortCodeRule(e.shortCode, type, e.asUrl, e.enabled,
-                            e.tenantId, e.networkId, e.mark, blankToNull(e.appUsername)));
+                    ShortCodeRule.ofReroute(e.shortCode, type, e.asUrl, e.enabled,
+                            e.tenantId, e.networkId, e.mark, blankToNull(e.appUsername),
+                            reroute, blankToNull(e.map2mapGt), blankToNull(e.hlrMode),
+                            blankToNull(e.hopDestGt), e.hopDestSsn));
         }
         LOG.info("Loaded {} short-code rules from DB", rules.size());
     }
@@ -93,6 +98,12 @@ public class ShortCodeRoutingService {
         e.mark = rule.mark();
         // DB stores unbound as '' (NOT NULL) for composite UNIQUE(short_code, app_username).
         e.appUsername = blankToEmpty(rule.appUsername());
+        e.rerouteEnable = rule.rerouteEnable();
+        e.bypass = rule.bypass(); // mirror !rerouteEnable for V9 readers
+        e.map2mapGt = blankToNull(rule.redirectUssdString());
+        e.hlrMode = blankToNull(rule.hlrMode());
+        e.hopDestGt = blankToNull(rule.hopDestGt());
+        e.hopDestSsn = rule.hopDestSsn();
         e.persist();
     }
 

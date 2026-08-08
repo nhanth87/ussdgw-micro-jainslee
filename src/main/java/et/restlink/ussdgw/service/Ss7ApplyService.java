@@ -40,6 +40,7 @@ public class Ss7ApplyService {
     @Inject VirtualSessionBridge bridge;
     @Inject UssdSagaCoordinator saga;
     @Inject PendingHlrProxyRegistry pendingHlrProxy;
+    @Inject PendingMap2MapRegistry pendingMap2Map;
     @Inject RuntimeConfigStore store;
 
     @ConfigProperty(name = "ussd.map.enabled", defaultValue = "false")
@@ -85,6 +86,7 @@ public class Ss7ApplyService {
         bridge.bindSs7(() -> null);
         saga.bindSs7(() -> null);
         pendingHlrProxy.bindSs7(() -> null);
+        pendingMap2Map.bindSs7(() -> null);
         if (ss7Endpoint == null) return "ss7-drained=noop";
         try {
             ss7Endpoint.deactivate();
@@ -264,6 +266,7 @@ public class Ss7ApplyService {
         bridge.bindSs7(this::endpoint);
         saga.bindSs7(this::endpoint);
         pendingHlrProxy.bindSs7(this::endpoint);
+        pendingMap2Map.bindSs7(this::endpoint);
         Ss7AdminBindings.bind(ss7Endpoint);
     }
 

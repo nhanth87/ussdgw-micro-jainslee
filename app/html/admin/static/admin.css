@@ -475,6 +475,16 @@ tbody.hx-table-live.htmx-settling {
   color: var(--color-signal);
   border-color: rgba(232, 163, 23, 0.35);
 }
+.cdr-status-chip.cdr-status--gated {
+  color: #f0c674;
+  border-color: rgba(232, 163, 23, 0.45);
+  background: rgba(232, 163, 23, 0.08);
+}
+.cdr-status-chip.cdr-status--map2map {
+  color: #7eb6e8;
+  border-color: rgba(91, 155, 213, 0.45);
+  background: rgba(91, 155, 213, 0.08);
+}
 .cdr-detail td {
   border-top: none !important;
 }

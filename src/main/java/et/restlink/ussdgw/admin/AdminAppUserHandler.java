@@ -86,7 +86,7 @@ public class AdminAppUserHandler {
                 return rowsOk(who, "updated " + username, null);
             }
             var created = appUsers.create(username, tenantId, f.get("apiKey"));
-            String notice = "created " + username + " — API key (copy now): " + created.plaintextApiKey();
+            String notice = "created " + username + " - API key (copy now): " + created.plaintextApiKey();
             return rowsOk(who, notice, created.plaintextApiKey());
         } catch (RuntimeException ex) {
             return rowsErr(who, "error: " + nullToEmpty(ex.getMessage()));
@@ -132,28 +132,23 @@ public class AdminAppUserHandler {
                                               String plaintextKey) {
         String html = rowsHtml(who);
         if (plaintextKey != null && !plaintextKey.isBlank()) {
-            html = "<div class=\"mb-3 rounded-md border border-signal/50 bg-signal/10 p-3 font-mono text-xs text-slate-100\">"
+            // OOB notice — never prepend a <div> into #app-user-rows <tbody>
+            html = "<div id=\"app-user-notice\" hx-swap-oob=\"innerHTML\" "
+                    + "class=\"mb-3 rounded-md border border-signal/50 bg-signal/10 p-3 "
+                    + "font-mono text-xs text-slate-100\">"
                     + esc(message) + "</div>" + html;
         }
         return AdminHttpHandler.HttpReply.html(html)
-                .withHeader("HX-Trigger", toastJson(message, "ok"))
+                .withHeader("HX-Trigger", AdminHtmx.triggerToast(
+                        message, "ok", "/admin/app-users/partial", "#app-user-rows"))
                 .withHeader("Vary", "HX-Request");
     }
 
     private AdminHttpHandler.HttpReply rowsErr(AdminAuthService.Principal who, String message) {
         return AdminHttpHandler.HttpReply.html(rowsHtml(who))
-                .withHeader("HX-Trigger", toastJson(message, "error"))
+                .withHeader("HX-Trigger", AdminHtmx.triggerToast(
+                        message, "error", "/admin/app-users/partial", "#app-user-rows"))
                 .withHeader("Vary", "HX-Request");
-    }
-
-    private static String toastJson(String message, String kind) {
-        return "{\"ussdToast\":{\"message\":" + jsonStr(message) + ",\"kind\":" + jsonStr(kind) + "}}";
-    }
-
-    private static String jsonStr(String s) {
-        if (s == null) return "\"\"";
-        return "\"" + s.replace("\\", "\\\\").replace("\"", "\\\"")
-                .replace("\n", "\\n").replace("\r", "") + "\"";
     }
 
     private static String nullToEmpty(String s) {
