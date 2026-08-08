@@ -10,6 +10,10 @@
 #   ./build/push-dual.sh --dry-run    # print plan only
 #   ./build/push-dual.sh --origin-only
 #   ./build/push-dual.sh --digicom-only
+#   ./build/push-dual.sh --force-digicom  # digicom-et only: --force-with-lease (private)
+#
+# Digicom tip normally merges main (FF-friendly). Use --force-digicom only when the
+# private tip was rebuilt and is not a fast-forward of digicom-et/main.
 #
 # Digicom seed sources (first hit wins when building digicom branch):
 #   1) working tree paths listed below (often gitignored on main — keep them locally)
@@ -37,13 +41,15 @@ DIGICOM_PATHS=(
 DRY_RUN=0
 DO_ORIGIN=1
 DO_DIGICOM=1
+FORCE_DIGICOM=0
 for arg in "$@"; do
   case "$arg" in
     --dry-run) DRY_RUN=1 ;;
     --origin-only) DO_DIGICOM=0 ;;
     --digicom-only) DO_ORIGIN=0 ;;
+    --force-digicom) FORCE_DIGICOM=1 ;;
     -h|--help)
-      sed -n '2,20p' "$0"
+      sed -n '2,24p' "$0"
       exit 0
       ;;
     *)
@@ -101,6 +107,9 @@ restore_digicom_from_ref() {
     if git cat-file -e "${ref}:${p}" 2>/dev/null; then
       mkdir -p "$(dirname "$p")"
       git show "${ref}:${p}" >"$p"
+      if [[ "$p" == *.sh ]]; then
+        chmod +x "$p"
+      fi
       restored=1
       info "restored $p from ${ref}"
     fi
@@ -161,10 +170,14 @@ build_and_push_digicom() {
   ensure_digicom_files_present
   ensure_install_on_digicom
 
-  info "rebuild ${DIGICOM_BRANCH} = ${PUBLIC_BRANCH} + Digicom overlay"
+  info "update ${DIGICOM_BRANCH} = merge ${PUBLIC_BRANCH} + Digicom overlay"
   if [[ "$DRY_RUN" -eq 1 ]]; then
     info "would force-add: ${DIGICOM_PATHS[*]}"
-    info "would push ${DIGICOM_BRANCH} → ${DIGICOM_REMOTE}/${DIGICOM_REMOTE_BRANCH}"
+    if [[ "$FORCE_DIGICOM" -eq 1 ]]; then
+      info "would push --force-with-lease → ${DIGICOM_REMOTE}/${DIGICOM_REMOTE_BRANCH}"
+    else
+      info "would push ${DIGICOM_BRANCH} → ${DIGICOM_REMOTE}/${DIGICOM_REMOTE_BRANCH}"
+    fi
     return 0
   fi
 
@@ -179,8 +192,17 @@ build_and_push_digicom() {
     fi
   done
 
-  git branch -f "$DIGICOM_BRANCH" "$PUBLIC_BRANCH"
-  git checkout "$DIGICOM_BRANCH"
+  if git rev-parse --verify "$DIGICOM_BRANCH" >/dev/null 2>&1; then
+    git checkout "$DIGICOM_BRANCH"
+    # Prefer FF merge of lab main; keep prior Digicom overlay commits when possible.
+    if ! git merge --ff-only "$PUBLIC_BRANCH" 2>/dev/null; then
+      git merge --no-edit -m "Merge ${PUBLIC_BRANCH} into ${DIGICOM_BRANCH} for Digicom overlay." "$PUBLIC_BRANCH" \
+        || die "merge ${PUBLIC_BRANCH} into ${DIGICOM_BRANCH} failed — resolve manually"
+    fi
+  else
+    git branch "$DIGICOM_BRANCH" "$PUBLIC_BRANCH"
+    git checkout "$DIGICOM_BRANCH"
+  fi
 
   for p in "${DIGICOM_PATHS[@]}"; do
     if [[ -f "$stash_dir/$p" ]]; then
@@ -194,12 +216,11 @@ build_and_push_digicom() {
   git add -f build/ss7-digicom-balance.json \
             build/application-digicom.properties \
             build/systemd/install-on-digicom.sh 2>/dev/null || true
-  # Optional dist mirrors if present
   [[ -f dist/configs/ss7-digicom-balance.json ]] && git add -f dist/configs/ss7-digicom-balance.json || true
   [[ -f dist/configs/application-digicom.properties ]] && git add -f dist/configs/application-digicom.properties || true
 
   if git diff --cached --quiet; then
-    info "digicom overlay already committed on ${DIGICOM_BRANCH}"
+    info "digicom overlay already present on ${DIGICOM_BRANCH}"
   else
     overlay_msg="$(cat <<'EOF'
 Keep Digicom carrier seeds on private digicom-et main.
@@ -207,15 +228,20 @@ Keep Digicom carrier seeds on private digicom-et main.
 Public nhanth87 main stays lab-only; this branch is main plus Digicom SS7/props overlay.
 EOF
 )"
-    # Machine-enforced authorship: Tran Nhan / nhanth87 only (no AI trailers).
     git -c user.name='Tran Nhan' -c user.email='nhanth87@gmail.com' commit -m "$overlay_msg"
   fi
 
   info "push ${DIGICOM_BRANCH} → ${DIGICOM_REMOTE}/${DIGICOM_REMOTE_BRANCH}"
-  git push "$DIGICOM_REMOTE" "${DIGICOM_BRANCH}:${DIGICOM_REMOTE_BRANCH}"
+  if [[ "$FORCE_DIGICOM" -eq 1 ]]; then
+    git push --force-with-lease="${DIGICOM_REMOTE_BRANCH}:refs/remotes/${DIGICOM_REMOTE}/${DIGICOM_REMOTE_BRANCH}" \
+      "$DIGICOM_REMOTE" "${DIGICOM_BRANCH}:${DIGICOM_REMOTE_BRANCH}"
+  else
+    if ! git push "$DIGICOM_REMOTE" "${DIGICOM_BRANCH}:${DIGICOM_REMOTE_BRANCH}"; then
+      die "digicom-et push rejected (non-FF). Review digicom-et/main then re-run with --force-digicom"
+    fi
+  fi
 
   git checkout "$PUBLIC_BRANCH"
-  # Restore local ignored Digicom copies for Digicom deploys from this worktree.
   ensure_digicom_files_present || true
   info "back on ${PUBLIC_BRANCH}; Digicom seeds kept locally (gitignored)"
 }
