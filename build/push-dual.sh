@@ -195,8 +195,9 @@ build_and_push_digicom() {
   if git rev-parse --verify "$DIGICOM_BRANCH" >/dev/null 2>&1; then
     git checkout "$DIGICOM_BRANCH"
     # Prefer FF merge of lab main; keep prior Digicom overlay commits when possible.
-    if ! git merge --ff-only "$PUBLIC_BRANCH" 2>/dev/null; then
-      git merge --no-edit -m "Merge ${PUBLIC_BRANCH} into ${DIGICOM_BRANCH} for Digicom overlay." "$PUBLIC_BRANCH" \
+    if ! git -c user.name='Tran Nhan' -c user.email='nhanth87@gmail.com' merge --ff-only "$PUBLIC_BRANCH" 2>/dev/null; then
+      git -c user.name='Tran Nhan' -c user.email='nhanth87@gmail.com' \
+        merge --no-edit -m "Merge ${PUBLIC_BRANCH} into ${DIGICOM_BRANCH} for Digicom overlay." "$PUBLIC_BRANCH" \
         || die "merge ${PUBLIC_BRANCH} into ${DIGICOM_BRANCH} failed — resolve manually"
     fi
   else
