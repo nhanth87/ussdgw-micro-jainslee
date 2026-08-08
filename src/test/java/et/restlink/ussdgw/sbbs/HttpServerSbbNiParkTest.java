@@ -138,11 +138,16 @@ class HttpServerSbbNiParkTest {
         assertThat(park.findByCorr("ni-park-1")).isPresent();
         assertThat(http.commands).isEmpty(); // parked until gate
 
-        waitUntil(() -> !http.commands.isEmpty() && park.findByCorr("ni-park-1").isEmpty(), 2_000);
+        // Gate reply must fire; JSESSIONID→corr stays (AS can re-push after gated abort).
+        waitUntil(() -> !http.commands.isEmpty()
+                && park.findByCorr("ni-park-1").map(p -> p.httpSessionId() == null
+                        || p.httpSessionId().isBlank()).orElse(false),
+                2_000);
 
         var r = (HttpServerCommand.HttpResponseExCommand) last();
         assertThat(r.statusCode()).isEqualTo(200);
         assertThat(r.textBody().toLowerCase()).contains("abort");
+        assertThat(park.findByCorr("ni-park-1")).isPresent();
     }
 
     private void post(String sessionId, String body) {
