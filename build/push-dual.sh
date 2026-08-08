@@ -101,6 +101,9 @@ restore_digicom_from_ref() {
     if git cat-file -e "${ref}:${p}" 2>/dev/null; then
       mkdir -p "$(dirname "$p")"
       git show "${ref}:${p}" >"$p"
+      if [[ "$p" == *.sh ]]; then
+        chmod +x "$p"
+      fi
       restored=1
       info "restored $p from ${ref}"
     fi
