@@ -184,3 +184,9 @@ Proof pcap: [`build/pcap/m3ua-aspac-rc12-20260807-135839.pcap`](../../build/pcap
 | Classic `.167` | RC **101** alone | Rejected by Balance Plus (err 25) when Digicom advertised 101 |
 
 **Pcap / debug lessons:** RC **101** → peer err 25. SE-only after Digicom restart → SCTP UP + ASP DOWN (peer HEARTBEAT only) until DE. Success wire = ASPAC RC12 + ASPAC_ACK (pcap above). Admin `ss7.detail` for file apply must show real SCTP listen + `rc=12` — never props-fallback `8013→8014` (`Ss7ApplyService.formatWiredDetail`).
+
+**SRI dual-homing (2026-08-08):** Outbound SRI may leave **L1/2011 → PC 1404** while `returnResultLast` returns on **L2/2019 ← PC 1403** (pcap `build/pcap/ussd-sri-hlr-20260808-020509.pcap`) — or the reverse under loadshare. Prefer **one AS** with both links (`AS-BP` + routes 1404/1403). m3ua must deliver PayloadData when **AS ACTIVE** even if the receive-side ASP FSM is DOWN. After SRI, NI USSD SCCP dest = **MSC `networkNodeNumber`**, not MSISDN.
+
+**NI push prove (2026-08-08 retest):** `POST /ussd` notify MSISDN **251911230398** with `ss7.live=true` → log `USSD NI sent … mscGt=251971200146 imsi=…` + peer `unstructuredSSNotify_Response`. Wire proof: [`build/pcap/ussd-ni-push-msc-20260808-023952.pcap`](../../build/pcap/ussd-ni-push-msc-20260808-023952.pcap) (CalledParty **251971200146**). Handset screen = operator/UE confirm (server cannot see it).
+
+**NI push pcap (2026-08-08 02:51 UTC fresh):** [`build/pcap/ussd-ni-push-msc-20260808-025117.pcap`](../../build/pcap/ussd-ni-push-msc-20260808-025117.pcap) — SCTP **2011/2019**; SRI → HLR GT **251900000006**; result MSC **251971200146** / IMSI **636010024533522**; `unstructuredSS-Notify` CalledParty = MSC (not MSISDN); peer Notify response.

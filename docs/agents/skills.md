@@ -76,6 +76,7 @@ Peer: OTA [`docs/agents/packaging.md`](../../../../ota-service/ota-sim-push/docs
 - **Dashboard Planes:** status-first `form-card` rows (`bg-ink-panel`); Open → `/admin/ss7|hlr|smpp|http|grpc|diameter|sip|lab-mo`; secondary Monitor Hub link.
 - **USSD pages only:** routing, bridge, campaigns, CDR, tenants, users, lab-mo, http sync/async/callback, grpc, diameter, sip, hlr, ss7/smpp/http — **no** fleet/CAP/sendota.
 - Always seed `{{NAV_LINKS}}`, `{{NOTICE}}`, banners; never leave raw mustache. → [lessons.md](lessons.md)
+- **CDR ledger** (`/admin/cdr`): Routing-shell page; filter MSISDN + **correlation** + limit → HTMX `#cdr-rows` (`/admin/cdr/partial`). Seed `{{ROWS}}`, `{{MSISDN}}`, `{{CORR}}`, `{{LIMIT}}`, `{{ROW_COUNT}}`. Signature = phase **spine** (not `hx-live-badge`). Expand row for gate/EWMA/detail; classic SCCP/dialog/USSD-string columns are store gaps — show in expand note, do not invent. TENANT = tenant-scoped list only.
 - Keep `htmx.min.js` for AJAX; **remove** all visible `hx-live-badge` / “HTMX” badges.
 
 ## Compress — remember these
