@@ -127,6 +127,44 @@ public class HlrFaceService {
     }
 
     /**
+     * Outbound SRI consumers (MAP2MAP / NI): supply IMSI+MSC when HLR Face mode is
+     * {@link HlrResolveMode#FAKE} or {@link HlrResolveMode#FAKE_THEN_RESOLVE}.
+     * Empty when mode is {@code PROXY_*} (caller must send real SRI — never silent FAKE)
+     * or when FAKE is misconfigured ({@link HlrResolvePolicy#canFake()} false).
+     *
+     * <p>{@code FAKE_THEN_RESOLVE} prefers a cached real location when present; plain
+     * {@code FAKE} always uses configured {@code ussd.hlr.fake.imsi} / {@code fake.msc-gt}.
+     */
+    public Optional<HlrLocationCache.Location> fakeRoutingForOutbound(int networkId, String msisdn) {
+        return fakeRoutingForOutbound(networkId, msisdn, null);
+    }
+
+    /**
+     * Same as {@link #fakeRoutingForOutbound(int, String)} with optional per-rule HLR mode
+     * ({@code null}/{@code INHERIT} → global policy).
+     */
+    public Optional<HlrLocationCache.Location> fakeRoutingForOutbound(
+            int networkId, String msisdn, String ruleHlrMode) {
+        if (!policy.usesFakeForOutbound(networkId, msisdn, ruleHlrMode)) {
+            return Optional.empty();
+        }
+        if (!policy.canFake()) {
+            return Optional.empty();
+        }
+        boolean preferCached = policy.resolveMode(networkId, msisdn, ruleHlrMode)
+                == HlrResolveMode.FAKE_THEN_RESOLVE;
+        Optional<HlrLocationCache.Location> known =
+                preferCached ? locationCache.get(msisdn) : Optional.empty();
+        String imsi = known.map(HlrLocationCache.Location::imsi).orElseGet(policy::fakeImsi);
+        String mscGt = known.map(HlrLocationCache.Location::mscGt).orElseGet(policy::fakeMscGt);
+        byte[] lmsi = known.map(HlrLocationCache.Location::lmsi).orElse(null);
+        if (imsi == null || imsi.isBlank() || mscGt == null || mscGt.isBlank()) {
+            return Optional.empty();
+        }
+        return Optional.of(new HlrLocationCache.Location(imsi.trim(), mscGt.trim(), lmsi));
+    }
+
+    /**
      * @param preferCached FAKE_THEN_RESOLVE serves a previously learned real location when one is
      *                     cached; plain FAKE always answers with the configured fake
      */

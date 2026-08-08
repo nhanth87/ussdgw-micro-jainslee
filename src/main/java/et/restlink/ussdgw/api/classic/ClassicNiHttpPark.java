@@ -5,11 +5,14 @@ import et.restlink.ussdgw.api.AsHttpWireFormat;
 import et.restlink.ussdgw.api.AsResponse;
 import et.restlink.ussdgw.api.AsWireFacade;
 import et.restlink.ussdgw.bridge.AdaptiveTimeout;
+import et.restlink.ussdgw.bridge.GatedSessionMeta;
+import et.restlink.ussdgw.bridge.GatedSessionRegistry;
 import et.restlink.ussdgw.bridge.VirtualSession;
 import et.restlink.ussdgw.bridge.VirtualSessionStore;
 import et.restlink.ussdgw.cdr.CdrPhase;
 import et.restlink.ussdgw.cdr.CdrService;
 import et.restlink.ussdgw.config.UssdConfigService;
+import et.restlink.ussdgw.service.GatedAsNotifyService;
 
 import com.microjainslee.api.RaCommandPort;
 import com.microjainslee.ra.httpserver.command.HttpServerCommand;
@@ -86,6 +89,8 @@ public class ClassicNiHttpPark {
     @Inject AsWireFacade wireFacade;
     @Inject CdrService cdr;
     @Inject VirtualSessionStore store;
+    @Inject GatedSessionRegistry gatedSessions;
+    @Inject GatedAsNotifyService gatedAsNotify;
 
     private final ConcurrentHashMap<String, ParkRecord> byJsession = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<String, ParkRecord> byCorr = new ConcurrentHashMap<>();
@@ -273,11 +278,58 @@ public class ClassicNiHttpPark {
                 correlationId, rec.jsessionId(), rec.appliedGateMs());
         cdrWrite(rec, CdrPhase.FAILED, "GATE_EXPIRED",
                 "service=ClassicNiHttpPark|AdaptiveTimeout");
-        String body = wireFacade.encodeNiResponse(
-                rec.correlationId(), "", AsAction.ABORT, false, rec.format());
-        if (unpark(correlationId).isPresent()) {
-            reply(rec, httpId, 200, body);
+        GatedSessionMeta meta = buildGatedMeta(rec);
+        if (gatedSessions != null) {
+            gatedSessions.stamp(meta);
         }
+        if (gatedAsNotify != null) {
+            VirtualSession sess = null;
+            if (store != null) {
+                try {
+                    sess = store.get(rec.correlationId()).orElse(null);
+                } catch (RuntimeException ignored) {
+                    // best-effort
+                }
+            }
+            try {
+                gatedAsNotify.pushToAs(meta, sess);
+            } catch (RuntimeException e) {
+                LOG.warn("Gated AS XML push failed corr={}: {}", rec.correlationId(), e.toString());
+            }
+        }
+        String body = wireFacade.encodeNiGatedAbort(meta, rec.format());
+        // Keep JSESSIONID→corr mapping (like completeParked) so AS can re-push
+        // with the same Cookie after learning prior session was gated.
+        cancelGate(rec);
+        rec.setHttpSessionId(null);
+        reply(rec, httpId, 200, body);
+    }
+
+    private GatedSessionMeta buildGatedMeta(ParkRecord rec) {
+        String msisdn = null;
+        String shortCode = null;
+        String sessionId = null;
+        int networkId = rec.networkId();
+        long gateMs = rec.appliedGateMs() > 0 ? rec.appliedGateMs() : 0L;
+        if (store != null) {
+            try {
+                VirtualSession s = store.get(rec.correlationId()).orElse(null);
+                if (s != null) {
+                    msisdn = s.msisdn();
+                    shortCode = s.shortCode();
+                    sessionId = s.virtualSessionId();
+                    networkId = s.networkId();
+                    if (gateMs <= 0 && s.gateMs() > 0) {
+                        gateMs = s.gateMs();
+                    }
+                }
+            } catch (RuntimeException ignored) {
+                // best-effort enrich
+            }
+        }
+        return GatedSessionMeta.niPark(
+                rec.correlationId(), rec.jsessionId(), gateMs,
+                observedEwmaMs(networkId), networkId, msisdn, shortCode, sessionId);
     }
 
     private void stampSessionGate(ParkRecord rec, long gateMs) {

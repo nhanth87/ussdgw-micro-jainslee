@@ -8,6 +8,7 @@ import et.restlink.ussdgw.api.classic.ClassicNiHttpPark;
 import et.restlink.ussdgw.cdr.CdrPhase;
 import et.restlink.ussdgw.cdr.CdrService;
 import et.restlink.ussdgw.config.UssdConfigService;
+import et.restlink.ussdgw.service.GatedAsNotifyService;
 import et.restlink.ussdgw.service.MapDialogHelper;
 
 import com.microjainslee.api.RaCommandPort;
@@ -32,6 +33,8 @@ public class VirtualSessionBridge {
     @Inject CdrService cdr;
     @Inject AccessNiDispatcher accessNi;
     @Inject ClassicNiHttpPark niHttpPark;
+    @Inject GatedSessionRegistry gatedSessions;
+    @Inject GatedAsNotifyService gatedAsNotify;
 
     private volatile Supplier<RaCommandPort> ss7Supplier = () -> null;
 
@@ -140,6 +143,8 @@ public class VirtualSessionBridge {
         VirtualSession cur = cas.get();
         boolean mapPlane = cur.originationType() == OriginationType.MAP;
         RaCommandPort port = mapPlane ? ss7() : null;
+        String jsession = lookupJsession(cur.correlationId());
+        Long ewma = observedEwmaMs(cur.networkId());
         if (!arm) {
             if (mapPlane && cur.dialogAlive()) {
                 MapDialogHelper.replyAndEnd(port, cur.dialogId(), cur.invokeId(),
@@ -149,6 +154,7 @@ public class VirtualSessionBridge {
             persist(cur);
             cdrWrite(cur, CdrPhase.FAILED, "GATE_NO_BRIDGE",
                     "service=VirtualSessionBridge|AdaptiveTimeout");
+            stampGated(cur, jsession, GatedSessionMeta.REASON_GATE_NO_BRIDGE, ewma);
             return true;
         }
         bridgeCount.incrementAndGet();
@@ -162,9 +168,44 @@ public class VirtualSessionBridge {
         }
         cdrWrite(cur, CdrPhase.S1_RELEASED, "BRIDGED",
                 "service=VirtualSessionBridge|AdaptiveTimeout asyncWait");
-        LOG.info("Bridging slow AS corr={} dialogId={} orig={}",
-                cur.correlationId(), cur.dialogId(), cur.originationType());
+        stampGated(cur, jsession, GatedSessionMeta.REASON_BRIDGED, ewma);
+        LOG.info("Bridging slow AS corr={} dialogId={} orig={} jsession={}",
+                cur.correlationId(), cur.dialogId(), cur.originationType(), jsession);
         return true;
+    }
+
+    private String lookupJsession(String correlationId) {
+        if (niHttpPark == null || correlationId == null || correlationId.isBlank()) {
+            return null;
+        }
+        try {
+            return niHttpPark.findByCorr(correlationId)
+                    .map(ClassicNiHttpPark.ParkRecord::jsessionId)
+                    .orElse(null);
+        } catch (RuntimeException e) {
+            return null;
+        }
+    }
+
+    private void stampGated(VirtualSession s, String jsession, String reason, Long ewma) {
+        if (s == null) {
+            return;
+        }
+        GatedSessionMeta meta = GatedSessionMeta.of(s, jsession, reason, ewma);
+        if (gatedSessions != null) {
+            try {
+                gatedSessions.stamp(meta);
+            } catch (RuntimeException e) {
+                LOG.warn("GatedSessionRegistry stamp failed corr={}: {}", s.correlationId(), e.toString());
+            }
+        }
+        if (gatedAsNotify != null) {
+            try {
+                gatedAsNotify.pushToAs(meta, s);
+            } catch (RuntimeException e) {
+                LOG.warn("Gated AS XML push failed corr={}: {}", s.correlationId(), e.toString());
+            }
+        }
     }
 
     public void onNetworkAbort(String dialogId) {

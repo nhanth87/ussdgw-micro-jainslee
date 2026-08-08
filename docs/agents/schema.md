@@ -10,6 +10,7 @@ OTA peer: [`ota-sim-push/docs/agents/schema.md`](../../../../ota-service/ota-sim
 | `V2__tenant_http_as_wire_format.sql` | Additive: `ussd_tenant.http_as_wire_format` (default `XML`). |
 | `V3__short_code_mark.sql` | Additive: `ussd_short_code.mark` (default `FALSE` — prefix / Mark key). |
 | `V4__config_value_unicode.sql` | Widen `ussd_config.config_value` to `VARCHAR(4096)` for Unicode bridge wait/fail messages. |
+| `V9__short_code_map2map.sql` | Additive: `ussd_short_code.bypass` (default `TRUE`) + `map2map_gt` for MAP2MAP hop. |
 
 Config: `quarkus.flyway.locations=classpath:db/migration` (`build/application.properties` → packaged `dist/configs/`).
 Startup guard: [`UssdSchemaInitializer`](../../src/main/java/et/restlink/ussdgw/persist/UssdSchemaInitializer.java) — **migrate first**; `flyway.repair` only when migrate refuses (checksum drift). Then verify `REQUIRED_TABLES` / `REQUIRED_COLUMNS` (includes `ussd_short_code.mark`, `ussd_tenant.http_as_wire_format`); classpath fallback if incomplete. Toggle: `ussd.db.schema-init.enabled`. Keep `quarkus.flyway.repair-at-start=false`.
@@ -65,6 +66,10 @@ quarkus.hibernate-orm.database.generation=none
 |--------|-----------|---------|
 | `ussd_tenant.http_as_wire_format` | V2 | `XML` |
 | `ussd_short_code.mark` | V3 | `FALSE` |
+| `ussd_short_code.bypass` | V9 | `TRUE` (skip MAP2MAP; direct AS) |
+| `ussd_short_code.map2map_gt` | V9 | null — redirect USSD e.g. `*875#` when reroute_enable |
+| `ussd_short_code.hop_dest_gt` | V11 | null — fixed hop CalledParty GT (SP: `251971200201`) |
+| `ussd_short_code.hop_dest_ssn` | V11 | null — fixed hop SSN (default 6 when GT set) |
 | `ussd_config.config_value` → `VARCHAR(4096)` | V4 | widen for Unicode bridge msgs |
 ## Agent checklist
 

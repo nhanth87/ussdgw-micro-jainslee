@@ -41,6 +41,8 @@ public final class UssdCli {
     private int msisdnRotate = 0;
     private String autoDigits = "1,2,3,4";
     private boolean autoDt = false;
+    /** When set, AutoResponseString for UnstructuredSS-Request (MAP2MAP hop stub). */
+    private String hopText = null;
     private long waitMs = 4000;
     private Path configPath;
 
@@ -98,6 +100,10 @@ public final class UssdCli {
                 }
                 case "--auto" -> autoDt = true;
                 case "--manual" -> autoDt = false;
+                case "--hop" -> {
+                    hopText = requireArg(args, ++i, a);
+                    autoDt = true;
+                }
                 case "--wait-ms" -> waitMs = Long.parseLong(requireArg(args, ++i, a));
                 case "--help", "-h" -> {
                     printHelp();
@@ -201,7 +207,11 @@ public final class UssdCli {
                     e);
         }
         session.setMsisdn(msisdn);
-        session.setAutoDigits(autoDigits, autoDt);
+        if (hopText != null && !hopText.isBlank()) {
+            session.setAutoDigits(hopText, true);
+        } else {
+            session.setAutoDigits(autoDigits, autoDt);
+        }
         if (startIfNeeded && !session.isSimStarted()) {
             System.out.println("Starting USSD_TEST_CLIENT stack via JMX…");
             session.startSim();
@@ -246,7 +256,10 @@ public final class UssdCli {
 
     private int runDialFlow(String code, List<String> manualDigits) throws Exception {
         session.setMsisdn(msisdn);
-        if (autoDt && manualDigits.isEmpty()) {
+        if (hopText != null && !hopText.isBlank()) {
+            session.setAutoDigits(hopText, true);
+            System.out.println("hop-auto text=" + hopText);
+        } else if (autoDt && manualDigits.isEmpty()) {
             session.setAutoDigits(autoDigits, true);
         } else {
             session.setAutoDigits(autoDigits, false);
@@ -391,10 +404,36 @@ public final class UssdCli {
             }
             case "manual" -> {
                 autoDt = false;
+                hopText = null;
                 if (session != null && session.isConnected()) {
                     session.setAutoDigits(autoDigits, false);
                 }
                 System.out.println("autoDt=OFF (use 'dt <digit>')");
+                yield true;
+            }
+            case "hop" -> {
+                // MAP2MAP hop stub: auto-reply UnstructuredSS-Request with free text
+                // (e.g. after GW sends *875# toward GT 251971200201/SSN 6).
+                if (tok.length < 2) {
+                    System.out.println("usage: hop <text>   e.g. hop MAP2MAP hop UserInfo");
+                    System.out.println("  current hopText=" + (hopText == null ? "(off)" : hopText));
+                    yield true;
+                }
+                hopText = String.join(" ", Arrays.copyOfRange(tok, 1, tok.length));
+                autoDt = true;
+                ensureConnected();
+                session.setAutoDigits(hopText, true);
+                System.out.println("hop-auto ON text=" + hopText
+                        + "  (answers UnstructuredSS-Request — MAP2MAP *875# stub)");
+                yield true;
+            }
+            case "hop-off" -> {
+                hopText = null;
+                autoDt = false;
+                if (session != null && session.isConnected()) {
+                    session.setAutoDigits(autoDigits, false);
+                }
+                System.out.println("hop-auto OFF");
                 yield true;
             }
             case "dial" -> {
@@ -511,6 +550,8 @@ public final class UssdCli {
                   msisdns a,b,c         Set MSISDN rotation list
                   next-msisdn           Rotate to next MSISDN
                   auto [1,2,3,4]        Auto-reply digits on UnstructuredSS-Request
+                  hop <text>            MAP2MAP hop stub — auto-reply free text on USS Request
+                  hop-off               Disable hop-auto
                   manual                Disable auto; use dt
                   dial <code>           MO ProcessUnstructuredSS-Request
                   dt <text>             UnstructuredSS-Response (menu digit / free text)
@@ -532,6 +573,7 @@ public final class UssdCli {
                 Usage:
                   java -jar ussd-cli.jar [--config tools/ss7-simulator/config.example.json]
                   java -jar ussd-cli.jar dial '*100#' --msisdn 251911000001 --dt 1,2,3
+                  java -jar ussd-cli.jar dial '*804#' --hop 'MAP2MAP hop UserInfo'
                   java -jar ussd-cli.jar dial '*519812345678901234#' --manual
 
                 Options:
@@ -540,6 +582,7 @@ public final class UssdCli {
                   --msisdn N          single MSISDN
                   --msisdns a,b,c     MSISDN list
                   --dt 1,2,3          auto digit sequence (enables auto)
+                  --hop TEXT          MAP2MAP hop auto-response text (enables auto)
                   --auto / --manual
                   --wait-ms N         poll timeout for network text (default 4000)
 

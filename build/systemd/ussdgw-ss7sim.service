@@ -1,5 +1,5 @@
 [Unit]
-Description=Digicom-ET jSS7 USSD simulator (MAP peer for USSDGW)
+Description=nhanth87 jSS7 USSD simulator (MAP peer for USSDGW)
 After=network-online.target
 Wants=network-online.target
 

@@ -68,6 +68,23 @@
     toast(String(d.message), d.kind || 'ok');
   });
 
+  /**
+   * OTA fleet-approvals parity: after catalog mutate, re-GET list partial into the
+   * directory tbody. Covers cases where POST body swap into <tbody> is dropped
+   * (Alpine on same form, non-ASCII HX-Trigger, invalid tbody children).
+   * detail: { partial: "/admin/routing/partial", target: "#rule-rows" }
+   */
+  document.addEventListener('ussdCatalogChanged', (ev) => {
+    const d = ev && ev.detail;
+    if (!d || !d.partial || !d.target || !window.htmx) return;
+    try {
+      htmx.ajax('GET', String(d.partial), {
+        target: String(d.target),
+        swap: 'innerHTML'
+      });
+    } catch (e) { /* ignore */ }
+  });
+
   function applyTheme(theme) {
     const t = theme === 'light' ? 'light' : 'dark';
     document.documentElement.setAttribute('data-theme', t);

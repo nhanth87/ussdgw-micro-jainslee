@@ -57,8 +57,9 @@
         <div>
           <h2 class="mt-1 text-xl font-semibold text-slate-50">Call detail records</h2>
           <p class="mt-1 max-w-2xl text-sm text-ink-mute">
-            Find a subscriber leg by MSISDN or bridge correlation, then open the row for gate/EWMA and detail.
-            Spine color tracks bridge phase (S1 → S2 → complete/fail) — classic dialog correlation workflow.
+            Find a subscriber leg by MSISDN, bridge correlation, or status
+            (gated / MAP2MAP re-route). Open the row for gate/EWMA and detail.
+            Spine color tracks bridge phase (S1 → S2 → complete/fail).
           </p>
         </div>
         <div class="flex flex-wrap items-center gap-2 text-xs font-mono text-ink-mute">
@@ -70,17 +71,20 @@
       <section class="form-card cdr-filter-card mb-6 rounded-lg border border-ink-line bg-ink-panel/80 p-5">
         <h3 class="text-sm font-semibold text-slate-100">Filter ledger</h3>
         <p class="mt-1 mb-4 text-xs text-ink-mute">
-          Exact MSISDN and/or correlation id. Limit max
-          <span class="font-mono text-signal">100</span>. Search swaps the table via
+          Exact MSISDN and/or correlation id; status exact or prefix
+          (<code class="font-mono text-slate-300">MAP2MAP_*</code>,
+          <code class="font-mono text-slate-300">GATED*</code>). Limit max
+          <span class="font-mono text-signal">100</span>. Table auto-refreshes every 5s via
           <code class="font-mono text-slate-300">/admin/cdr/partial</code>.
         </p>
-        <form method="get" action="/admin/cdr"
+        <form id="cdr-filter" method="get" action="/admin/cdr"
               class="filter-bar flex flex-wrap items-end gap-3"
               hx-get="/admin/cdr/partial"
               hx-target="#cdr-rows"
               hx-swap="innerHTML"
               hx-indicator="#cdr-ind"
-              hx-push-url="true">
+              hx-push-url="true"
+              hx-trigger="submit, change from:select[name='status']">
           <div class="min-w-[10rem] flex-1">
             <label class="block text-xs uppercase tracking-wider text-ink-mute" for="cdr-msisdn">MSISDN</label>
             <input id="cdr-msisdn" name="msisdn" value="{{MSISDN}}" placeholder="2519…" autocomplete="off"
@@ -90,6 +94,13 @@
             <label class="block text-xs uppercase tracking-wider text-ink-mute" for="cdr-corr">Correlation</label>
             <input id="cdr-corr" name="corr" value="{{CORR}}" placeholder="bridge / session id" autocomplete="off"
                    class="mt-1 w-full rounded-md border border-ink-line bg-ink px-3 py-2 font-mono text-sm text-slate-100 focus:border-signal focus:outline-none focus:ring-1 focus:ring-signal/40"/>
+          </div>
+          <div class="min-w-[11rem]">
+            <label class="block text-xs uppercase tracking-wider text-ink-mute" for="cdr-status">Status</label>
+            <select id="cdr-status" name="status"
+                    class="mt-1 w-full rounded-md border border-ink-line bg-ink px-3 py-2 font-mono text-sm text-slate-100 focus:border-signal focus:outline-none focus:ring-1 focus:ring-signal/40">
+              {{STATUS_OPTIONS}}
+            </select>
           </div>
           <div>
             <label class="block text-xs uppercase tracking-wider text-ink-mute" for="cdr-limit">Limit</label>
@@ -124,7 +135,12 @@
             </tr>
           </thead>
           <tbody id="cdr-rows"
-                 class="hx-table-live divide-y divide-ink-line font-mono text-xs [&_td]:align-middle">{{ROWS}}</tbody>
+                 class="hx-table-live divide-y divide-ink-line font-mono text-xs [&_td]:align-middle"
+                 hx-get="/admin/cdr/partial"
+                 hx-trigger="every 5s"
+                 hx-include="#cdr-filter"
+                 hx-swap="innerHTML"
+                 hx-indicator="#cdr-ind">{{ROWS}}</tbody>
         </table>
       </div>
       <p class="mt-3 text-xs text-ink-mute">

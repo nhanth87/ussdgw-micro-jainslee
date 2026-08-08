@@ -2,6 +2,7 @@ package et.restlink.ussdgw.api;
 
 import et.restlink.ussdgw.api.classic.ClassicDialogXmlCodec;
 import et.restlink.ussdgw.api.classic.ClassicNiIngress;
+import et.restlink.ussdgw.bridge.GatedSessionMeta;
 
 import jakarta.enterprise.context.ApplicationScoped;
 
@@ -57,6 +58,25 @@ public class AsWireFacade {
             return new String(AsWireCodec.encodeResponse(resp), java.nio.charset.StandardCharsets.UTF_8);
         }
         return ClassicDialogXmlCodec.encodeNiSnapshot(correlationId, text, action, emptyHandshake);
+    }
+
+    /**
+     * Parked NI HTTP gate expiry (or bridge-gated notify): ABORT dialog carrying
+     * {@code virtualBridgeId}, AdaptiveTimeout fields, and classic {@code jsessionId}.
+     */
+    public String encodeNiGatedAbort(GatedSessionMeta meta, AsHttpWireFormat format) {
+        if (meta == null) {
+            return encodeNiResponse(null, "", AsAction.ABORT, false, format);
+        }
+        AsHttpWireFormat fmt = format == null ? AsHttpWireFormat.XML : format;
+        Long gateMs = meta.gateMs() > 0 ? meta.gateMs() : null;
+        if (fmt == AsHttpWireFormat.JSON) {
+            return AsWireCodec.encodeGatedNotifyString(AsGatedNotify.from(meta));
+        }
+        return ClassicDialogXmlCodec.encodeNiSnapshot(
+                meta.correlationId(), "", AsAction.ABORT, false,
+                meta.sessionId(), meta.virtualBridgeId(), gateMs,
+                meta.jsessionId(), meta.gateReason(), meta.observedEwmaMs());
     }
 
     /** Peer MAP Notify RESULT → classic AS XML {@code unstructuredSSNotify_Response}. */

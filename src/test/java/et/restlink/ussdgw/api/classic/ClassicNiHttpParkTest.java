@@ -4,6 +4,7 @@ import et.restlink.ussdgw.api.AsAction;
 import et.restlink.ussdgw.api.AsHttpWireFormat;
 import et.restlink.ussdgw.api.AsWireFacade;
 import et.restlink.ussdgw.bridge.AdaptiveTimeout;
+import et.restlink.ussdgw.bridge.GatedSessionRegistry;
 import et.restlink.ussdgw.cdr.CdrPhase;
 import et.restlink.ussdgw.cdr.CdrService;
 import et.restlink.ussdgw.config.UssdConfigService;
@@ -120,18 +121,29 @@ class ClassicNiHttpParkTest {
     }
 
     @Test
-    void adaptiveGateExpiresRepliesAbort() throws Exception {
+    void adaptiveGateExpiresRepliesAbortWithGatedMetaAndKeepsJsession() throws Exception {
+        GatedSessionRegistry gated = new GatedSessionRegistry();
+        set(park, "gatedSessions", gated);
+
         ClassicNiHttpPark.ParkRecord rec = park.park(
                 "http-gate", "js-gate", "corr-gate", AsHttpWireFormat.XML, 0, false);
         park.scheduleGate(rec, 40L);
 
-        waitUntil(() -> http.all.size() == 1 && park.findByCorr("corr-gate").isEmpty(), 2_000);
+        waitUntil(() -> http.all.size() == 1, 2_000);
 
         var ex = (HttpServerCommand.HttpResponseExCommand) http.all.get(0);
         assertThat(ex.statusCode()).isEqualTo(200);
         assertThat(ex.sessionId()).isEqualTo("http-gate");
         assertThat(ex.headers()).containsEntry("Set-Cookie", "JSESSIONID=js-gate; Path=/; HttpOnly");
         assertThat(ex.textBody().toLowerCase()).contains("abort");
+        assertThat(ex.textBody()).contains("virtualBridgeId=\"corr-gate\"");
+        assertThat(ex.textBody()).contains("jsessionId=\"js-gate\"");
+        assertThat(ex.textBody()).contains("gateReason=\"GATE_EXPIRED\"");
+        // JSESSIONID retained for AS re-push (completeParked parity).
+        assertThat(park.findByJsession("js-gate")).isPresent();
+        assertThat(park.findByCorr("corr-gate")).isPresent();
+        assertThat(gated.peek("corr-gate")).isPresent();
+        assertThat(gated.peekByJsession("js-gate").orElseThrow().jsessionId()).isEqualTo("js-gate");
     }
 
     @Test

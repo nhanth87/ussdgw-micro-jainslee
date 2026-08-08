@@ -1,6 +1,8 @@
 package et.restlink.ussdgw.api;
 
 import et.restlink.ussdgw.bridge.AdaptiveTimeout;
+import et.restlink.ussdgw.bridge.GatedSessionMeta;
+import et.restlink.ussdgw.bridge.GatedSessionRegistry;
 import et.restlink.ussdgw.bridge.VirtualSession;
 import et.restlink.ussdgw.config.UssdConfigService;
 
@@ -20,6 +22,16 @@ public final class AsPullMetadata {
     public static AsRequest enrich(AsRequest req, VirtualSession session,
                                    AdaptiveTimeout adaptive, UssdConfigService config,
                                    boolean bridgePlaneArmed) {
+        return enrich(req, session, adaptive, config, bridgePlaneArmed, null);
+    }
+
+    /**
+     * Same as {@link #enrich(AsRequest, VirtualSession, AdaptiveTimeout, UssdConfigService, boolean)}
+     * plus optional prior-gated hint from {@link GatedSessionRegistry}.
+     */
+    public static AsRequest enrich(AsRequest req, VirtualSession session,
+                                   AdaptiveTimeout adaptive, UssdConfigService config,
+                                   boolean bridgePlaneArmed, GatedSessionRegistry gated) {
         if (req == null) {
             return null;
         }
@@ -41,7 +53,33 @@ public final class AsPullMetadata {
         String corr = blankToNull(req.correlationId());
         String bridgeId = arm ? firstNonBlank(corr, blankToNull(req.sessionId())) : null;
         AsMode mode = arm ? AsMode.BRIDGE : AsMode.SYNC;
-        return req.withMetadata(bridgeId, gateMs, mode.wire());
+        AsRequest out = req.withMetadata(bridgeId, gateMs, mode.wire());
+
+        if (gated != null) {
+            var hint = gated.resolveForPull(
+                    corr,
+                    session != null ? session.msisdn() : req.msisdn(),
+                    session != null ? session.shortCode() : req.shortCode());
+            if (hint.isPresent()) {
+                out = applyGatedHint(out, hint.get(), arm);
+            }
+        }
+        return out;
+    }
+
+    static AsRequest applyGatedHint(AsRequest req, GatedSessionMeta meta, boolean bridgeArmed) {
+        if (req == null || meta == null) {
+            return req;
+        }
+        String bridgeId = firstNonBlank(meta.virtualBridgeId(), req.virtualBridgeId(),
+                bridgeArmed ? req.correlationId() : null);
+        Long gateMs = meta.gateMs() > 0 ? meta.gateMs()
+                : req.adaptiveTimeoutMs();
+        AsRequest withBridge = req.withMetadata(
+                bridgeId,
+                gateMs,
+                req.asMode() != null ? req.asMode() : (bridgeArmed ? AsMode.BRIDGE.wire() : AsMode.SYNC.wire()));
+        return withBridge.withGatedHint(meta.jsessionId(), meta.gateReason(), meta.observedEwmaMs());
     }
 
     private static String blankToNull(String s) {
@@ -52,5 +90,10 @@ public final class AsPullMetadata {
         if (a != null && !a.isBlank()) return a.trim();
         if (b != null && !b.isBlank()) return b.trim();
         return null;
+    }
+
+    private static String firstNonBlank(String a, String b, String c) {
+        String x = firstNonBlank(a, b);
+        return x != null ? x : firstNonBlank(c, null);
     }
 }

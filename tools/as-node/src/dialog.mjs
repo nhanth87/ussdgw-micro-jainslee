@@ -68,12 +68,19 @@ export function parsePullRequest(raw, contentType) {
         msisdn: j.msisdn ?? '',
         shortCode: j.shortCode ?? '',
         ussdString: j.ussdString ?? j.shortCode ?? '',
+        originatedUssd: j.originatedUssd ?? '',
+        codeKind: j.codeKind ?? '',
         networkId: Number(j.networkId ?? 0),
         sessionId: j.sessionId ?? '',
         virtualBridgeId: j.virtualBridgeId ?? '',
         adaptiveTimeoutMs:
           j.adaptiveTimeoutMs != null ? Number(j.adaptiveTimeoutMs) : null,
         asMode: j.asMode ?? '',
+        jsessionId: j.jsessionId ?? '',
+        gateReason: j.gateReason ?? '',
+        observedEwmaMs:
+          j.observedEwmaMs != null ? Number(j.observedEwmaMs) : null,
+        gatedNotify: !!j.gatedNotify || String(j.gateReason || '').length > 0,
       };
     } catch {
       return {
@@ -84,11 +91,17 @@ export function parsePullRequest(raw, contentType) {
         msisdn: '',
         shortCode: '',
         ussdString: '',
+        originatedUssd: '',
+        codeKind: '',
         networkId: 0,
         sessionId: '',
         virtualBridgeId: '',
         adaptiveTimeoutMs: null,
         asMode: '',
+        jsessionId: '',
+        gateReason: '',
+        observedEwmaMs: null,
+        gatedNotify: false,
       };
     }
   }
@@ -98,27 +111,105 @@ export function parsePullRequest(raw, contentType) {
   const ussd =
     namedString(body, 'processUnstructuredSSRequest_Request') ??
     namedString(body, 'unstructuredSSRequest_Request') ??
+    namedString(body, 'unstructuredSSNotify_Request') ??
     namedString(body, 'unstructuredSSRequest_Response') ??
     '';
   const isContinue =
     /unstructuredSSRequest_Response/i.test(body) ||
     (/unstructuredSSRequest_Request/i.test(body) &&
-      !/processUnstructuredSSRequest_Request/i.test(body));
+      !/processUnstructuredSSRequest_Request/i.test(body) &&
+      !/unstructuredSSNotify_Request/i.test(body));
+  const gatedNotify = /unstructuredSSNotify_Request/i.test(body);
   const gateRaw = attr(body, 'adaptiveTimeoutMs');
+  const ewmaRaw = attr(body, 'observedEwmaMs');
   return {
     wire: 'xml',
     correlationId: corr,
     requestId: corr,
     generation: isContinue ? 1 : 0,
     msisdn: msisdnFromXml(body) ?? '',
-    shortCode: '',
+    shortCode: attr(body, 'shortCode') ?? '',
     ussdString: ussd,
+    originatedUssd: attr(body, 'originatedUssd') ?? '',
+    codeKind: attr(body, 'codeKind') ?? '',
     networkId,
     sessionId: attr(body, 'sessionId') ?? '',
     virtualBridgeId: attr(body, 'virtualBridgeId') ?? '',
     adaptiveTimeoutMs: gateRaw != null ? Number(gateRaw) : null,
     asMode: attr(body, 'asMode') ?? '',
+    jsessionId: attr(body, 'jsessionId') ?? '',
+    gateReason: attr(body, 'gateReason') ?? (gatedNotify ? ussd : ''),
+    observedEwmaMs: ewmaRaw != null ? Number(ewmaRaw) : null,
+    gatedNotify,
   };
+}
+
+/**
+ * Encode AS→GW ack for gated notify push (Notify_Response).
+ * Classic XmlMAPDialog empty notify response — GW does not need menu text here.
+ */
+export function encodeGatedNotifyAck(wire, { correlationId, sessionId, virtualBridgeId } = {}) {
+  const corr = correlationId || 'unknown';
+  if (wire === 'json') {
+    return {
+      contentType: 'application/json; charset=utf-8',
+      body: JSON.stringify({
+        correlationId: corr,
+        action: 'CONTINUE',
+        gatedNotifyAck: true,
+        sessionId: sessionId || undefined,
+        virtualBridgeId: virtualBridgeId || undefined,
+      }),
+    };
+  }
+  const meta =
+    (sessionId ? ` sessionId="${xmlEscapeAttr(sessionId)}"` : '') +
+    (virtualBridgeId
+      ? ` virtualBridgeId="${xmlEscapeAttr(virtualBridgeId)}"`
+      : '');
+  const dialog =
+    `<dialog localId="${xmlEscapeAttr(corr)}"${meta} mapMessagesSize="1">` +
+    `<unstructuredSSNotify_Response/>` +
+    `</dialog>`;
+  return {
+    contentType: 'text/xml; charset=utf-8',
+    body: `<?xml version="1.0" encoding="UTF-8"?>\n${dialog}`,
+  };
+}
+
+/** Assert MAP2MAP enrich fields; returns list of missing/mismatch labels (empty = ok). */
+export function assertMap2MapEnrich(parsed, expect = {}) {
+  const missing = [];
+  const wantMsisdn = expect.msisdn;
+  const wantOriginated = expect.originatedUssd;
+  const wantShort = expect.shortCode;
+  const wantKind = expect.codeKind;
+  if (wantMsisdn != null && String(wantMsisdn) !== '' && parsed.msisdn !== String(wantMsisdn)) {
+    missing.push(`msisdn(want=${wantMsisdn} got=${parsed.msisdn || '-'})`);
+  }
+  if (
+    wantOriginated != null &&
+    String(wantOriginated) !== '' &&
+    parsed.originatedUssd !== String(wantOriginated)
+  ) {
+    missing.push(
+      `originatedUssd(want=${wantOriginated} got=${parsed.originatedUssd || '-'})`,
+    );
+  }
+  if (wantShort != null && String(wantShort) !== '' && parsed.shortCode !== String(wantShort)) {
+    missing.push(`shortCode(want=${wantShort} got=${parsed.shortCode || '-'})`);
+  }
+  if (wantKind != null && String(wantKind) !== '' && parsed.codeKind !== String(wantKind)) {
+    missing.push(`codeKind(want=${wantKind} got=${parsed.codeKind || '-'})`);
+  }
+  // Presence-only mode when EXPECT_* unset but ASSERT_ENRICH=true
+  if (expect.requirePresence) {
+    if (!parsed.msisdn) missing.push('msisdn(missing)');
+    if (!parsed.originatedUssd) missing.push('originatedUssd(missing)');
+    if (!parsed.shortCode) missing.push('shortCode(missing)');
+    if (!parsed.codeKind) missing.push('codeKind(missing)');
+  }
+  return missing;
 }
 
 /**

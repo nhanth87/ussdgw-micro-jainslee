@@ -13,6 +13,7 @@ import et.restlink.ussdgw.service.AsPullSweeper;
 import et.restlink.ussdgw.service.BridgeGateScheduler;
 import et.restlink.ussdgw.service.GrpcApplyService;
 import et.restlink.ussdgw.service.HttpApplyService;
+import et.restlink.ussdgw.service.PendingMap2MapRegistry;
 import et.restlink.ussdgw.service.SbbRegistrationSupport;
 import et.restlink.ussdgw.service.SmppApplyService;
 import et.restlink.ussdgw.service.DiameterApplyService;
@@ -56,6 +57,7 @@ public class UssdGatewayBootstrap {
     @Inject UssdConfigService config;
     @Inject UssdSagaCoordinator saga;
     @Inject PendingHlrProxyRegistry pendingHlrProxy;
+    @Inject PendingMap2MapRegistry pendingMap2Map;
     @Inject VirtualSessionStore sessionStore;
 
     @ConfigProperty(name = "ussd.map.auto-apply-on-boot", defaultValue = "true")
@@ -80,6 +82,7 @@ public class UssdGatewayBootstrap {
         bridge.bindSs7(() -> null);
         saga.bindSs7(() -> null);
         pendingHlrProxy.bindSs7(() -> null);
+        pendingMap2Map.bindSs7(() -> null);
 
         sbbRegistration.registerAll();
         httpApply.wire();
@@ -123,6 +126,7 @@ public class UssdGatewayBootstrap {
                 bridge.bindSs7(ss7Apply::endpoint);
                 saga.bindSs7(ss7Apply::endpoint);
                 pendingHlrProxy.bindSs7(ss7Apply::endpoint);
+                pendingMap2Map.bindSs7(ss7Apply::endpoint);
             }
             LOG.info("SS7 boot: {}", detail);
         } catch (RuntimeException ex) {
@@ -130,6 +134,7 @@ public class UssdGatewayBootstrap {
             bridge.bindSs7(() -> null);
             saga.bindSs7(() -> null);
             pendingHlrProxy.bindSs7(() -> null);
+        pendingMap2Map.bindSs7(() -> null);
         }
     }
 
@@ -177,6 +182,7 @@ public class UssdGatewayBootstrap {
         bridge.bindSs7(() -> null);
         saga.bindSs7(() -> null);
         pendingHlrProxy.bindSs7(() -> null);
+        pendingMap2Map.bindSs7(() -> null);
     }
 
     private void teardownPlanes() {

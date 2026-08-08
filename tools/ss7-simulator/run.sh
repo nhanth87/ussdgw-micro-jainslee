@@ -5,9 +5,10 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")" && pwd)"
 CFG="${CONFIG:-$ROOT/config.example.json}"
-LAB_XML="$ROOT/data/ussdgw_lab_client.xml"
+# Override for dedicated pull-lab pair (8024→8023): LAB_XML=…/ussdgw_lab_pull_client.xml
+LAB_XML="${LAB_XML:-$ROOT/data/ussdgw_lab_client.xml}"
 CLI_JAR="$ROOT/cli/ussd-cli.jar"
-LOAD_JSON="$ROOT/ss7-ussd-client-ussdgw.json"
+LOAD_JSON="${LOAD_JSON:-$ROOT/ss7-ussd-client-ussdgw.json}"
 
 JSS7_SIM_HOME="${JSS7_SIM_HOME:-}"
 candidates=(
@@ -220,15 +221,14 @@ Config:  $CFG
 CLI jar: $CLI_JAR
 Load JSON: $LOAD_JSON
 
-Functional PULL (interactive DT):
+Classic PULL on default pair (:8013↔:8014):
   1. ./dist/run.sh                          # ussdgw SS7 :8013
   2. cd tools/as-node && npm run pull:fast
   3. $0 sim                                 # jSS7 core + RMI :$RMI_PORT
-  4. $0 cli                                 # REPL
-       ussd> connect
-       ussd> dial *100#
-       ussd> dt 1
-       ussd> dial *519812345678901234#
+  4. $0 cli                                 # REPL → dial *100#
+
+Dedicated PULL pair (:8023↔:8024) — prefer:
+  ./tools/ss7-simulator/pull-lab.sh help
 
 One-shot:
   $0 cli dial '*100#' --msisdn 251911000001 --dt 1,2,3

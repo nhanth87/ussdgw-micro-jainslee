@@ -79,9 +79,8 @@ public class AdminMyCampaignHandler {
     private AdminHttpHandler.HttpReply rowsReply(AdminAuthService.Principal who,
                                                  String message, String kind) {
         return AdminHttpHandler.HttpReply.html(rowsHtml(who))
-                .withHeader("HX-Trigger",
-                        "{\"ussdToast\":{\"message\":" + jsonStr(message)
-                                + ",\"kind\":" + jsonStr(kind) + "}}")
+                .withHeader("HX-Trigger", AdminHtmx.triggerToast(
+                        message, kind, "/admin/my-campaigns", "#my-campaign-rows"))
                 .withHeader("Vary", "HX-Request");
     }
 
@@ -131,12 +130,6 @@ public class AdminMyCampaignHandler {
 
     private static String nullToEmpty(String s) {
         return s == null ? "" : s;
-    }
-
-    private static String jsonStr(String s) {
-        if (s == null) return "\"\"";
-        return "\"" + s.replace("\\", "\\\\").replace("\"", "\\\"")
-                .replace("\n", "\\n").replace("\r", "") + "\"";
     }
 
     private static String esc(String s) {

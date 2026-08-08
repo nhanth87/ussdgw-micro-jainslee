@@ -10,6 +10,14 @@ import com.fasterxml.jackson.annotation.JsonInclude;
  * use {@link #correlationId()} — that is the VirtualSessionStore / bridge key.
  * {@link #sessionId()} is the logical {@code virtualSessionId}.
  * {@link #virtualBridgeId()} is set when the bridge arm is enabled (usually equals correlationId).
+ *
+ * <p>When a prior AdaptiveTimeout / bridge gate fired, optional {@link #gateReason()},
+ * {@link #jsessionId()}, and {@link #observedEwmaMs()} tell the AS the previous session
+ * was gated so it can re-push (classic NI uses Cookie {@code JSESSIONID}).
+ *
+ * <p>MAP2MAP / MO enrich (additive): {@link #originatedUssd()} = full UE dialed string;
+ * {@link #codeKind()} = {@code SHORT}|{@code LONG}; {@link #shortCode()} = matched rule key;
+ * {@link #ussdString()} = hop text after re-route (or dialed when no hop enrich).
  */
 @JsonIgnoreProperties(ignoreUnknown = true)
 @JsonInclude(JsonInclude.Include.NON_NULL)
@@ -24,17 +32,43 @@ public record AsRequest(
         int networkId,
         String virtualBridgeId,
         Long adaptiveTimeoutMs,
-        String asMode
+        String asMode,
+        String jsessionId,
+        String gateReason,
+        Long observedEwmaMs,
+        String originatedUssd,
+        String codeKind
 ) {
-    /** Backward-compatible ctor without late-push metadata. */
+    /** Backward-compatible ctor without late-push / gated metadata. */
     public AsRequest(String sessionId, String correlationId, String requestId, int generation,
                      String msisdn, String shortCode, String ussdString, int networkId) {
         this(sessionId, correlationId, requestId, generation, msisdn, shortCode, ussdString,
-                networkId, null, null, null);
+                networkId, null, null, null, null, null, null, null, null);
+    }
+
+    /** Backward-compatible ctor with bridge metadata only. */
+    public AsRequest(String sessionId, String correlationId, String requestId, int generation,
+                     String msisdn, String shortCode, String ussdString, int networkId,
+                     String virtualBridgeId, Long adaptiveTimeoutMs, String asMode) {
+        this(sessionId, correlationId, requestId, generation, msisdn, shortCode, ussdString,
+                networkId, virtualBridgeId, adaptiveTimeoutMs, asMode, null, null, null, null, null);
     }
 
     public AsRequest withMetadata(String virtualBridgeId, Long adaptiveTimeoutMs, String asMode) {
         return new AsRequest(sessionId, correlationId, requestId, generation, msisdn, shortCode,
-                ussdString, networkId, virtualBridgeId, adaptiveTimeoutMs, asMode);
+                ussdString, networkId, virtualBridgeId, adaptiveTimeoutMs, asMode,
+                jsessionId, gateReason, observedEwmaMs, originatedUssd, codeKind);
+    }
+
+    public AsRequest withGatedHint(String jsessionId, String gateReason, Long observedEwmaMs) {
+        return new AsRequest(sessionId, correlationId, requestId, generation, msisdn, shortCode,
+                ussdString, networkId, virtualBridgeId, adaptiveTimeoutMs, asMode,
+                jsessionId, gateReason, observedEwmaMs, originatedUssd, codeKind);
+    }
+
+    public AsRequest withOriginated(String originatedUssd, String codeKind) {
+        return new AsRequest(sessionId, correlationId, requestId, generation, msisdn, shortCode,
+                ussdString, networkId, virtualBridgeId, adaptiveTimeoutMs, asMode,
+                jsessionId, gateReason, observedEwmaMs, originatedUssd, codeKind);
     }
 }

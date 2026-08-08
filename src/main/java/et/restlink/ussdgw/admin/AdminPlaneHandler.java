@@ -500,17 +500,8 @@ public class AdminPlaneHandler {
     private static AdminHttpHandler.HttpReply planeNotice(String message, String kind) {
         String html = "<p class=\"admin-notice\">" + esc(message) + "</p>";
         return AdminHttpHandler.HttpReply.html(html)
-                .withHeader("HX-Trigger",
-                        "{\"ussdToast\":{\"message\":" + jsonStr(message) + ",\"kind\":" + jsonStr(kind) + "}}")
+                .withHeader("HX-Trigger", AdminHtmx.triggerToast(message, kind))
                 .withHeader("Vary", "HX-Request");
-    }
-
-    private static String jsonStr(String s) {
-        if (s == null) {
-            return "\"\"";
-        }
-        return "\"" + s.replace("\\", "\\\\").replace("\"", "\\\"")
-                .replace("\n", "\\n").replace("\r", "") + "\"";
     }
 
     private static String nullToEmpty(String s) {

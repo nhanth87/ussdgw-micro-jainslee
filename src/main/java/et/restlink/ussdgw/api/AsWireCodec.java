@@ -27,6 +27,18 @@ public final class AsWireCodec {
         return new String(encodeRequest(req), StandardCharsets.UTF_8);
     }
 
+    public static byte[] encodeGatedNotify(AsGatedNotify notify) {
+        try {
+            return JSON.writeValueAsBytes(notify);
+        } catch (Exception e) {
+            throw new IllegalStateException("encode AsGatedNotify", e);
+        }
+    }
+
+    public static String encodeGatedNotifyString(AsGatedNotify notify) {
+        return new String(encodeGatedNotify(notify), StandardCharsets.UTF_8);
+    }
+
     public static byte[] encodeResponse(AsResponse resp) {
         try {
             return JSON.writeValueAsBytes(resp);

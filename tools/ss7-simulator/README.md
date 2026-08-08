@@ -16,6 +16,28 @@ Handset / MSC peer for Digicom-ET USSDGW. **Real MAP** uses jSS7 `USSD_TEST_CLIE
 
 ussdgw listens SCTP **8013** (PC 1). Sim is IPSP **client** on **8014** (PC 2). SSN **8**.
 
+## Dedicated pull-lab SCTP pair (`:8023`↔`:8024`)
+
+When `:8013` is busy (or you want an isolated pull prove), use the second stack:
+
+| Role | Listen | PC | SSN |
+|------|--------|----|-----|
+| GW (`ss7-lab-sim-pull.json`) | **8023** server | 1 | **8 + 147 + 6** |
+| jSS7 sim (`ussdgw_lab_pull_client.xml`) | **8024** client | 2 | 8 → remote 8 |
+
+```bash
+./tools/ss7-simulator/pull-lab.sh apply-ss7   # points dist configs at sim-pull JSON
+./dist/run.sh
+cd tools/as-node && npm run pull:fast
+./tools/ss7-simulator/pull-lab.sh reseed-pull # *100# *123# *101 → :8090/ussd/pull
+./tools/ss7-simulator/pull-lab.sh sim
+./tools/ss7-simulator/pull-lab.sh dial-pull '*100#'
+# or: ./tools/ss7-simulator/pull-lab.sh cli
+```
+
+Files: `build/ss7-lab-sim-pull.json`, `tools/ss7-simulator/data/ussdgw_lab_pull_client.xml`,
+`config-pull.json`, `seed-ussd-pull.sql`, `pull-lab.sh`.
+
 ## USSD CLI (preferred operator UX)
 
 JDK **25** only (`mise` → `zulu-25`). CLI does **not** embed a second SS7 stack — it

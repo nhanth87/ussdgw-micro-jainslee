@@ -1,0 +1,55 @@
+{
+  "stackName": "ussdgw-lab-pull-client",
+  "protocols": { "map": true, "cap": false },
+  "sctp": {
+    "connectDelay": 10000,
+    "workerThreads": 8,
+    "links": [
+      {
+        "name": "clientLinkPull",
+        "local": "127.0.0.1:8024",
+        "peer": "127.0.0.1:8023"
+      }
+    ]
+  },
+  "m3ua": {
+    "deliveryThreads": 16,
+    "as": [
+      {
+        "name": "AS1",
+        "mode": "loadshare",
+        "functionality": "ipsp",
+        "ipsp": "client",
+        "routingContext": 0,
+        "networkAppearance": 0,
+        "links": ["clientLinkPull"]
+      }
+    ],
+    "routes": [
+      { "to": { "dpc": 1, "opc": 2, "si": 3 }, "via": "AS1" }
+    ]
+  },
+  "sccp": {
+    "localPoints": [
+      {
+        "pc": 2,
+        "networkIndicator": "national",
+        "networkId": 0,
+        "reachablePointCodes": [1]
+      }
+    ],
+    "routing": [
+      { "from": "remote", "match": { "gt": "*/" }, "to": { "pc": 2 } },
+      { "from": "local",  "match": { "gt": "*/" }, "to": { "pc": 1 } }
+    ]
+  },
+  "tcap": {
+    "dialogIdleTimeout": 30000,
+    "invokeTimeout": 15000,
+    "maxDialogs": 50000
+  },
+  "services": [
+    { "name": "msc", "ssn": 8, "protocol": "map" },
+    { "name": "hlr", "ssn": 6, "protocol": "map" }
+  ]
+}

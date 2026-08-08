@@ -66,6 +66,38 @@ public class HlrResolvePolicy {
         return imsi != null && !imsi.isBlank() && msc != null && !msc.isBlank();
     }
 
+    /**
+     * Outbound SRI consumers (MAP2MAP / NI): skip upper-gt SRI and use HLR Face fake
+     * IMSI/MSC when mode is {@link HlrResolveMode#FAKE} or {@link HlrResolveMode#FAKE_THEN_RESOLVE}.
+     * {@code PROXY_*} never returns true — no silent FAKE.
+     */
+    public boolean usesFakeForOutbound(int networkId, String msisdn) {
+        return usesFakeForOutbound(networkId, msisdn, null);
+    }
+
+    /**
+     * Same as {@link #usesFakeForOutbound(int, String)} with optional per-rule HLR mode
+     * ({@code null}/{@code INHERIT} → global / per-network policy).
+     */
+    public boolean usesFakeForOutbound(int networkId, String msisdn, String ruleHlrMode) {
+        HlrResolveMode m = resolveMode(networkId, msisdn, ruleHlrMode);
+        return m == HlrResolveMode.FAKE || m == HlrResolveMode.FAKE_THEN_RESOLVE;
+    }
+
+    /**
+     * Effective HLR mode: rule override when set to a concrete mode; else
+     * {@link #modeFor(int, String)}.
+     */
+    public HlrResolveMode resolveMode(int networkId, String msisdn, String ruleHlrMode) {
+        if (ruleHlrMode != null && !ruleHlrMode.isBlank()) {
+            String n = ruleHlrMode.trim().toUpperCase().replace('-', '_');
+            if (!"INHERIT".equals(n) && !"GLOBAL".equals(n) && !"DEFAULT".equals(n)) {
+                return HlrResolveMode.parse(n);
+            }
+        }
+        return modeFor(networkId, msisdn);
+    }
+
     private static String digits(String s) {
         if (s == null) return "";
         StringBuilder b = new StringBuilder(s.length());

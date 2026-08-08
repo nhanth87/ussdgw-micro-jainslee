@@ -22,6 +22,7 @@ import et.restlink.ussdgw.hlr.PendingHlrProxyRegistry;
 import et.restlink.ussdgw.access.DiameterUssdAccessAdapter;
 import et.restlink.ussdgw.access.SipUssiAccessAdapter;
 import et.restlink.ussdgw.sip.SipTrunkService;
+import et.restlink.ussdgw.telemetry.Map2MapTelemetry;
 
 import com.microjainslee.core.MicroSleeContainer;
 
@@ -43,6 +44,8 @@ public class SbbServices {
     @Inject LinkStatusService linkStatus;
     @Inject AdminHttpHandler adminHttp;
     @Inject PendingSriRegistry pendingSri;
+    @Inject PendingMap2MapRegistry pendingMap2Map;
+    @Inject Map2MapCompletionService map2MapCompletion;
     @Inject PendingHlrProxyRegistry pendingHlrProxy;
     @Inject HlrFaceService hlrFace;
     @Inject HlrResolvePolicy hlrPolicy;
@@ -61,6 +64,7 @@ public class SbbServices {
     @Inject AsWireFacade wireFacade;
     @Inject WireFormatResolver wireFormatResolver;
     @Inject ClassicNiHttpPark niHttpPark;
+    @Inject Map2MapTelemetry map2MapTelemetry;
 
     @PostConstruct
     void install() { INSTANCE = this; }
@@ -81,6 +85,8 @@ public class SbbServices {
     public LinkStatusService linkStatus() { return linkStatus; }
     public AdminHttpHandler adminHttp() { return adminHttp; }
     public PendingSriRegistry pendingSri() { return pendingSri; }
+    public PendingMap2MapRegistry pendingMap2Map() { return pendingMap2Map; }
+    public Map2MapCompletionService map2MapCompletion() { return map2MapCompletion; }
     public PendingHlrProxyRegistry pendingHlrProxy() { return pendingHlrProxy; }
     public HlrFaceService hlrFace() { return hlrFace; }
     public HlrResolvePolicy hlrPolicy() { return hlrPolicy; }
@@ -99,4 +105,5 @@ public class SbbServices {
     public AsWireFacade wireFacade() { return wireFacade; }
     public WireFormatResolver wireFormatResolver() { return wireFormatResolver; }
     public ClassicNiHttpPark niHttpPark() { return niHttpPark; }
+    public Map2MapTelemetry map2MapTelemetry() { return map2MapTelemetry; }
 }

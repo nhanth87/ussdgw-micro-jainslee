@@ -69,9 +69,8 @@ public class AdminCampaignHandler {
         String html = "<div id=\"pending-rows\" hx-swap-oob=\"innerHTML\">"
                 + pendingRowsHtml(who) + "</div>" + rowsHtml(who);
         return AdminHttpHandler.HttpReply.html(html)
-                .withHeader("HX-Trigger",
-                        "{\"ussdToast\":{\"message\":" + jsonStr(message)
-                                + ",\"kind\":" + jsonStr(kind) + "}}")
+                .withHeader("HX-Trigger", AdminHtmx.triggerToast(
+                        message, kind, "/admin/campaigns", "#campaign-rows"))
                 .withHeader("Vary", "HX-Request");
     }
 
@@ -143,12 +142,6 @@ public class AdminCampaignHandler {
 
     private static String nullToEmpty(String s) {
         return s == null ? "" : s;
-    }
-
-    private static String jsonStr(String s) {
-        if (s == null) return "\"\"";
-        return "\"" + s.replace("\\", "\\\\").replace("\"", "\\\"")
-                .replace("\n", "\\n").replace("\r", "") + "\"";
     }
 
     private static String esc(String s) {

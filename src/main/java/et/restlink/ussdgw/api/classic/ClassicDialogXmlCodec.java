@@ -141,11 +141,26 @@ public final class ClassicDialogXmlCodec {
     public static String encodeNiSnapshot(String correlationId, String text, AsAction action,
                                           boolean emptyHandshake, String sessionId,
                                           String virtualBridgeId, Long adaptiveTimeoutMs) {
+        return encodeNiSnapshot(correlationId, text, action, emptyHandshake, sessionId,
+                virtualBridgeId, adaptiveTimeoutMs, null, null, null);
+    }
+
+    /**
+     * NI / callback snapshot toward AS. Optional gated fields ({@code jsessionId},
+     * {@code gateReason}, {@code observedEwmaMs}) are RestLink-additive for AdaptiveTimeout
+     * expiry so the AS can re-push with the same Cookie {@code JSESSIONID}.
+     */
+    public static String encodeNiSnapshot(String correlationId, String text, AsAction action,
+                                          boolean emptyHandshake, String sessionId,
+                                          String virtualBridgeId, Long adaptiveTimeoutMs,
+                                          String jsessionId, String gateReason,
+                                          Long observedEwmaMs) {
         AsAction act = action == null ? AsAction.END : action;
         StringBuilder sb = new StringBuilder(256);
         if (act == AsAction.ABORT) {
             sb.append("<dialog");
-            appendIdentityAttrs(sb, correlationId, sessionId, virtualBridgeId, adaptiveTimeoutMs, null);
+            appendIdentityAttrs(sb, correlationId, sessionId, virtualBridgeId, adaptiveTimeoutMs, null,
+                    jsessionId, gateReason, observedEwmaMs);
             sb.append(" mapMessagesSize=\"0\" mapUserAbortChoice=\"isUserSpecificReason\"");
             if (emptyHandshake) {
                 sb.append(" emptyDialogHandshake=\"true\"");
@@ -154,7 +169,7 @@ public final class ClassicDialogXmlCodec {
             return sb.toString();
         }
         openDialog(sb, correlationId, -1, emptyHandshake, sessionId, virtualBridgeId,
-                adaptiveTimeoutMs, null, null);
+                adaptiveTimeoutMs, null, null, jsessionId, gateReason, observedEwmaMs);
         String safe = text == null ? "" : text;
         if (act == AsAction.CONTINUE) {
             sb.append("<unstructuredSSRequest_Request dataCodingScheme=\"").append(DCS)
@@ -163,6 +178,36 @@ public final class ClassicDialogXmlCodec {
             sb.append("<processUnstructuredSSRequest_Response dataCodingScheme=\"").append(DCS)
                     .append("\" string=\"").append(xmlAttr(safe)).append("\"/>");
         }
+        sb.append("</dialog>");
+        return sb.toString();
+    }
+
+    /**
+     * GW→AS push when AdaptiveTimeout / bridge gate fires: classic XmlMAPDialog with
+     * additive RestLink attrs ({@code virtualBridgeId}, {@code adaptiveTimeoutMs},
+     * {@code observedEwmaMs}, {@code jsessionId}, {@code gateReason}) and a one-shot
+     * {@code unstructuredSSNotify_Request} whose string echoes the gate reason.
+     */
+    public static String encodeGatedPush(et.restlink.ussdgw.bridge.GatedSessionMeta meta) {
+        if (meta == null) {
+            return "<dialog/>";
+        }
+        String reason = notBlank(meta.gateReason()) ? meta.gateReason().trim() : "GATED";
+        Long gateMs = meta.gateMs() > 0 ? meta.gateMs() : null;
+        StringBuilder sb = new StringBuilder(320);
+        sb.append("<dialog appCntx=\"").append(APP_CTX).append('"');
+        appendIdentityAttrs(sb, meta.correlationId(), meta.sessionId(), meta.virtualBridgeId(),
+                gateMs, "BRIDGE", meta.jsessionId(), reason, meta.observedEwmaMs());
+        if (meta.networkId() >= 0) {
+            sb.append(" networkId=\"").append(meta.networkId()).append('"');
+        }
+        sb.append(" mapMessagesSize=\"1\">");
+        sb.append("<unstructuredSSNotify_Request dataCodingScheme=\"").append(DCS)
+                .append("\" string=\"").append(xmlAttr(reason)).append("\">");
+        if (notBlank(meta.msisdn())) {
+            appendMsisdn(sb, meta.msisdn());
+        }
+        sb.append("</unstructuredSSNotify_Request>");
         sb.append("</dialog>");
         return sb.toString();
     }
@@ -198,15 +243,46 @@ public final class ClassicDialogXmlCodec {
     private static void openDialog(StringBuilder sb, AsRequest req, boolean emptyHandshake) {
         openDialog(sb, req.correlationId(), req.networkId(), emptyHandshake,
                 req.sessionId(), req.virtualBridgeId(), req.adaptiveTimeoutMs(),
-                req.asMode(), null);
+                req.asMode(), null, req.jsessionId(), req.gateReason(), req.observedEwmaMs(),
+                req.shortCode(), req.originatedUssd(), req.codeKind());
     }
 
     private static void openDialog(StringBuilder sb, String localId, int networkId,
                                    boolean emptyHandshake, String sessionId,
                                    String virtualBridgeId, Long adaptiveTimeoutMs,
                                    String asMode, Boolean async) {
+        openDialog(sb, localId, networkId, emptyHandshake, sessionId, virtualBridgeId,
+                adaptiveTimeoutMs, asMode, async, null, null, null, null, null, null);
+    }
+
+    private static void openDialog(StringBuilder sb, String localId, int networkId,
+                                   boolean emptyHandshake, String sessionId,
+                                   String virtualBridgeId, Long adaptiveTimeoutMs,
+                                   String asMode, Boolean async,
+                                   String jsessionId, String gateReason, Long observedEwmaMs) {
+        openDialog(sb, localId, networkId, emptyHandshake, sessionId, virtualBridgeId,
+                adaptiveTimeoutMs, asMode, async, jsessionId, gateReason, observedEwmaMs,
+                null, null, null);
+    }
+
+    private static void openDialog(StringBuilder sb, String localId, int networkId,
+                                   boolean emptyHandshake, String sessionId,
+                                   String virtualBridgeId, Long adaptiveTimeoutMs,
+                                   String asMode, Boolean async,
+                                   String jsessionId, String gateReason, Long observedEwmaMs,
+                                   String shortCode, String originatedUssd, String codeKind) {
         sb.append("<dialog appCntx=\"").append(APP_CTX).append('"');
-        appendIdentityAttrs(sb, localId, sessionId, virtualBridgeId, adaptiveTimeoutMs, asMode);
+        appendIdentityAttrs(sb, localId, sessionId, virtualBridgeId, adaptiveTimeoutMs, asMode,
+                jsessionId, gateReason, observedEwmaMs);
+        if (notBlank(shortCode)) {
+            sb.append(" shortCode=\"").append(xmlAttr(shortCode)).append('"');
+        }
+        if (notBlank(originatedUssd)) {
+            sb.append(" originatedUssd=\"").append(xmlAttr(originatedUssd)).append('"');
+        }
+        if (notBlank(codeKind)) {
+            sb.append(" codeKind=\"").append(xmlAttr(codeKind)).append('"');
+        }
         if (networkId >= 0) {
             sb.append(" networkId=\"").append(networkId).append('"');
         }
@@ -222,6 +298,14 @@ public final class ClassicDialogXmlCodec {
     private static void appendIdentityAttrs(StringBuilder sb, String localId, String sessionId,
                                             String virtualBridgeId, Long adaptiveTimeoutMs,
                                             String asMode) {
+        appendIdentityAttrs(sb, localId, sessionId, virtualBridgeId, adaptiveTimeoutMs, asMode,
+                null, null, null);
+    }
+
+    private static void appendIdentityAttrs(StringBuilder sb, String localId, String sessionId,
+                                            String virtualBridgeId, Long adaptiveTimeoutMs,
+                                            String asMode, String jsessionId, String gateReason,
+                                            Long observedEwmaMs) {
         if (notBlank(localId)) {
             sb.append(" localId=\"").append(xmlAttr(localId)).append('"');
         }
@@ -236,6 +320,15 @@ public final class ClassicDialogXmlCodec {
         }
         if (notBlank(asMode)) {
             sb.append(" asMode=\"").append(xmlAttr(asMode)).append('"');
+        }
+        if (notBlank(jsessionId)) {
+            sb.append(" jsessionId=\"").append(xmlAttr(jsessionId)).append('"');
+        }
+        if (notBlank(gateReason)) {
+            sb.append(" gateReason=\"").append(xmlAttr(gateReason)).append('"');
+        }
+        if (observedEwmaMs != null && observedEwmaMs > 0) {
+            sb.append(" observedEwmaMs=\"").append(observedEwmaMs).append('"');
         }
     }
 

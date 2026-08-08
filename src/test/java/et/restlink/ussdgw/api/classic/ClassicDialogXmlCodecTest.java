@@ -124,6 +124,20 @@ class ClassicDialogXmlCodecTest {
     }
 
     @Test
+    void encodePullIncludesOriginatedShortCodeAndCodeKind() {
+        AsRequest req = new AsRequest("vs-1", "corr-m2m", "r1", 0, "251911000001", "*804#",
+                "UserInfo hop", 0, "corr-m2m", 4200L, "BRIDGE")
+                .withOriginated("*804#", "SHORT");
+        String xml = ClassicDialogXmlCodec.encodePull(req);
+        assertThat(xml)
+                .contains("shortCode=\"*804#\"")
+                .contains("originatedUssd=\"*804#\"")
+                .contains("codeKind=\"SHORT\"")
+                .contains("string=\"UserInfo hop\"")
+                .contains("number=\"251911000001\"");
+    }
+
+    @Test
     void decodeResponseReadsAsyncAndBridgeAttrs() {
         String xml = """
                 <dialog localId="c-async" sessionId="vs-x" virtualBridgeId="c-async"
@@ -137,6 +151,24 @@ class ClassicDialogXmlCodecTest {
         assertThat(r.virtualBridgeId()).isEqualTo("c-async");
         assertThat(r.adaptiveTimeoutMs()).isEqualTo(3000L);
         assertThat(r.resolvePushBackId()).isEqualTo("c-async");
+    }
+
+    @Test
+    void encodeGatedPushIncludesBridgeAdaptiveJsessionAndNotify() {
+        var meta = et.restlink.ussdgw.bridge.GatedSessionMeta.niPark(
+                "corr-g", "js-g", 4200L, 2800L, 0, "251911000001", "*123#", "vs-g");
+        String xml = ClassicDialogXmlCodec.encodeGatedPush(meta);
+        assertThat(xml)
+                .contains("localId=\"corr-g\"")
+                .contains("sessionId=\"vs-g\"")
+                .contains("virtualBridgeId=\"corr-g\"")
+                .contains("adaptiveTimeoutMs=\"4200\"")
+                .contains("observedEwmaMs=\"2800\"")
+                .contains("jsessionId=\"js-g\"")
+                .contains("gateReason=\"GATE_EXPIRED\"")
+                .contains("unstructuredSSNotify_Request")
+                .contains("string=\"GATE_EXPIRED\"")
+                .contains("number=\"251911000001\"");
     }
 
     @Test
