@@ -30,9 +30,11 @@ build/pcap/
 build/digicom-secrets-*.txt
 build/.digicom-rotate.env
 
-# Digicom-ET / carrier prod configs — NEVER on public nhanth87 (operator / digicom-et private SoT)
+# Digicom-ET carrier configs — kept locally + on digicom-et via ./build/push-dual.sh
+# (force-added on branch `digicom` → digicom-et/main). NEVER tracked on public nhanth87 main.
 configs/digicom/
 **/ss7-digicom*.json
 **/application-digicom.properties
 build/application-digicom.properties
 build/ss7-digicom-balance.json
+build/systemd/install-on-digicom.sh

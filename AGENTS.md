@@ -16,14 +16,23 @@ Greenfield **Digicom-ET USSDGW** (code packages `et.restlink.*`) — 3GPP **pull
 | **Access planes** | MAP + Diameter + SIP/USSI + SMPP live (stubs only when peer down) | Leave Diameter/SIP as permanent STUB_QUEUED |
 
 
-### Public GitHub vs Digicom configs (non-negotiable)
+### Public GitHub vs Digicom configs (non-negotiable) — dual push
 
-| Remote | Visibility | SS7 / runtime configs |
-|--------|------------|------------------------|
-| **`nhanth87/ussdgw-micro-jainslee`** | **PUBLIC** | **Lab/test only** — `build/ss7-lab.json` / `dist/configs/ss7-lab.json` (simulator loopback). Dual license: [`LICENSE`](LICENSE) + [`COMMERCIAL_LICENSE.md`](COMMERCIAL_LICENSE.md). |
-| **`digicom-et/ussdgw-micro-jainslee`** | **PRIVATE** | May hold Digicom carrier seeds (`private/digicom-carrier-seeds`) — still prefer **Digicom host** as operator SoT. |
+**Keep** Digicom carrier seeds in the project for Digicom deploys (local worktree + private remote). **Push always splits in 2** via [`./build/push-dual.sh`](build/push-dual.sh):
 
-**Never** commit or push to **nhanth87**: `ss7-digicom-balance.json`, Digicom `application-*.properties`, live peer IPs/SPC/GT/listen ports (e.g. **2011/2019**), Digicom hostnames, passwords, or public URLs. Gitignore `configs/digicom/` + `**/ss7-digicom*.json`. Digicom deploy docs point at **host configs**, not the public tree.
+| Branch / remote | Visibility | SS7 / runtime configs |
+|-----------------|------------|------------------------|
+| **`main` → `origin` (`nhanth87/ussdgw-micro-jainslee`)** | **PUBLIC** | **Lab/test only** — `build/ss7-lab.json` / `dist/configs/ss7-lab.json`. Dual license: [`LICENSE`](LICENSE) + [`COMMERCIAL_LICENSE.md`](COMMERCIAL_LICENSE.md). **No** Digicom carrier JSON/props. |
+| **`digicom` → `digicom-et` `main` (`digicom-et/ussdgw-micro-jainslee`)** | **PRIVATE** | **Same as public + Digicom overlay** — `build/ss7-digicom-balance.json`, `build/application-digicom.properties`, `build/systemd/install-on-digicom.sh`. Digicom host `configs/` remains operator SoT for live secrets. |
+
+```
+main (lab)  ──push──►  origin/main          (nhanth87 PUBLIC)
+digicom = main + Digicom seeds  ──push──►  digicom-et/main  (PRIVATE)
+```
+
+- **Local:** Digicom paths may exist on disk (gitignored on `main`) for Digicom package/rsync.
+- **Agents:** never `git push origin` alone when Digicom overlay also needs updating — run **`./build/push-dual.sh`**. Never force-add Digicom files onto `main` / never push them to nhanth87.
+- Legacy branch `private/digicom-carrier-seeds` is a seed backup; prefer **`digicom-et/main`** as the Digicom-inclusive tree.
 
 ## Topic index
 
@@ -37,7 +46,7 @@ Greenfield **Digicom-ET USSDGW** (code packages `et.restlink.*`) — 3GPP **pull
 | Fast-jar dist (OTA peer) | OTA [`packaging.md`](../../ota-service/ota-sim-push/docs/agents/packaging.md) · [`skills.md` § Dist](docs/agents/skills.md) |
 | Schema H2 / PostgreSQL | [`schema.md`](docs/agents/schema.md) |
 | SS7 lab + HLR face | [`ss7-lab-pair.md`](docs/agents/ss7-lab-pair.md) · admin `/admin/hlr` |
-| Operator Digicom / live carrier | [`ss7-lab-pair.md` § Operator Digicom](docs/agents/ss7-lab-pair.md) — **private host / digicom-et only**; public tree = `ss7-lab.json` |
+| Operator Digicom / live carrier | [`ss7-lab-pair.md` § Operator Digicom](docs/agents/ss7-lab-pair.md) — dual push [`push-dual.sh`](build/push-dual.sh); public = `ss7-lab.json`; Digicom overlay on digicom-et `main` |
 | Ethiopia MO pull `*101…` | [`ss7-lab-pair.md` § Ethiopia MO pull](docs/agents/ss7-lab-pair.md) — mark `*101` → as-node `:8090/ussd/pull`; MAP `processUnstructuredSS-Request` → AS XML gen0 |
 | Parity vs classic | [`docs/parity-matrix.md`](docs/parity-matrix.md) |
 | AS contract / 3GPP USSD | [`docs/as-contract/`](docs/as-contract/) · [`ussd-3gpp-notes.md`](docs/as-contract/ussd-3gpp-notes.md) |
@@ -128,7 +137,7 @@ Detail: [logging.md](docs/agents/logging.md).
 - Port OTA fleet/CAP/`/sendota` into this USSD GW.
 - Leave raw `{{TOKEN}}` in browser HTML — always seed vars (OTA admin lesson).
 - **Mutate Digicom / prod-bound DB ops data without asking** — no silent `UPDATE`/`DELETE` of short-code `as_url`, tenants, users, `network_id`, or routing/enable flags. Operator config/DB is SoT; ask first. → [lessons](docs/agents/lessons.md)
-- Commit Digicom carrier / prod SS7 configs to **nhanth87** — public tree is lab (`ss7-lab.json`) only; Digicom SoT = Digicom host / private digicom-et.
+- Push Digicom carrier SS7/props to **nhanth87** — keep them for Digicom (local + digicom-et via **`./build/push-dual.sh`**); public `main` stays lab (`ss7-lab.json`) only.
 - Bloat this file — put detail in `docs/agents/*`.
 
 ## Dist / run

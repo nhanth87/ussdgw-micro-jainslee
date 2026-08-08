@@ -52,18 +52,25 @@ Dedicated **`/admin/hlr`** (not SS7 JSON): mode, fake IMSI/MSC, upper GT, Diamet
 Outbound SRI-SM (NI `SriSbb` + PROXY_MAP face) CalledParty = resolved `ussd.hlr.upper-gt`
 (admin overlay when non-blank, else `application.properties`). Empty admin field → props default.
 
-## Operator Digicom / live carrier (PRIVATE — not in nhanth87)
+## Operator Digicom / live carrier (dual push — Digicom kept, not on nhanth87)
 
-**Public `nhanth87/ussdgw-micro-jainslee` = lab/test SS7 only** (`build/ss7-lab.json` / `dist/configs/ss7-lab.json`).
+**Public `nhanth87` `main` = lab/test SS7 only** (`build/ss7-lab.json` / `dist/configs/ss7-lab.json`).
 
-Digicom-ET **prod-bound** carrier configs (peer IPs, SPC/GT, SCTP listen ports, `ss7-digicom-balance.json`, Digicom `application.properties`) are **operator SoT on the Digicom host** and may also live on private **`digicom-et/ussdgw-micro-jainslee`** (branch `private/digicom-carrier-seeds`). **Never** commit or push those files to **nhanth87**.
+**Keep** Digicom carrier seeds (`ss7-digicom-balance.json`, `application-digicom.properties`, `install-on-digicom.sh`) for Digicom deploys. Push with **`./build/push-dual.sh`**:
+
+| Push | Remote / branch | Contents |
+|------|-----------------|----------|
+| 1 | `origin` / `main` (nhanth87 PUBLIC) | Lab only — Digicom paths gitignored / not tracked |
+| 2 | `digicom-et` / `main` (PRIVATE) | Branch `digicom` = `main` + Digicom overlay (force-added) |
+
+Live Digicom host `configs/` remains operator SoT for secrets/persist. Legacy `private/digicom-carrier-seeds` is a backup tip; prefer **digicom-et `main`**.
 
 When deploying to Digicom:
 
 - Rsync **jars / `lib/` / `quarkus/` / `app/html`** only — **never** overwrite Digicom `configs/` (PG URL, secrets, SS7 seed/persist).
 - Package with build-time **`db-kind=postgresql`**, then restore local **H2** for the public/dev tree.
 - Ask before any Digicom DB mutation (routing / tenants / users / `network_id`).
-- Live peer lessons (IPSP server, RC uniqueness, dual-homed SRI, gsmSCF SSN **147**, `networkId=0`) stay in [`lessons.md`](lessons.md) without embedding carrier topology in the public seed tree.
+- Live peer lessons (IPSP server, RC uniqueness, dual-homed SRI, gsmSCF SSN **147**, `networkId=0`) stay in [`lessons.md`](lessons.md) without embedding carrier topology on **nhanth87**.
 
 Localhost stack: `build/ss7-lab.json` (127.0.0.1:8013↔8014). **Do not** point public lab props at a Digicom carrier JSON.
 
