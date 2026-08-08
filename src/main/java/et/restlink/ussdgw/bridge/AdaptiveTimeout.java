@@ -1,11 +1,15 @@
 package et.restlink.ussdgw.bridge;
 
+import jakarta.annotation.PostConstruct;
 import jakarta.enterprise.context.ApplicationScoped;
 
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
+
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 
 /**
  * Per-network adaptive gate timeout — classic ussdgateway {@code AdaptiveTimeout} semantics
@@ -24,6 +28,8 @@ import java.util.concurrent.TimeUnit;
  */
 @ApplicationScoped
 public class AdaptiveTimeout {
+    private static final Logger LOG = LogManager.getLogger(AdaptiveTimeout.class);
+
     /** Smoothing factor for the EWMA (0..1); higher reacts faster. */
     public static final double ALPHA = 0.2;
     /** Headroom multiplier applied to the average latency to absorb jitter. */
@@ -45,6 +51,13 @@ public class AdaptiveTimeout {
     }
 
     private final ConcurrentHashMap<Integer, Ewma> perNetwork = new ConcurrentHashMap<>();
+
+    @PostConstruct
+    void armOnBoot() {
+        // Passive EWMA model — always available; no enable flag and no admin Start.
+        LOG.info("AdaptiveTimeout armed: floor={}ms headroom={} alpha={}",
+                FLOOR_MS, HEADROOM, ALPHA);
+    }
 
     public void recordLatency(int networkId, long latencyMs) {
         recordLatency(networkId, latencyMs, DEFAULT_MAX_SAMPLE_MS);

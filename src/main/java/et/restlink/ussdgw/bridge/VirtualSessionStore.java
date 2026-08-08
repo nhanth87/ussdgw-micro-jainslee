@@ -137,6 +137,10 @@ public class VirtualSessionStore {
                 p = (UssdTxProfile) plo.getProfile();
             } else {
                 p = (UssdTxProfile) plo.getProfile();
+                // PK = correlationId (classic parity). Never let a second MSISDN hijack the row:
+                // UssdTxProfileMapper.write would overwrite CMP msisdn/MSC/IMSI and corrupt
+                // concurrent subscribers that share a reused client-supplied correlationId.
+                assertSameMsisdn(corr, p.getMsisdn(), session.msisdn());
             }
             UssdTxProfileMapper.write(p, session, expires);
             indexGate(session);
@@ -467,6 +471,22 @@ public class VirtualSessionStore {
         if (prev != null) {
             gateIndex.remove(new GateKey(prev, correlationId));
         }
+    }
+
+    /**
+     * Fail-closed when an existing {@code ussdTx} row is updated with a different subscriber.
+     * Empty/blank stored MSISDN is treated as unset (first writer wins).
+     */
+    static void assertSameMsisdn(String correlationId, String existingMsisdn, String incomingMsisdn) {
+        String have = existingMsisdn == null ? "" : existingMsisdn.trim();
+        String want = incomingMsisdn == null ? "" : incomingMsisdn.trim();
+        if (have.isEmpty() || want.isEmpty() || have.equals(want)) {
+            return;
+        }
+        throw new IllegalStateException(
+                "ussdTx correlationId=" + correlationId
+                        + " already bound to msisdn=" + have
+                        + "; refusing overwrite with msisdn=" + want);
     }
 
     private Optional<VirtualSession> findOneByAttribute(String attr, String value) {

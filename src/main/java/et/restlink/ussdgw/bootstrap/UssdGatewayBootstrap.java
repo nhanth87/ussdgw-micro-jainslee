@@ -2,10 +2,15 @@ package et.restlink.ussdgw.bootstrap;
 
 import et.restlink.ussdgw.admin.AdminHttpHandler;
 import et.restlink.ussdgw.admin.LinkStatusService;
+import et.restlink.ussdgw.api.classic.ClassicNiHttpPark;
+import et.restlink.ussdgw.bridge.AdaptiveTimeout;
 import et.restlink.ussdgw.bridge.UssdSagaCoordinator;
 import et.restlink.ussdgw.bridge.VirtualSessionBridge;
 import et.restlink.ussdgw.bridge.VirtualSessionStore;
+import et.restlink.ussdgw.config.UssdConfigService;
 import et.restlink.ussdgw.hlr.PendingHlrProxyRegistry;
+import et.restlink.ussdgw.service.AsPullSweeper;
+import et.restlink.ussdgw.service.BridgeGateScheduler;
 import et.restlink.ussdgw.service.GrpcApplyService;
 import et.restlink.ussdgw.service.HttpApplyService;
 import et.restlink.ussdgw.service.SbbRegistrationSupport;
@@ -44,6 +49,11 @@ public class UssdGatewayBootstrap {
     @Inject SipApplyService sipApply;
     @Inject AdminHttpHandler adminHttp;
     @Inject VirtualSessionBridge bridge;
+    @Inject AdaptiveTimeout adaptive;
+    @Inject ClassicNiHttpPark niHttpPark;
+    @Inject BridgeGateScheduler bridgeGate;
+    @Inject AsPullSweeper asPullSweeper;
+    @Inject UssdConfigService config;
     @Inject UssdSagaCoordinator saga;
     @Inject PendingHlrProxyRegistry pendingHlrProxy;
     @Inject VirtualSessionStore sessionStore;
@@ -81,6 +91,23 @@ public class UssdGatewayBootstrap {
         adminHttp.wireRaAdminHub();
         container.createIesDispatcher();
         sbbRegistration.bindEventMappings();
+
+        // Eager CDI refs so Quarkus @Scheduled (bridge gate / AS pull TTL) and the NI park
+        // executor cannot stay unconstructed. Bridge/adaptive always auto-run — no admin Start.
+        LOG.info("Bridge+AdaptiveTimeout auto-run: bridgeEnabled={} asyncGateMs={} dialogMs={} "
+                        + "gateTickMs={} httpBridge={} grpcBridge={} "
+                        + "(BridgeGateScheduler ticks={} · ClassicNiHttpPark bound)",
+                config.bridgeEnabled(),
+                config.asyncGateTimeoutMs(),
+                config.dialogTimeoutMs(),
+                bridgeGate.configuredGateTickMs(),
+                config.httpClientBridgeEnabled(),
+                config.grpcClientBridgeEnabled(),
+                bridgeGate.gateTicks());
+        // Touch beans so Arc cannot treat them as unused after build-time pruning edge cases.
+        if (adaptive == null || niHttpPark == null || asPullSweeper == null) {
+            throw new IllegalStateException("Bridge/AdaptiveTimeout CDI beans missing at boot");
+        }
 
         LOG.info("USSD GW bootstrap complete");
     }

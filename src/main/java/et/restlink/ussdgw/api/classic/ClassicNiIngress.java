@@ -15,10 +15,17 @@ public record ClassicNiIngress(
         String correlationId,
         boolean emptyDialogHandshake,
         AsHttpWireFormat rawFormat,
-        Integer networkId
+        Integer networkId,
+        boolean notifyOnly
 ) {
     public ClassicNiIngress(String msisdn, String text, String correlationId,
                             boolean emptyDialogHandshake, AsHttpWireFormat rawFormat) {
-        this(msisdn, text, correlationId, emptyDialogHandshake, rawFormat, null);
+        this(msisdn, text, correlationId, emptyDialogHandshake, rawFormat, null, false);
+    }
+
+    public ClassicNiIngress(String msisdn, String text, String correlationId,
+                            boolean emptyDialogHandshake, AsHttpWireFormat rawFormat,
+                            Integer networkId) {
+        this(msisdn, text, correlationId, emptyDialogHandshake, rawFormat, networkId, false);
     }
 }

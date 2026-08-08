@@ -15,7 +15,10 @@ import com.microjainslee.api.SleeEvent;
 import com.microjainslee.api.SleeEventHandler;
 import com.microjainslee.api.annotations.InjectRa;
 
-/** S2 NI push after SRI — MapUnstructuredSsRequest via ra-jss7. */
+/**
+ * S2 NI push after SRI — UnstructuredSS-Request/Notify via ra-jss7 toward
+ * SRI {@code networkNodeNumber} (MSC), with IMSI destReference (classic + TS 29.002).
+ */
 public final class MapNiPushSbb implements Sbb, SleeEventHandler {
     private final SbbServices services;
 
@@ -57,24 +60,47 @@ public final class MapNiPushSbb implements Sbb, SleeEventHandler {
         String text = ni.text();
         if (text != null && text.length() > 200) text = text.substring(0, 200);
 
-        String mscGt = ni.msisdn();
         var cfg = svc().config();
         String localGt = MapDialogHelper.localGt(cfg);
         var sess = svc().store().get(ni.correlationId());
+        // Prefer SRI fields carried on the ready event (classic networkNodeNumber + IMSI).
+        String mscGt = ni.mscGt();
+        String imsi = ni.imsi();
         if (sess.isPresent()) {
-            if (sess.get().mscGt() != null && !sess.get().mscGt().isBlank()) {
+            if (mscGt == null || mscGt.isBlank()) {
                 mscGt = sess.get().mscGt();
+            }
+            if (imsi == null || imsi.isBlank()) {
+                imsi = sess.get().imsi();
             }
             if (sess.get().localGt() != null && !sess.get().localGt().isBlank()) {
                 localGt = sess.get().localGt();
             }
         }
 
+        boolean ss7Live = false;
+        try {
+            ss7Live = svc().linkStatus().ss7Live();
+        } catch (Throwable ignored) { }
+
+        // Live MAP: MSC must come from SRI networkNodeNumber — never MSISDN/HLR/self.
+        // Lab (ss7 down): allow MSISDN fallback so NI park/echo still exercises the path.
+        if (mscGt == null || mscGt.isBlank()) {
+            if (ss7Live) {
+                svc().cdr().write(ni.correlationId(), CdrPhase.FAILED, ni.msisdn(), null,
+                        "NI_NO_MSC", null);
+                svc().saga().onNiFailed(ni.correlationId(), "NI_NO_MSC");
+                return "ni-no-msc";
+            }
+            mscGt = ni.msisdn();
+        }
+
         MapDialogHelper.niPush(ss7, ni.correlationId(), mscGt, localGt, text, ni.networkId(),
                 ni.alphabet() == null ? et.restlink.ussdgw.api.UssdAlphabet.AUTO : ni.alphabet(),
+                ni.notifyOnly(), imsi,
                 MapDialogHelper.mscSsn(cfg), MapDialogHelper.localSsn(cfg));
         svc().cdr().write(ni.correlationId(), CdrPhase.S2_PUSH, ni.msisdn(),
-                null, "NI_PUSH", text);
+                null, ni.notifyOnly() ? "NI_NOTIFY" : "NI_PUSH", text);
         // HTTP-NI: keep session; AS HTTP stays parked until MS continue (MapUssdParent)
         // or lab echo / AdaptiveTimeout gate. Do not completeParked here when MAP is live.
         boolean httpNi = false;
@@ -98,7 +124,8 @@ public final class MapNiPushSbb implements Sbb, SleeEventHandler {
         });
         svc().cdr().write(ni.correlationId(), CdrPhase.COMPLETED, ni.msisdn(),
                 null, "BRIDGED_DONE", null);
-        // mscGt falls back to the MSISDN when no session GT is known — mask either way.
-        return "ni-sent msc=" + Pii.maskMsisdn(mscGt);
+        return "ni-sent msc=" + Pii.maskMsisdn(mscGt)
+                + (ni.notifyOnly() ? " notify" : " request")
+                + (imsi == null || imsi.isBlank() ? "" : " imsi");
     }
 }

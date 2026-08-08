@@ -10,6 +10,7 @@ import et.restlink.ussdgw.config.UssdConfigService;
 import com.microjainslee.api.RaCommandPort;
 import com.microjainslee.ra.httpserver.command.HttpServerCommand;
 
+import jakarta.annotation.PostConstruct;
 import jakarta.annotation.PreDestroy;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
@@ -86,6 +87,13 @@ public class ClassicNiHttpPark {
     });
 
     private volatile Supplier<RaCommandPort> httpSupplier = () -> null;
+
+    @PostConstruct
+    void armOnBoot() {
+        // Executor is created at field init — log so Digicom restart proves NI AdaptiveTimeout
+        // park is live without waiting for the first /ussd (no admin Start).
+        LOG.info("ClassicNiHttpPark AdaptiveTimeout gate scheduler armed (thread=classic-ni-http-park)");
+    }
 
     public void bindHttp(Supplier<RaCommandPort> supplier) {
         this.httpSupplier = supplier == null ? () -> null : supplier;

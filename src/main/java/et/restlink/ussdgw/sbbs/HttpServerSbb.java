@@ -192,6 +192,17 @@ public final class HttpServerSbb implements Sbb, SleeEventHandler {
         String text = ingress.text() == null ? "" : ingress.text();
         int networkId = resolveNiNetworkId(ingress, auth);
 
+        // Client-supplied correlationId must not steal another subscriber's ussdTx row
+        // (PK = correlationId; classic MO always mints its own id).
+        Optional<VirtualSession> existing = svc().store().get(corr);
+        if (existing.isPresent()) {
+            String bound = existing.get().msisdn() == null ? "" : existing.get().msisdn().trim();
+            if (!bound.isEmpty() && !msisdn.isEmpty() && !bound.equals(msisdn)) {
+                replyNiError(req, format, 409, "correlationId already bound to another msisdn");
+                return "ni-corr-msisdn-conflict";
+            }
+        }
+
         // dialogId == correlationId so MapUssdParent (MAP NI dialog id) can resolve the session.
         VirtualSession session = new VirtualSession(
                 UUID.randomUUID().toString(), corr, UUID.randomUUID().toString(),
@@ -201,7 +212,12 @@ public final class HttpServerSbb implements Sbb, SleeEventHandler {
         session.setPendingText(text);
         session.setDialogAlive(true);
         session.setTenantId(auth.tenantId());
-        svc().store().put(session);
+        try {
+            svc().store().put(session);
+        } catch (IllegalStateException e) {
+            replyNiError(req, format, 409, e.getMessage() == null ? "session conflict" : e.getMessage());
+            return "ni-corr-msisdn-conflict";
+        }
 
         ClassicNiHttpPark park = svc().niHttpPark();
         if (ingress.emptyDialogHandshake()) {
@@ -210,7 +226,7 @@ public final class HttpServerSbb implements Sbb, SleeEventHandler {
             String handshake = svc().wireFacade().encodeNiResponse(
                     corr, "", AsAction.CONTINUE, true, format);
             replyEx(req.getSessionId(), 200, format.contentType(), handshake, setCookie(jsessionId));
-            routeNiPush(corr, msisdn, text, networkId);
+            routeNiPush(corr, msisdn, text, networkId, ingress.notifyOnly());
             if (!svc().config().mapEnabled()) {
                 // No parked HTTP to echo; MAP-disabled lab still routes for side effects.
             }
@@ -219,7 +235,7 @@ public final class HttpServerSbb implements Sbb, SleeEventHandler {
 
         ClassicNiHttpPark.ParkRecord rec = park.park(
                 req.getSessionId(), jsessionId, corr, format, networkId, false);
-        routeNiPush(corr, msisdn, text, networkId);
+        routeNiPush(corr, msisdn, text, networkId, ingress.notifyOnly());
         if (!svc().config().mapEnabled()) {
             park.scheduleLabEcho(corr, text, LAB_ECHO_DELAY_MS);
         } else {
@@ -266,7 +282,7 @@ public final class HttpServerSbb implements Sbb, SleeEventHandler {
         ClassicNiHttpPark.ParkRecord rec = park.park(
                 req.getSessionId(), jsession, corr, prior.format(), prior.networkId(), false);
         String msisdn = svc().store().get(corr).map(VirtualSession::msisdn).orElse("");
-        routeNiPush(corr, msisdn, text, prior.networkId());
+        routeNiPush(corr, msisdn, text, prior.networkId(), ingress.notifyOnly());
         if (!svc().config().mapEnabled()) {
             park.scheduleLabEcho(corr, text, LAB_ECHO_DELAY_MS);
         } else {
@@ -275,10 +291,11 @@ public final class HttpServerSbb implements Sbb, SleeEventHandler {
         return "ni-continue-parked";
     }
 
-    private void routeNiPush(String corr, String msisdn, String text, int networkId) {
+    private void routeNiPush(String corr, String msisdn, String text, int networkId,
+                             boolean notifyOnly) {
         try {
             svc().container().routeEvent(
-                    new NiPushRequestEvent(corr, msisdn, text, networkId, UssdAlphabet.AUTO),
+                    new NiPushRequestEvent(corr, msisdn, text, networkId, UssdAlphabet.AUTO, notifyOnly),
                     svc().container().createActivityContext("http-ni-" + corr));
         } catch (RuntimeException e) {
             // Lab / bootstrap without container — park gate or lab echo still covers reply.

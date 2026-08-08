@@ -12,18 +12,25 @@ import et.restlink.ussdgw.hlr.HlrFaceService;
 
 import io.quarkus.scheduler.Scheduled;
 
+import jakarta.annotation.PostConstruct;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 
 import java.util.List;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
+import org.eclipse.microprofile.config.inject.ConfigProperty;
 
 /**
  * Adaptive-gate ticker + TTL reclaim for ussdTx profiles and pending SRI correlations —
  * NOT gRPC/HTTP response polling.
+ *
+ * <p>Arms automatically on Quarkus boot via {@code @Scheduled} — no admin Start and no
+ * {@code ussd.bridge.enabled} gate on the ticker itself (that flag only chooses BRIDGE vs
+ * hard-fail when a due session expires).
  */
 @ApplicationScoped
 public class BridgeGateScheduler {
@@ -37,10 +44,21 @@ public class BridgeGateScheduler {
     @Inject CdrService cdr;
     @Inject CampaignService campaigns;
 
+    @ConfigProperty(name = "ussd.bridge.gate-tick-ms", defaultValue = "100")
+    long gateTickMsProp;
+
+    private final AtomicLong gateTicks = new AtomicLong();
     private final AtomicLong gateExpired = new AtomicLong();
     private final AtomicLong reclaimCount = new AtomicLong();
     private final AtomicLong sriExpired = new AtomicLong();
     private final AtomicLong hlrProxyExpired = new AtomicLong();
+    private final AtomicBoolean firstTickLogged = new AtomicBoolean();
+
+    @PostConstruct
+    void armOnBoot() {
+        LOG.info("BridgeGateScheduler armed: gate-tick={}ms (Quarkus @Scheduled, ConcurrentExecution.SKIP)",
+                Math.max(1L, gateTickMsProp));
+    }
 
     /**
      * One session must never be able to stall every other parked dialog: the store can throw
@@ -52,6 +70,10 @@ public class BridgeGateScheduler {
     @Scheduled(every = "${ussd.bridge.gate-tick-ms:100}ms",
             concurrentExecution = Scheduled.ConcurrentExecution.SKIP)
     void tickGates() {
+        long n = gateTicks.incrementAndGet();
+        if (firstTickLogged.compareAndSet(false, true)) {
+            LOG.info("BridgeGateScheduler first gate tick (scheduler alive)");
+        }
         List<VirtualSession> due;
         try {
             due = store.awaitingPastDeadline(System.currentTimeMillis());
@@ -68,6 +90,11 @@ public class BridgeGateScheduler {
                 LOG.warn("gate tick failed corr={}: {}",
                         s == null ? null : s.correlationId(), t.toString());
             }
+        }
+        // Quiet heartbeat so Digicom ops can prove the ticker without inventing traffic.
+        if (n > 0 && n % 6000 == 0) {
+            LOG.info("BridgeGateScheduler heartbeat ticks={} expired={} reclaim={}",
+                    n, gateExpired.get(), reclaimCount.get());
         }
     }
 
@@ -104,8 +131,11 @@ public class BridgeGateScheduler {
         hlrProxyExpired.addAndGet(hlrFace.expirePending(now));
     }
 
+    /** Quarkus scheduler invocations of {@link #tickGates} since boot (proof the gate is alive). */
+    public long gateTicks() { return gateTicks.get(); }
     public long gateExpired() { return gateExpired.get(); }
     public long reclaimCount() { return reclaimCount.get(); }
     public long sriExpired() { return sriExpired.get(); }
     public long hlrProxyExpired() { return hlrProxyExpired.get(); }
+    public long configuredGateTickMs() { return Math.max(1L, gateTickMsProp); }
 }

@@ -163,16 +163,17 @@ public final class ClassicDialogXmlCodec {
             String corr = firstNonBlank(attr(root, "localId"), textChild(root, "localId"));
             boolean handshake = boolAttr(root, "emptyDialogHandshake")
                     || "true".equalsIgnoreCase(textChild(root, "emptyDialogHandshake"));
-            String text = firstNonBlank(
-                    extractNamedString(root, "unstructuredSSNotify_Request"),
-                    extractNamedString(root, "unstructuredSSRequest_Request"),
-                    extractNamedString(root, "processUnstructuredSSRequest_Request"),
-                    "");
+            String notifyText = extractNamedString(root, "unstructuredSSNotify_Request");
+            String requestText = extractNamedString(root, "unstructuredSSRequest_Request");
+            String processText = extractNamedString(root, "processUnstructuredSSRequest_Request");
+            // Element present ⇒ notify (classic NI push); request tag alone ⇒ UnstructuredSS-Request.
+            boolean notifyOnly = notifyText != null && requestText == null;
+            String text = firstNonBlank(notifyText, requestText, processText, "");
             String msisdn = extractMsisdn(root);
             Integer networkId = parseInt(firstNonBlank(attr(root, "networkId"),
                     textChild(root, "networkId")));
             return new ClassicNiIngress(msisdn, text == null ? "" : text, corr, handshake,
-                    et.restlink.ussdgw.api.AsHttpWireFormat.XML, networkId);
+                    et.restlink.ussdgw.api.AsHttpWireFormat.XML, networkId, notifyOnly);
         } catch (Exception e) {
             throw new IllegalArgumentException("decode classic NI dialog XML", e);
         }

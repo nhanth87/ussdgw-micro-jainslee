@@ -9,6 +9,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class VirtualSessionStoreTest {
     private MicroSleeContainer container;
@@ -103,6 +104,47 @@ class VirtualSessionStoreTest {
         store.put(s);
         store.remove("corr-rm");
         assertThat(store.get("corr-rm")).isEmpty();
+    }
+
+    @Test
+    void concurrentMsisdnsKeepSeparateProfileRows() {
+        VirtualSession a = new VirtualSession("vs-a", "corr-a", "req-a",
+                "251911230398", 1, "corr-a", "");
+        VirtualSession b = new VirtualSession("vs-b", "corr-b", "req-b",
+                "251911230399", 1, "corr-b", "");
+        a.setMscGt("251971200146");
+        a.setImsi("636010024533522");
+        b.setMscGt("251971200999");
+        b.setImsi("636010024533599");
+        store.put(a);
+        store.put(b);
+
+        assertThat(store.size()).isEqualTo(2);
+        assertThat(store.get("corr-a").orElseThrow().msisdn()).isEqualTo("251911230398");
+        assertThat(store.get("corr-a").orElseThrow().mscGt()).isEqualTo("251971200146");
+        assertThat(store.get("corr-b").orElseThrow().msisdn()).isEqualTo("251911230399");
+        assertThat(store.get("corr-b").orElseThrow().imsi()).isEqualTo("636010024533599");
+        assertThat(store.findAwaitingAsByMsisdn("251911230398", null)).isEmpty();
+    }
+
+    @Test
+    void putRejectsCorrelationReuseAcrossMsisdn() {
+        store.put(new VirtualSession("vs1", "corr-shared", "req-1",
+                "251911230398", 0, "corr-shared", ""));
+        assertThatThrownBy(() -> store.put(new VirtualSession("vs2", "corr-shared", "req-2",
+                "251911230399", 0, "corr-shared", "")))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("already bound to msisdn=251911230398");
+        assertThat(store.get("corr-shared").orElseThrow().msisdn()).isEqualTo("251911230398");
+    }
+
+    @Test
+    void assertSameMsisdnAllowsBlankOrEqual() {
+        VirtualSessionStore.assertSameMsisdn("c", "", "2519");
+        VirtualSessionStore.assertSameMsisdn("c", "2519", "");
+        VirtualSessionStore.assertSameMsisdn("c", "2519", "2519");
+        assertThatThrownBy(() -> VirtualSessionStore.assertSameMsisdn("c", "2519", "2520"))
+                .isInstanceOf(IllegalStateException.class);
     }
 
     private static void set(Object target, String field, Object value) {

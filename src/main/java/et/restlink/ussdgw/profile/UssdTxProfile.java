@@ -173,6 +173,14 @@ public final class UssdTxProfile extends ProfileAbstractCmp {
         set(s("mscGt"), v);
     }
 
+    public String getImsi() {
+        return str(g("imsi"));
+    }
+
+    public void setImsi(String v) {
+        set(s("imsi"), v);
+    }
+
     public String getLocalGt() {
         return str(g("localGt"));
     }

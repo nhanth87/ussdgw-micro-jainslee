@@ -295,6 +295,10 @@ public final class MapUssdParentSbb implements Sbb, SleeEventHandler {
      * Strictly correlated: an SRI-SM Response is matched to the outbound leg that asked for it.
      * With no match there is no session to resolve — the TTL sweep on either registry fails the
      * corresponding saga. Guessing a pending entry here cross-wires subscribers.
+     *
+     * <p>Classic {@code HttpServerSbb.onSRIResult}: store IMSI + {@code LocationInfoWithLMSI},
+     * then open NI USSD dialog toward {@code networkNodeNumber} (MSC) with destReference=IMSI.
+     * Missing MSC → fail-closed (never push toward MSISDN / HLR / self).
      */
     private String onSriResponse(Ss7MapEvent.Service svc) {
         String corr = svc.dialogId();
@@ -306,9 +310,8 @@ public final class MapUssdParentSbb implements Sbb, SleeEventHandler {
         var niOpt = svc().pendingSri().take(corr);
         if (niOpt.isPresent()) {
             var ni = niOpt.get();
-            if (svc.message() instanceof SendRoutingInfoForSMResponse) {
-                SriSbb.handoff(svc(), ni);
-                return "sri-ok";
+            if (svc.message() instanceof SendRoutingInfoForSMResponse rsp) {
+                return applyNiSriResult(ni, rsp);
             }
             svc().cdr().write(ni.correlationId(), CdrPhase.FAILED, ni.msisdn(), null, "SRI_FAIL", null);
             svc().saga().onNiFailed(ni.correlationId(), "SRI_FAIL");
@@ -318,6 +321,87 @@ public final class MapUssdParentSbb implements Sbb, SleeEventHandler {
             return "sri-fail";
         }
         return "sri-no-pending corr=" + corr;
+    }
+
+    /** Routing fields from SRI-SM for NI USSD (classic LocationInfoWithLMSI + IMSI). */
+    record SriNiRouting(String imsi, String mscGt, byte[] lmsi) {}
+
+    static Optional<SriNiRouting> extractSriNiRouting(SendRoutingInfoForSMResponse rsp) {
+        if (rsp == null) {
+            return Optional.empty();
+        }
+        String imsi = null;
+        String msc = null;
+        byte[] lmsi = null;
+        IMSI i = rsp.getIMSI();
+        if (i != null) {
+            imsi = i.getData();
+        }
+        LocationInfoWithLMSI loc = rsp.getLocationInfoWithLMSI();
+        if (loc != null && loc.getNetworkNodeNumber() != null) {
+            msc = loc.getNetworkNodeNumber().getAddress();
+        }
+        if (loc != null && loc.getLMSI() != null) {
+            lmsi = loc.getLMSI().getData();
+        }
+        if (msc == null || msc.isBlank()) {
+            return Optional.empty();
+        }
+        return Optional.of(new SriNiRouting(
+                imsi == null || imsi.isBlank() ? null : imsi.trim(),
+                msc.trim(),
+                lmsi));
+    }
+
+    /**
+     * Persist SRI routing info onto the NI session, then hand off to {@link MapNiPushSbb}.
+     * Package-private for unit tests.
+     */
+    String applyNiSriResult(et.restlink.ussdgw.events.NiPushRequestEvent ni,
+                            SendRoutingInfoForSMResponse rsp) {
+        Optional<SriNiRouting> routing = extractSriNiRouting(rsp);
+        if (routing.isEmpty()) {
+            String imsiHint = "";
+            if (rsp != null && rsp.getIMSI() != null && rsp.getIMSI().getData() != null) {
+                imsiHint = rsp.getIMSI().getData();
+            }
+            svc().cdr().write(ni.correlationId(), CdrPhase.FAILED, ni.msisdn(), null,
+                    "SRI_NO_MSC", "imsi=" + imsiHint);
+            svc().saga().onNiFailed(ni.correlationId(), "SRI_NO_MSC");
+            try {
+                svc().campaigns().onNiDone(ni.correlationId(), false, "SRI_NO_MSC");
+            } catch (Throwable ignored) { }
+            return "sri-no-msc";
+        }
+        SriNiRouting r = routing.get();
+        svc().store().get(ni.correlationId()).ifPresentOrElse(s -> {
+            s.setMscGt(r.mscGt());
+            s.setImsi(r.imsi());
+            s.setLmsi(r.lmsi());
+            svc().store().put(s);
+        }, () -> {
+            // Campaign / access-NI may not have pre-created a VirtualSession — seed one for push.
+            VirtualSession s = new VirtualSession(
+                    UUID.randomUUID().toString(), ni.correlationId(), ni.correlationId(),
+                    ni.msisdn(), ni.networkId(), ni.correlationId(), "");
+            s.setOriginationType(OriginationType.MAP);
+            s.setMscGt(r.mscGt());
+            s.setImsi(r.imsi());
+            s.setLmsi(r.lmsi());
+            s.setLocalGt(MapDialogHelper.localGt(svc().config()));
+            svc().store().put(s);
+        });
+        try {
+            svc().hlrFace().rememberSri(ni.msisdn(), r.imsi(), r.mscGt(), r.lmsi());
+        } catch (Throwable ignored) { }
+        try {
+            if (svc().container() != null) {
+                svc().container().routeEvent(
+                        et.restlink.ussdgw.events.NiPushReadyEvent.fromSri(ni, r.mscGt(), r.imsi()),
+                        svc().container().createActivityContext("ni-push-" + ni.correlationId()));
+            }
+        } catch (Throwable ignored) { }
+        return "sri-ok msc=" + r.mscGt();
     }
 
     private String relayHlrProxy(Ss7MapEvent.Service svc, PendingHlrProxyRegistry.Pending pending) {

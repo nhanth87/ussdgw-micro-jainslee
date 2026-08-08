@@ -51,6 +51,15 @@ public class HlrFaceService {
         };
     }
 
+    /** Cache SRI-SM result from NI push (MSC networkNodeNumber + IMSI + optional LMSI). */
+    public void rememberSri(String msisdn, String imsi, String mscGt, byte[] lmsi) {
+        if (msisdn == null || msisdn.isBlank() || imsi == null || imsi.isBlank()
+                || mscGt == null || mscGt.isBlank()) {
+            return;
+        }
+        locationCache.put(msisdn, imsi, mscGt, lmsi);
+    }
+
     /**
      * Relay an upper SRI-SM Response back to the inbound dialog it belongs to. The correlation must
      * match exactly: an answer for an unknown query is dropped rather than applied to some other

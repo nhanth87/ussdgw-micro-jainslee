@@ -27,6 +27,10 @@ public final class VirtualSession {
     private volatile boolean dialogAlive = true;
     private volatile boolean adaptiveBridgeArm = true;
     private volatile String mscGt;
+    /** IMSI from SRI-SM — MAP NI destReference (land_mobile). */
+    private volatile String imsi;
+    /** Optional LMSI octets from SRI LocationInfoWithLMSI (stored; USSD NI uses MSC+IMSI). */
+    private volatile byte[] lmsi;
     private volatile String localGt = "100";
     private volatile String tenantId;
     private volatile OriginationType originationType = OriginationType.MAP;
@@ -81,6 +85,10 @@ public final class VirtualSession {
     public void setAdaptiveBridgeArm(boolean adaptiveBridgeArm) { this.adaptiveBridgeArm = adaptiveBridgeArm; }
     public String mscGt() { return mscGt; }
     public void setMscGt(String mscGt) { this.mscGt = mscGt; }
+    public String imsi() { return imsi; }
+    public void setImsi(String imsi) { this.imsi = imsi; }
+    public byte[] lmsi() { return lmsi; }
+    public void setLmsi(byte[] lmsi) { this.lmsi = lmsi; }
     public String localGt() { return localGt; }
     public void setLocalGt(String localGt) { this.localGt = localGt; }
     public void setCreatedAtMs(long createdAtMs) { this.createdAtMs = createdAtMs; }

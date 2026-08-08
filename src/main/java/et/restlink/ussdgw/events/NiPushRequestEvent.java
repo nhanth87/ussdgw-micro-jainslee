@@ -7,9 +7,15 @@ public record NiPushRequestEvent(
         String msisdn,
         String text,
         int networkId,
-        et.restlink.ussdgw.api.UssdAlphabet alphabet
+        et.restlink.ussdgw.api.UssdAlphabet alphabet,
+        boolean notifyOnly
 ) implements SleeEvent {
     public NiPushRequestEvent(String correlationId, String msisdn, String text, int networkId) {
-        this(correlationId, msisdn, text, networkId, et.restlink.ussdgw.api.UssdAlphabet.AUTO);
+        this(correlationId, msisdn, text, networkId, et.restlink.ussdgw.api.UssdAlphabet.AUTO, false);
+    }
+
+    public NiPushRequestEvent(String correlationId, String msisdn, String text, int networkId,
+                              et.restlink.ussdgw.api.UssdAlphabet alphabet) {
+        this(correlationId, msisdn, text, networkId, alphabet, false);
     }
 }

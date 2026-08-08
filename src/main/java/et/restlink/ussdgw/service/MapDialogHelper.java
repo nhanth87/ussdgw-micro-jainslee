@@ -72,18 +72,31 @@ public final class MapDialogHelper {
 
     public static void niPush(RaCommandPort ss7, String correlationId,
                               String mscGt, String localGt, String text, int networkId) {
-        niPush(ss7, correlationId, mscGt, localGt, text, networkId, UssdAlphabet.AUTO, 8, 8);
+        niPush(ss7, correlationId, mscGt, localGt, text, networkId, UssdAlphabet.AUTO,
+                false, null, 8, 8);
     }
 
     public static void niPush(RaCommandPort ss7, String correlationId,
                               String mscGt, String localGt, String text, int networkId,
                               UssdAlphabet alphabet) {
-        niPush(ss7, correlationId, mscGt, localGt, text, networkId, alphabet, 8, 8);
+        niPush(ss7, correlationId, mscGt, localGt, text, networkId, alphabet, false, null, 8, 8);
     }
 
     public static void niPush(RaCommandPort ss7, String correlationId,
                               String mscGt, String localGt, String text, int networkId,
                               UssdAlphabet alphabet, int mscSsn, int localSsn) {
+        niPush(ss7, correlationId, mscGt, localGt, text, networkId, alphabet, false, null,
+                mscSsn, localSsn);
+    }
+
+    /**
+     * NI UnstructuredSS-Request/Notify toward SRI {@code networkNodeNumber} (MSC).
+     * {@code imsi} is MAP destReference (land_mobile); {@code notifyOnly} selects Notify vs Request.
+     */
+    public static void niPush(RaCommandPort ss7, String correlationId,
+                              String mscGt, String localGt, String text, int networkId,
+                              UssdAlphabet alphabet, boolean notifyOnly, String imsi,
+                              int mscSsn, int localSsn) {
         if (ss7 == null) {
             LOG.warn("niPush: no ra-jss7");
             return;
@@ -92,7 +105,7 @@ public final class MapDialogHelper {
         Ss7Address local = Ss7Address.of(localGt == null || localGt.isBlank() ? "100" : localGt, localSsn);
         int dcs = SmsTextCodec.chooseCbsDataCoding(text, alphabet);
         ss7.sendCommand(new Ss7Command.MapUnstructuredSsRequest(
-                correlationId, msc, local, text, networkId, false, dcs));
+                correlationId, msc, local, text, networkId, notifyOnly, dcs, imsi));
     }
 
     /** Resolve local GT/SSN from config for NI/SRI. */

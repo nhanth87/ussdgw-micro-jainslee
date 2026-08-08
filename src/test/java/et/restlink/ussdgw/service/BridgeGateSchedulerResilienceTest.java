@@ -47,6 +47,20 @@ class BridgeGateSchedulerResilienceTest {
     }
 
     @Test
+    void gateTicksIncrementEvenWhenNoSessionsAreDue() {
+        BridgeGateScheduler scheduler = new BridgeGateScheduler();
+        set(scheduler, "store", store);
+        set(scheduler, "bridge", new VirtualSessionBridge());
+        set(scheduler, "gateTickMsProp", 100L);
+
+        assertThat(scheduler.gateTicks()).isZero();
+        scheduler.tickGates();
+        scheduler.tickGates();
+        assertThat(scheduler.gateTicks()).isEqualTo(2);
+        assertThat(scheduler.gateExpired()).isZero();
+    }
+
+    @Test
     void oneThrowingSessionDoesNotStarveTheRemainingGates() {
         long past = System.currentTimeMillis() - 1000;
         seed("aaa-poison", past);          // sorts first: earliest deadline, lowest corr
