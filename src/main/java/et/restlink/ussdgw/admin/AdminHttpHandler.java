@@ -769,7 +769,8 @@ public class AdminHttpHandler {
                 "recover " + bridgeRecover + " · zombie " + bridgeZombie
                         + (config.bridgeEnabled() ? " · on" : " · off")));
         cards.append(metricCard("Gate", String.valueOf(gateExpired),
-                "expired · reclaim " + reclaim + " · ceiling "
+                "expired · ticks " + (bridgeGate != null ? bridgeGate.gateTicks() : 0L)
+                        + " · reclaim " + reclaim + " · ceiling "
                         + config.asyncGateTimeoutMs() + "ms"));
         cards.append(metricCard("AS / Saga", String.valueOf(asRejects),
                 "circuit rejects · NI fail " + niFail + " · pull fail " + pullFail));
@@ -807,9 +808,11 @@ public class AdminHttpHandler {
         for (String k : new String[]{
                 "ss7.live", "ss7.detail", "smpp.detail", "http.detail", "grpc.detail",
                 "diameter.live", "diameter.detail", "sip.live", "sip.detail",
-                "sessions", "bridge.count", "adaptive.ewma"}) {
+                "sessions", "bridge.count", "bridge.enabled", "scheduler.gateTicks", "adaptive.ewma"}) {
             Object v = "sessions".equals(k) ? sessions
                     : "bridge.count".equals(k) ? bridgeCount
+                    : "bridge.enabled".equals(k) ? config.bridgeEnabled()
+                    : "scheduler.gateTicks".equals(k) ? (bridgeGate != null ? bridgeGate.gateTicks() : 0L)
                     : "adaptive.ewma".equals(k) ? ewma
                     : m.get(k);
             if (v != null) {
@@ -833,12 +836,18 @@ public class AdminHttpHandler {
     public HttpReply statusJson() {
         Map<String, Object> m = new LinkedHashMap<>(monitorFeedMap());
         m.put("sessions", store.size());
+        m.put("bridge.enabled", config.bridgeEnabled());
         m.put("bridge.count", bridge.bridgeCount());
         m.put("bridge.recover", bridge.recoverCount());
         m.put("bridge.zombieDrop", bridge.zombieDrop());
+        m.put("bridge.asyncGateMs", config.asyncGateTimeoutMs());
+        m.put("adaptive.ewma", adaptive.snapshot());
+        m.put("adaptive.floorMs", AdaptiveTimeout.FLOOR_MS);
         if (bridgeGate != null) {
+            m.put("scheduler.gateTicks", bridgeGate.gateTicks());
             m.put("scheduler.gateExpired", bridgeGate.gateExpired());
             m.put("scheduler.reclaimCount", bridgeGate.reclaimCount());
+            m.put("scheduler.gateTickMs", bridgeGate.configuredGateTickMs());
         }
         if (asPull != null) {
             m.put("as.circuitOpenRejects", asPull.openRejects());
@@ -852,38 +861,150 @@ public class AdminHttpHandler {
 
     private Map<String, String> cdrPageVars(Map<String, String> query, AdminAuthService.Principal who) {
         String msisdn = query == null ? "" : query.getOrDefault("msisdn", "");
+        String corr = query == null ? "" : query.getOrDefault("corr", "");
         int limit = CdrService.clampLimit(query == null ? null : query.get("limit"));
+        String rows = cdrRowsHtml(msisdn, corr, limit, who);
         Map<String, String> m = new LinkedHashMap<>();
-        m.put("{{ROWS}}", cdrRowsHtml(msisdn, limit, who));
+        m.put("{{ROWS}}", rows);
         m.put("{{MSISDN}}", esc(msisdn == null ? "" : msisdn));
+        m.put("{{CORR}}", esc(corr == null ? "" : corr));
         m.put("{{LIMIT}}", Integer.toString(limit));
+        m.put("{{ROW_COUNT}}", Integer.toString(countCdrRowPairs(rows)));
         return m;
     }
 
     private HttpReply cdrRowsReply(Map<String, String> query, AdminAuthService.Principal who) {
         String msisdn = query == null ? null : query.get("msisdn");
+        String corr = query == null ? null : query.get("corr");
         int limit = CdrService.clampLimit(query == null ? null : query.get("limit"));
-        return HttpReply.html(cdrRowsHtml(msisdn, limit, who))
+        return HttpReply.html(cdrRowsHtml(msisdn, corr, limit, who))
                 .withHeader("Vary", "HX-Request");
     }
 
-    private String cdrRowsHtml(String msisdn, int limit, AdminAuthService.Principal who) {
+    /**
+     * CDR ledger rows for HTMX partial + shell seed. Columns mirror classic CDR IA
+     * (when / corr / bridge phase / MSISDN / service code / result) plus greenfield
+     * gate/EWMA in the expand panel.
+     */
+    private String cdrRowsHtml(String msisdn, String corr, int limit, AdminAuthService.Principal who) {
         String scope = who != null && who.isTenantScoped() ? who.tenantId() : null;
         StringBuilder sb = new StringBuilder();
-        var rows = cdr.listRecords(limit, scope, msisdn);
+        var rows = cdr.listRecords(limit, scope, msisdn, corr);
         if (rows.isEmpty()) {
-            sb.append("<tr><td colspan=\"6\" class=\"px-3 py-4 text-ink-mute italic\">No CDR rows.</td></tr>");
+            sb.append("<tr class=\"cdr-empty\"><td colspan=\"7\" class=\"px-3 py-6 text-ink-mute\">")
+                    .append("No CDR rows for this filter. Try MSISDN, correlation id, or raise limit.")
+                    .append("</td></tr>");
             return sb.toString();
         }
+        int i = 0;
         for (CdrRecord r : rows) {
-            sb.append("<tr><td class=\"px-3 py-2\">").append(esc(String.valueOf(r.createdAt))).append("</td>")
-                    .append("<td class=\"px-3 py-2\">").append(esc(r.correlationId)).append("</td>")
-                    .append("<td class=\"px-3 py-2\">").append(esc(r.phase)).append("</td>")
-                    .append("<td class=\"px-3 py-2\">").append(esc(r.msisdn)).append("</td>")
-                    .append("<td class=\"px-3 py-2\">").append(esc(r.shortCode)).append("</td>")
-                    .append("<td class=\"px-3 py-2\">").append(esc(r.status)).append("</td></tr>");
+            String spine = cdrSpineClass(r.phase);
+            String statusChip = cdrStatusChipClass(r.phase, r.status);
+            String rowId = "cdr-" + (r.id != null ? r.id : i);
+            sb.append("<tr class=\"cdr-ledger-row\" data-cdr-row=\"")
+                    .append(esc(rowId)).append("\">");
+            sb.append("<td class=\"cdr-when px-3 py-2.5\">")
+                    .append("<span class=\"cdr-spine ").append(spine).append("\" aria-hidden=\"true\"></span>")
+                    .append("<button type=\"button\" class=\"cdr-open\" data-cdr-open=\"")
+                    .append(esc(rowId)).append("\" aria-expanded=\"false\" title=\"Expand record\">")
+                    .append("<time class=\"cdr-time\">").append(esc(formatCdrWhen(r.createdAt))).append("</time>")
+                    .append("</button></td>");
+            sb.append("<td class=\"px-3 py-2.5\"><code class=\"cdr-corr\" title=\"")
+                    .append(esc(r.correlationId)).append("\">")
+                    .append(esc(shortCorr(r.correlationId))).append("</code></td>");
+            sb.append("<td class=\"px-3 py-2.5\"><span class=\"cdr-phase-chip ").append(spine).append("\">")
+                    .append(esc(nullToDash(r.phase))).append("</span></td>");
+            sb.append("<td class=\"px-3 py-2.5 cdr-msisdn\">").append(esc(nullToDash(r.msisdn))).append("</td>");
+            sb.append("<td class=\"px-3 py-2.5\">").append(esc(nullToDash(r.shortCode))).append("</td>");
+            sb.append("<td class=\"px-3 py-2.5\"><span class=\"cdr-status-chip ").append(statusChip).append("\">")
+                    .append(esc(nullToDash(r.status))).append("</span></td>");
+            sb.append("<td class=\"px-3 py-2.5 cdr-origin\">")
+                    .append(esc(nullToDash(r.originationType))).append("</td>");
+            sb.append("</tr>");
+
+            // Expand: greenfield fields + honest stubs for classic-only columns.
+            sb.append("<tr class=\"cdr-detail hidden\" data-cdr-detail=\"").append(esc(rowId)).append("\">")
+                    .append("<td colspan=\"7\" class=\"px-3 py-3\">")
+                    .append("<div class=\"cdr-detail-panel ink-panel\">");
+            sb.append("<dl class=\"cdr-detail-grid\">");
+            cdrDetailItem(sb, "Correlation", r.correlationId);
+            cdrDetailItem(sb, "Phase (bridge)", r.phase);
+            cdrDetailItem(sb, "Status / result", r.status);
+            cdrDetailItem(sb, "MSISDN", r.msisdn);
+            cdrDetailItem(sb, "Short code", r.shortCode);
+            cdrDetailItem(sb, "Origination", r.originationType);
+            cdrDetailItem(sb, "Network id", r.networkId == null ? null : Integer.toString(r.networkId));
+            cdrDetailItem(sb, "Tenant", r.tenantId);
+            cdrDetailItem(sb, "Gate ms", r.gateMs == null ? null : Long.toString(r.gateMs));
+            cdrDetailItem(sb, "Observed EWMA ms", r.observedEwmaMs == null ? null : Long.toString(r.observedEwmaMs));
+            cdrDetailItem(sb, "Detail", r.detail);
+            cdrDetailItem(sb, "Recorded at", r.createdAt == null ? null : r.createdAt.toString());
+            sb.append("</dl>");
+            // TODO(cdr-parity): classic CdrLineFormatter also emitted local/remote SCCP
+            // (PC/SSN/RI/GTI/GT), orig/dest AddressString, dialog ids, duration, USSD string,
+            // eri IMSI/VLR — not persisted on ussd_cdr yet.
+            sb.append("<p class=\"cdr-gap-note\">Classic fields not in store: dialog ids · duration · ")
+                    .append("USSD string · SCCP GT · IMSI/VLR · RecordStatus enum</p>");
+            sb.append("</div></td></tr>");
+            i++;
         }
         return sb.toString();
+    }
+
+    private static void cdrDetailItem(StringBuilder sb, String label, String value) {
+        sb.append("<div><dt>").append(esc(label)).append("</dt><dd>")
+                .append(esc(nullToDash(value))).append("</dd></div>");
+    }
+
+    private static String formatCdrWhen(java.time.Instant at) {
+        if (at == null) return "—";
+        return at.toString().replace('T', ' ').replace("Z", " Z");
+    }
+
+    private static String shortCorr(String corr) {
+        if (corr == null || corr.isBlank()) return "—";
+        if (corr.length() <= 14) return corr;
+        return corr.substring(0, 8) + "…" + corr.substring(corr.length() - 4);
+    }
+
+    private static String nullToDash(String s) {
+        return s == null || s.isBlank() ? "—" : s;
+    }
+
+    private static String cdrSpineClass(String phase) {
+        if (phase == null) return "cdr-spine--unknown";
+        return switch (phase) {
+            case "S1_ACTIVE" -> "cdr-spine--s1";
+            case "S1_RELEASED" -> "cdr-spine--s1r";
+            case "S2_PUSH" -> "cdr-spine--s2";
+            case "COMPLETED" -> "cdr-spine--ok";
+            case "FAILED" -> "cdr-spine--fail";
+            default -> "cdr-spine--unknown";
+        };
+    }
+
+    private static String cdrStatusChipClass(String phase, String status) {
+        if ("FAILED".equals(phase) || (status != null && status.toUpperCase().contains("FAIL"))) {
+            return "cdr-status--fail";
+        }
+        if ("COMPLETED".equals(phase) || "SUCCESS".equalsIgnoreCase(status)) {
+            return "cdr-status--ok";
+        }
+        return "cdr-status--live";
+    }
+
+    /** Count summary rows (not expand rows) for the seeded {{ROW_COUNT}} badge. */
+    private static int countCdrRowPairs(String rowsHtml) {
+        if (rowsHtml == null || rowsHtml.contains("cdr-empty")) return 0;
+        int n = 0;
+        int from = 0;
+        while (true) {
+            int i = rowsHtml.indexOf("cdr-ledger-row", from);
+            if (i < 0) break;
+            n++;
+            from = i + 14;
+        }
+        return n;
     }
 
     private HttpReply serveFile(String relative) {

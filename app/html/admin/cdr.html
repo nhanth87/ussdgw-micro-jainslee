@@ -44,46 +44,73 @@
       <div class="flex items-center gap-3">
         <span class="h-8 w-1 rounded-full bg-signal" aria-hidden="true"></span>
         <h1 class="text-lg font-semibold text-slate-100">CDR</h1>
-        </div>
+      </div>
       <nav class="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-ink-mute">{{NAV_LINKS}}</nav>
     </div>
   </header>
   <main class="mx-auto max-w-6xl px-4 py-8">
     {{NOTICE}}
-    <p class="text-xs uppercase tracking-[0.25em] text-signal">CDR · live filter</p>
+
+    <p class="text-xs uppercase tracking-[0.25em] text-signal">CDR · session ledger</p>
     <div class="ops-section-indent">
-      <div class="mb-2 flex flex-wrap items-end justify-between gap-3">
+      <div class="mb-4 flex flex-wrap items-end justify-between gap-3">
         <div>
           <h2 class="mt-1 text-xl font-semibold text-slate-50">Call detail records</h2>
-          <p class="mt-1 mb-2 text-sm text-ink-mute">Optional MSISDN filter (exact match). Shows latest
-            <span class="font-mono text-signal">{{LIMIT}}</span> rows (max 100) — Search swaps the table via
-            <code class="font-mono text-slate-300">/admin/cdr/partial</code>.</p>
+          <p class="mt-1 max-w-2xl text-sm text-ink-mute">
+            Find a subscriber leg by MSISDN or bridge correlation, then open the row for gate/EWMA and detail.
+            Spine color tracks bridge phase (S1 → S2 → complete/fail) — classic dialog correlation workflow.
+          </p>
         </div>
-        <span id="cdr-ind" class="htmx-indicator text-xs font-mono text-ink-mute">filtering…</span>
+        <div class="flex flex-wrap items-center gap-2 text-xs font-mono text-ink-mute">
+          <span class="cdr-count-badge" title="Rows in current filter">{{ROW_COUNT}} shown</span>
+          <span id="cdr-ind" class="htmx-indicator">filtering…</span>
+        </div>
       </div>
-      <form method="get" action="/admin/cdr"
-            class="filter-bar mb-6 flex flex-wrap items-end gap-3"
-            hx-get="/admin/cdr/partial"
-            hx-target="#cdr-rows"
-            hx-swap="innerHTML"
-            hx-indicator="#cdr-ind"
-            hx-push-url="true">
-        <div>
-          <label class="block text-xs uppercase tracking-wider text-ink-mute">MSISDN</label>
-          <input name="msisdn" value="{{MSISDN}}" placeholder="Filter…"
-                 class="mt-1 rounded-md border border-ink-line bg-ink-panel px-3 py-2 text-sm text-slate-100 focus:border-signal focus:outline-none focus:ring-1 focus:ring-signal/40"/>
-        </div>
-        <div>
-          <label class="block text-xs uppercase tracking-wider text-ink-mute">Limit</label>
-          <input name="limit" value="{{LIMIT}}" type="number" min="1" max="100"
-                 class="mt-1 w-24 rounded-md border border-ink-line bg-ink-panel px-3 py-2 text-sm text-slate-100 focus:border-signal focus:outline-none focus:ring-1 focus:ring-signal/40"/>
-        </div>
-        <button type="submit"
-                class="rounded-md bg-signal px-4 py-2 text-sm font-semibold text-ink hover:bg-signal-dim">
-          Search
-        </button>
-      </form>
-      <div class="table-wrap overflow-x-auto rounded-lg border border-ink-line">
+
+      <section class="form-card cdr-filter-card mb-6 rounded-lg border border-ink-line bg-ink-panel/80 p-5">
+        <h3 class="text-sm font-semibold text-slate-100">Filter ledger</h3>
+        <p class="mt-1 mb-4 text-xs text-ink-mute">
+          Exact MSISDN and/or correlation id. Limit max
+          <span class="font-mono text-signal">100</span>. Search swaps the table via
+          <code class="font-mono text-slate-300">/admin/cdr/partial</code>.
+        </p>
+        <form method="get" action="/admin/cdr"
+              class="filter-bar flex flex-wrap items-end gap-3"
+              hx-get="/admin/cdr/partial"
+              hx-target="#cdr-rows"
+              hx-swap="innerHTML"
+              hx-indicator="#cdr-ind"
+              hx-push-url="true">
+          <div class="min-w-[10rem] flex-1">
+            <label class="block text-xs uppercase tracking-wider text-ink-mute" for="cdr-msisdn">MSISDN</label>
+            <input id="cdr-msisdn" name="msisdn" value="{{MSISDN}}" placeholder="2519…" autocomplete="off"
+                   class="mt-1 w-full rounded-md border border-ink-line bg-ink px-3 py-2 font-mono text-sm text-slate-100 focus:border-signal focus:outline-none focus:ring-1 focus:ring-signal/40"/>
+          </div>
+          <div class="min-w-[12rem] flex-[1.4]">
+            <label class="block text-xs uppercase tracking-wider text-ink-mute" for="cdr-corr">Correlation</label>
+            <input id="cdr-corr" name="corr" value="{{CORR}}" placeholder="bridge / session id" autocomplete="off"
+                   class="mt-1 w-full rounded-md border border-ink-line bg-ink px-3 py-2 font-mono text-sm text-slate-100 focus:border-signal focus:outline-none focus:ring-1 focus:ring-signal/40"/>
+          </div>
+          <div>
+            <label class="block text-xs uppercase tracking-wider text-ink-mute" for="cdr-limit">Limit</label>
+            <input id="cdr-limit" name="limit" value="{{LIMIT}}" type="number" min="1" max="100"
+                   class="mt-1 w-24 rounded-md border border-ink-line bg-ink px-3 py-2 font-mono text-sm text-slate-100 focus:border-signal focus:outline-none focus:ring-1 focus:ring-signal/40"/>
+          </div>
+          <button type="submit"
+                  class="rounded-md bg-signal px-4 py-2 text-sm font-semibold text-ink hover:bg-signal-dim">
+            Search
+          </button>
+        </form>
+        <ul class="cdr-legend mt-4" aria-label="Phase spine legend">
+          <li><span class="cdr-spine cdr-spine--s1" aria-hidden="true"></span> S1 active</li>
+          <li><span class="cdr-spine cdr-spine--s1r" aria-hidden="true"></span> S1 released</li>
+          <li><span class="cdr-spine cdr-spine--s2" aria-hidden="true"></span> S2 push</li>
+          <li><span class="cdr-spine cdr-spine--ok" aria-hidden="true"></span> Completed</li>
+          <li><span class="cdr-spine cdr-spine--fail" aria-hidden="true"></span> Failed</li>
+        </ul>
+      </section>
+
+      <div class="table-wrap cdr-ledger overflow-x-auto rounded-lg border border-ink-line bg-ink-panel/40">
         <table class="w-full text-left text-sm">
           <thead class="bg-ink-panel text-xs uppercase tracking-wider text-ink-mute">
             <tr>
@@ -93,13 +120,42 @@
               <th class="px-3 py-2.5 font-medium">MSISDN</th>
               <th class="px-3 py-2.5 font-medium">Short code</th>
               <th class="px-3 py-2.5 font-medium">Status</th>
+              <th class="px-3 py-2.5 font-medium">Origin</th>
             </tr>
           </thead>
           <tbody id="cdr-rows"
-                 class="hx-table-live divide-y divide-ink-line font-mono text-xs [&_td]:px-3 [&_td]:py-2">{{ROWS}}</tbody>
+                 class="hx-table-live divide-y divide-ink-line font-mono text-xs [&_td]:align-middle">{{ROWS}}</tbody>
         </table>
       </div>
+      <p class="mt-3 text-xs text-ink-mute">
+        Click a timestamp to expand gate / EWMA / detail. TENANT scope hides other tenants’ rows.
+      </p>
     </div>
   </main>
+  <script>
+    (function () {
+      var body = document.getElementById('cdr-rows');
+      if (!body) return;
+      function refreshCount() {
+        var n = body.querySelectorAll('.cdr-ledger-row').length;
+        var badge = document.querySelector('.cdr-count-badge');
+        if (badge) badge.textContent = n + ' shown';
+      }
+      body.addEventListener('click', function (e) {
+        var btn = e.target.closest('[data-cdr-open]');
+        if (!btn || !body.contains(btn)) return;
+        var id = btn.getAttribute('data-cdr-open');
+        var detail = body.querySelector('[data-cdr-detail="' + id + '"]');
+        if (!detail) return;
+        var open = detail.classList.toggle('hidden') === false;
+        btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+        var row = btn.closest('tr');
+        if (row) row.classList.toggle('cdr-ledger-row--open', open);
+      });
+      document.body.addEventListener('htmx:afterSwap', function (e) {
+        if (e.detail && e.detail.target === body) refreshCount();
+      });
+    })();
+  </script>
 </body>
 </html>

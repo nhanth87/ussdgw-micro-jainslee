@@ -109,30 +109,39 @@ public class CdrService {
      */
     @Transactional
     public List<CdrEntity> list(int limit, String tenantId, String msisdn) {
+        return list(limit, tenantId, msisdn, null);
+    }
+
+    /**
+     * Admin list with optional tenant, MSISDN, and correlationId filters (exact match after trim).
+     * Correlation filter matches classic bridge CDR workflow (S1/S2 legs share one id).
+     */
+    @Transactional
+    public List<CdrEntity> list(int limit, String tenantId, String msisdn, String correlationId) {
         int lim = Math.min(Math.max(limit, 1), MAX_LIMIT);
         String tid = tenantId == null || tenantId.isBlank() ? null : tenantId.trim();
         String msisdnFilter = normalizeMsisdnFilter(msisdn);
-        TypedQuery<CdrEntity> q;
-        if (tid != null && msisdnFilter != null) {
-            q = em.createQuery(
-                    "SELECT c FROM CdrEntity c WHERE c.tenantId = :tid AND c.msisdn = :m "
-                            + "ORDER BY c.recordedAt DESC",
-                    CdrEntity.class);
+        String corrFilter = normalizeCorrFilter(correlationId);
+        StringBuilder jpql = new StringBuilder("SELECT c FROM CdrEntity c WHERE 1=1");
+        if (tid != null) {
+            jpql.append(" AND c.tenantId = :tid");
+        }
+        if (msisdnFilter != null) {
+            jpql.append(" AND c.msisdn = :m");
+        }
+        if (corrFilter != null) {
+            jpql.append(" AND c.correlationId = :corr");
+        }
+        jpql.append(" ORDER BY c.recordedAt DESC");
+        TypedQuery<CdrEntity> q = em.createQuery(jpql.toString(), CdrEntity.class);
+        if (tid != null) {
             q.setParameter("tid", tid);
+        }
+        if (msisdnFilter != null) {
             q.setParameter("m", msisdnFilter);
-        } else if (tid != null) {
-            q = em.createQuery(
-                    "SELECT c FROM CdrEntity c WHERE c.tenantId = :tid ORDER BY c.recordedAt DESC",
-                    CdrEntity.class);
-            q.setParameter("tid", tid);
-        } else if (msisdnFilter != null) {
-            q = em.createQuery(
-                    "SELECT c FROM CdrEntity c WHERE c.msisdn = :m ORDER BY c.recordedAt DESC",
-                    CdrEntity.class);
-            q.setParameter("m", msisdnFilter);
-        } else {
-            q = em.createQuery(
-                    "SELECT c FROM CdrEntity c ORDER BY c.recordedAt DESC", CdrEntity.class);
+        }
+        if (corrFilter != null) {
+            q.setParameter("corr", corrFilter);
         }
         q.setMaxResults(lim);
         return q.getResultList();
@@ -140,15 +149,19 @@ public class CdrService {
 
     /** Backward-compatible view for admin HTML (phase/status fields). */
     public List<CdrRecord> listRecords(int limit) {
-        return listRecords(limit, null, null);
+        return listRecords(limit, null, null, null);
     }
 
     public List<CdrRecord> listRecords(int limit, String tenantId) {
-        return listRecords(limit, tenantId, null);
+        return listRecords(limit, tenantId, null, null);
     }
 
     public List<CdrRecord> listRecords(int limit, String tenantId, String msisdn) {
-        return list(limit, tenantId, msisdn).stream().map(CdrRecord::fromEntity).toList();
+        return listRecords(limit, tenantId, msisdn, null);
+    }
+
+    public List<CdrRecord> listRecords(int limit, String tenantId, String msisdn, String correlationId) {
+        return list(limit, tenantId, msisdn, correlationId).stream().map(CdrRecord::fromEntity).toList();
     }
 
     /** Clamp limit for admin UI; blank/invalid → default. */
@@ -172,6 +185,14 @@ public class CdrService {
             return null;
         }
         String t = msisdn.trim();
+        return t.isEmpty() ? null : t;
+    }
+
+    static String normalizeCorrFilter(String correlationId) {
+        if (correlationId == null) {
+            return null;
+        }
+        String t = correlationId.trim();
         return t.isEmpty() ? null : t;
     }
 
