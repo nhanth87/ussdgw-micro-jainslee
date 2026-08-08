@@ -207,7 +207,8 @@ Keep Digicom carrier seeds on private digicom-et main.
 Public nhanth87 main stays lab-only; this branch is main plus Digicom SS7/props overlay.
 EOF
 )"
-    git commit -m "$overlay_msg"
+    # Machine-enforced authorship: Tran Nhan / nhanth87 only (no AI trailers).
+    git -c user.name='Tran Nhan' -c user.email='nhanth87@gmail.com' commit -m "$overlay_msg"
   fi
 
   info "push ${DIGICOM_BRANCH} → ${DIGICOM_REMOTE}/${DIGICOM_REMOTE_BRANCH}"
