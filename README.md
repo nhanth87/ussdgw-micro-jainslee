@@ -1,4 +1,6 @@
-# ussdgw-jainslee
+# ussdgw-micro-jainslee
+
+![Java 25](https://img.shields.io/badge/Java-25-orange) ![License](https://img.shields.io/badge/license-Dual_(GPLv3_|_Commercial)-blueviolet)
 
 RestLink greenfield USSD gateway (Quarkus + micro-jainslee + ra-jss7). **Java 25.**
 
@@ -35,7 +37,7 @@ Admin: `http://127.0.0.1:8088/admin/login` (form login), or for automation
 `curl -H 'X-USSD-Admin-Key: <ussd.admin.api-key>' http://127.0.0.1:8088/admin/status.json`.
 `?key=` is no longer accepted — it leaks a full-ADMIN credential into access logs and history.
 
-**Digicom lab after this hardening:** keep `ussd.lab.allow-default-secrets=true` in server
+**Lab after secret hardening:** keep `ussd.lab.allow-default-secrets=true` in local
 `dist/configs/application.properties`, **or** rotate `ussd.admin.session-hmac-secret` /
 `ussd.admin.api-key` before the next boot — otherwise startup fails closed. Checklist:
 [docs/prod-release-path.md](docs/prod-release-path.md).
@@ -45,7 +47,7 @@ AS callback: `POST /as/callback`
 
 ## Database (H2 lab / PostgreSQL prod)
 
-Same Digicom pattern as OTA. Default lab uses **file H2** under `dist/data/` (`MODE=PostgreSQL`). Both JDBC drivers ship in the fast-jar.
+Same H2-lab / PostgreSQL-prod pattern as OTA. Default lab uses **file H2** under `dist/data/` (`MODE=PostgreSQL`). Both JDBC drivers ship in the fast-jar.
 
 **Postgres** — edit `dist/configs/application.properties` (replace H2 block) or set env:
 
@@ -67,204 +69,52 @@ Never `jdbc:h2:mem:` for shipped dist. Schema: Flyway `V1__ussdgw_baseline.sql` 
 
 See `docs/as-contract/` and `AGENTS.md`.
 
-## Digicom lab (test server)
+## Lab SS7 (public tree)
 
-Host: **`digicom-nb` / `100.110.205.176`**  
-APP_HOME: `/home/app/ota-push-services/ussdgw-micro-jainslee/`  
-Peers: as-node `:8090`; optional jSS7 lab sim SCTP **8014→GW 8013** (disable when on carrier Balance Plus).
+Public GitHub **`nhanth87/ussdgw-micro-jainslee`** ships **lab/test SS7 only**:
+[`build/ss7-lab.json`](build/ss7-lab.json) → `dist/configs/ss7-lab.json` (loopback **8013↔8014**).
 
-### SS7 carrier — Balance Plus (example)
+**Never** commit Digicom-ET / live carrier topology (peer IPs, SPC/GT, listen **2011/2019**, `ss7-digicom-balance.json`, Digicom `application-*.properties`) to **nhanth87**. Those live on the **Digicom host** (operator SoT) and optionally on private **`digicom-et/ussdgw-micro-jainslee`** (`private/digicom-carrier-seeds`). See [`AGENTS.md`](AGENTS.md) and [`docs/agents/ss7-lab-pair.md`](docs/agents/ss7-lab-pair.md).
 
-Old ussdgw lived on **`172.16.144.167`**. Micro-jainslee carrier face is **`172.16.144.163`** (eth1). Seed: [`build/ss7-digicom-balance.json`](build/ss7-digicom-balance.json) → server `configs/ss7-digicom-balance.json`.
-
-| Ours (SCP / Digicom) | Peer (Balance Plus) |
-|----------------------|---------------------|
-| IP **172.16.144.163** · SPC **1470** · GT **251971200490** | |
-| **IPSP server** · RC **12** · MAP SSN **8** (+ HLR face **6**) | |
-| SCTP server **:2011** ← | **10.177.55.241:2501** SPC **1404** (client) |
-| SCTP server **:2019** ← | **10.177.54.241:2502** SPC **1403** (client) |
-
-Two separate M3UA AS (one link each) — not one AS with two links:
-
-```json
-{
-  "sctp": {
-    "links": [
-      {
-        "name": "L1-BP-1404",
-        "type": "server",
-        "channel": "sctp",
-        "local": "172.16.144.163:2011",
-        "peer": "10.177.55.241:2501",
-        "localSecondary": []
-      },
-      {
-        "name": "L2-BP-1403",
-        "type": "server",
-        "channel": "sctp",
-        "local": "172.16.144.163:2019",
-        "peer": "10.177.54.241:2502",
-        "localSecondary": []
-      }
-    ]
-  },
-  "m3ua": {
-    "as": [
-      {
-        "name": "AS-BP-1404",
-        "mode": "loadshare",
-        "functionality": "ipsp",
-        "ipsp": "server",
-        "exchangeType": "DE",
-        "routingContext": 12,
-        "links": ["L1-BP-1404"]
-      },
-      {
-        "name": "AS-BP-1403",
-        "mode": "loadshare",
-        "functionality": "ipsp",
-        "ipsp": "server",
-        "exchangeType": "DE",
-        "routingContext": 12,
-        "links": ["L2-BP-1403"]
-      }
-    ],
-    "routes": [
-      { "to": { "dpc": 1404, "opc": 1470 }, "via": "AS-BP-1404" },
-      { "to": { "dpc": 1403, "opc": 1470 }, "via": "AS-BP-1403" }
-    ]
-  }
-}
-```
-
-Server props (do **not** clobber the rest of Digicom `application.properties`):
-
-```properties
-ussd.map.enabled=true
-ussd.map.auto-apply-on-boot=true
-ussd.map.config-file=configs/ss7-digicom-balance.json
-ussd.map.ussd-gt=251971200490
-ussd.map.ussd-ssn=8
-ussd.map.hlr-ssn=6
-```
-
-```bash
-# carrier face — stop lab MAP sim
-sudo systemctl stop ussdgw-ss7sim && sudo systemctl disable ussdgw-ss7sim
-# after editing configs/ss7-digicom-balance.json
-sudo systemctl restart ussdgw
-ss -ln --sctp   # expect LISTEN on .163:2011 and :2019
-curl -sS -H 'X-USSD-Admin-Key: ussd-admin' http://127.0.0.1:8088/admin/ss7/status
-# LIVE proof (2026-08-07): ss7.live after ASPAC RC12 — build/pcap/m3ua-aspac-rc12-20260807-135839.pcap
-```
-
-Lab loopback pair remains [`build/ss7-lab.json`](build/ss7-lab.json) / [`docs/agents/ss7-lab-pair.md`](docs/agents/ss7-lab-pair.md). Carrier RC12 success pcap: `build/pcap/m3ua-aspac-rc12-20260807-135839.pcap`.
-
-### Admin
+### Admin (local after `./run.sh`)
 
 | | |
 |--|--|
-| URL (nginx) | http://100.110.205.176/admin |
-| URL (direct) | http://100.110.205.176:8088/admin/login |
+| URL | http://127.0.0.1:8088/admin/login |
 | Username | `admin` |
 | Password | `ussd-admin` (lab first-run; keep `ussd.lab.allow-default-secrets=true`) |
 | API key | `ussd-admin` via header **`X-USSD-Admin-Key`** only (`?key=` rejected) |
-| Public NI base | `ussd.admin.public-base-url=http://100.110.205.176:8088` (never advertise `0.0.0.0`) |
-| Monitor feed | `/admin/monitor-feed` + dashboard strip (LinkStatusService + push URLs) |
-| Campaigns | TENANT `/admin/my-campaigns` create/submit; ADMIN `/admin/campaigns` approve |
-| App users | `/admin/app-users` — API keys for NI (portal TENANT login stays `username===tenantId`) |
 
-### systemd (start / stop)
+### systemd (lab units)
 
-Units live in [`build/systemd/`](build/systemd/) — install once:
+Units in [`build/systemd/`](build/systemd/) — install with [`build/systemd/install-lab-units.sh`](build/systemd/install-lab-units.sh).
 
-```bash
-ssh digicom-nb
-cd /home/app/ota-push-services/ussdgw-micro-jainslee
-sudo cp tools/systemd/*.service /etc/systemd/system/
-sudo systemctl daemon-reload
-sudo systemctl enable --now ussdgw-as-node ussdgw
-# ussdgw-ss7sim: lab MAP peer only — disable when using Balance Plus carrier JSON
-# sudo systemctl enable --now ussdgw-ss7sim
-sudo systemctl status ussdgw ussdgw-as-node --no-pager
-```
+**Never** overwrite live operator `configs/application.properties` on a prod-bound host. Re-package with `db-kind=postgresql` when shipping PG; rsync jars/`lib`/`quarkus`/`app/html` only.
 
-```bash
-sudo systemctl restart ussdgw          # GW only
-sudo systemctl restart ussdgw-as-node  # AS pull menus :8090
-# sudo systemctl restart ussdgw-ss7sim   # lab MAP peer only
-sudo journalctl -u ussdgw -f           # or: tail -f /tmp/ussdgw.service.log
-```
-
-**Never** overwrite live `configs/application.properties` on Digicom (PostgreSQL `ussdgw` DB). Re-package with `db-kind=postgresql`, rsync jars/`lib`/`quarkus`/`app/html` only.
-
-### curl — status / planes / HLR
+### curl — status / AS pull smoke
 
 ```bash
 KEY='ussd-admin'
-HOST='http://100.110.205.176:8088'
+HOST='http://127.0.0.1:8088'
 
 curl -sS -H "X-USSD-Admin-Key: $KEY" "$HOST/admin/status.json" | jq .
-curl -sS -H "X-USSD-Admin-Key: $KEY" "$HOST/admin/links"
-curl -sS -H "X-USSD-Admin-Key: $KEY" "$HOST/admin/hlr" | head
-curl -sS -o /dev/null -w '%{http_code}\n' -H "X-USSD-Admin-Key: $KEY" "$HOST/admin/"
+curl -sS http://127.0.0.1:8090/health || true
 ```
 
-Form login (cookie session):
+### USSD CLI (lab sim)
 
 ```bash
-curl -sS -c /tmp/ussd.ck -b /tmp/ussd.ck -X POST "$HOST/admin/login" \
-  -d 'username=admin&password=ussd-admin' -D - -o /dev/null | head
-curl -sS -b /tmp/ussd.ck "$HOST/admin/" | head
-```
-
-### curl — AS pull smoke (as-node)
-
-```bash
-# as-node health / pull (menus)
-curl -sS http://100.110.205.176:8090/health || true
-curl -sS -X POST http://100.110.205.176:8090/ussd/pull \
-  -H 'Content-Type: application/xml' \
-  --data-binary @- <<'XML'
-<dialog>
-  <mapDialog><dialogId>lab-1</dialogId></mapDialog>
-  <processUnstructuredSSRequest>
-    <msisdn>251911000001</msisdn>
-    <ussdString>*100#</ussdString>
-  </processUnstructuredSSRequest>
-</dialog>
-XML
-```
-
-(Wire format follows tenant / global AS contract — XML default; see `docs/as-contract/`.)
-
-### USSD CLI (short / long code + DT)
-
-On Digicom (or laptop with JMX to sim `:9999`):
-
-```bash
-cd /home/app/ota-push-services/ussdgw-micro-jainslee/tools/ss7-simulator
+cd tools/ss7-simulator
 ./run.sh build-cli   # once
-./run.sh cli         # REPL
+./run.sh cli         # REPL: connect / msisdn / dial / dt
 ```
 
-```
-ussd> connect
-ussd> msisdn 251911000001
-ussd> dial *100#
-ussd> dt 1
-ussd> dial *100*1234567890#
-ussd> dial *519812345678901234#
-ussd> quit
-```
+More: [`tools/ss7-simulator/README.md`](tools/ss7-simulator/README.md), [`tools/as-node/README.md`](tools/as-node/README.md).
 
-One-shot:
+## License
 
-```bash
-./run.sh cli dial '*100#' --msisdn 251911000001 --dt 1,2,3
-./run.sh cli dial '*519812345678901234#' --manual
-```
+**Dual-licensed:** GPLv3 (Section A) for open-source use, or Commercial License (Section B) for proprietary deployment — same pattern as [micro-jainslee](https://github.com/nhanth87/micro-jainslee).
 
-jSS7 sim GUI (optional): http://100.110.205.176:8089 — start **USSD_TEST_CLIENT**, then use CLI over JMX.
+See [`LICENSE`](LICENSE), [`COMMERCIAL_LICENSE.md`](COMMERCIAL_LICENSE.md), and [`NOTICE`](NOTICE).
 
-More detail: [`tools/ss7-simulator/README.md`](tools/ss7-simulator/README.md), [`tools/as-node/README.md`](tools/as-node/README.md).
+> Maintained by [Tran Nhan (nhanth87)](mailto:nhanth87@gmail.com)

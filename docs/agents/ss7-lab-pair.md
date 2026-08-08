@@ -52,152 +52,20 @@ Dedicated **`/admin/hlr`** (not SS7 JSON): mode, fake IMSI/MSC, upper GT, Diamet
 Outbound SRI-SM (NI `SriSbb` + PROXY_MAP face) CalledParty = resolved `ussd.hlr.upper-gt`
 (admin overlay when non-blank, else `application.properties`). Empty admin field → props default.
 
-## Digicom carrier (Balance Plus) — prod-bound live host
+## Operator Digicom / live carrier (PRIVATE — not in nhanth87)
 
-**Digicom is future production**, not a disposable test lab: real Balance Plus SS7 peer, **PostgreSQL** DB **`ussdgw`**, and live configs that must survive deploys.
+**Public `nhanth87/ussdgw-micro-jainslee` = lab/test SS7 only** (`build/ss7-lab.json` / `dist/configs/ss7-lab.json`).
 
-**Source of truth = Digicom host** (`digicom-nb`, APP_HOME `/home/app/ota-push-services/ussdgw-micro-jainslee/`).  
-Worktree seed `build/ss7-digicom-balance.json` must match server `configs/ss7-digicom-balance.json`.  
-**Never** overwrite Digicom `configs/` on rsync (`application.properties`, `ss7-digicom-balance.json`, `ss7-persist/`) — ship **jars/`lib`/`quarkus`/`app/html` only** (+ seed JSON only when intentionally updating SS7). Digicom package = build-time **`db-kind=postgresql`**, then restore local **H2** for the dev tree.
+Digicom-ET **prod-bound** carrier configs (peer IPs, SPC/GT, SCTP listen ports, `ss7-digicom-balance.json`, Digicom `application.properties`) are **operator SoT on the Digicom host** and may also live on private **`digicom-et/ussdgw-micro-jainslee`** (branch `private/digicom-carrier-seeds`). **Never** commit or push those files to **nhanth87**.
 
-Localhost stack stays in `build/ss7-lab.json` (127.0.0.1:8013↔8014). **Do not** point local H2 lab props at the Digicom carrier JSON. Stop/disable `ussdgw-ss7sim` on Digicom (lab sim binds 8013/8014).
+When deploying to Digicom:
 
-### Roles (RFC / SP table — no compromise)
+- Rsync **jars / `lib/` / `quarkus/` / `app/html`** only — **never** overwrite Digicom `configs/` (PG URL, secrets, SS7 seed/persist).
+- Package with build-time **`db-kind=postgresql`**, then restore local **H2** for the public/dev tree.
+- Ask before any Digicom DB mutation (routing / tenants / users / `network_id`).
+- Live peer lessons (IPSP server, RC uniqueness, dual-homed SRI, gsmSCF SSN **147**, `networkId=0`) stay in [`lessons.md`](lessons.md) without embedding carrier topology in the public seed tree.
 
-| Layer | Digicom (this GW) | Balance Plus peer |
-|-------|-------------------|-------------------|
-| SCTP (RFC 4960) | **server** — listen; peer sends INIT | **client** — dials in |
-| M3UA IPSP (RFC 4666) | **ipsp: server** + **exchangeType: DE** | **ipsp: client** |
-| SPC / GT | **1470** / **251971200490** | L1 **1404**, L2 **1403** |
-| Routing Context | **12** (SP-confirmed; classic `.167` used **101** → err 25) | ASPAC with RC **12** |
-
-Local IP **172.16.144.163** (eth1) — **not** old ussdgw **.167**.
-
-### Live `application.properties` (map / SS7 / HLR)
-
-```properties
-ussd.map.enabled=true
-ussd.map.auto-apply-on-boot=true
-ussd.map.config-file=configs/ss7-digicom-balance.json
-ussd.map.opc=1470
-ussd.map.ussd-gt=251971200490
-ussd.hlr.upper-gt=251900000006
-ussd.ss7.persist-dir=configs/ss7-persist
-```
-
-### Live `configs/ss7-digicom-balance.json` (captured from Digicom)
-
-```json
-{
-  "stackName": "ra-jss7",
-  "protocols": { "map": true, "cap": false },
-  "sctp": {
-    "connectDelay": 10000,
-    "workerThreads": 8,
-    "links": [
-      {
-        "name": "L1-BP-1404",
-        "type": "server",
-        "channel": "sctp",
-        "local": "172.16.144.163:2011",
-        "peer": "10.177.55.241:2501",
-        "localSecondary": []
-      },
-      {
-        "name": "L2-BP-1403",
-        "type": "server",
-        "channel": "sctp",
-        "local": "172.16.144.163:2019",
-        "peer": "10.177.54.241:2502",
-        "localSecondary": []
-      }
-    ]
-  },
-  "m3ua": {
-    "as": [
-      {
-        "name": "AS-BP-1404",
-        "mode": "loadshare",
-        "functionality": "ipsp",
-        "ipsp": "server",
-        "exchangeType": "DE",
-        "routingContext": 12,
-        "links": ["L1-BP-1404"]
-      },
-      {
-        "name": "AS-BP-1403",
-        "mode": "loadshare",
-        "functionality": "ipsp",
-        "ipsp": "server",
-        "exchangeType": "DE",
-        "routingContext": 12,
-        "links": ["L2-BP-1403"]
-      }
-    ],
-    "routes": [
-      { "to": { "dpc": 1404, "opc": 1470 }, "via": "AS-BP-1404" },
-      { "to": { "dpc": 1403, "opc": 1470 }, "via": "AS-BP-1403" }
-    ]
-  },
-  "sccp": {
-    "localPoints": [
-      {
-        "pc": 1470,
-        "networkIndicator": "national",
-        "networkId": 0,
-        "reachablePointCodes": [1404, 1403]
-      }
-    ],
-    "routing": [
-      { "from": "remote", "match": { "gt": "*" }, "to": { "pc": 1470 }, "mask": "K" },
-      { "from": "local", "match": { "gt": "*" }, "to": { "pc": 1404 }, "mask": "K" }
-    ]
-  },
-  "tcap": {
-    "dialogIdleTimeout": 60000,
-    "invokeTimeout": 30000,
-    "maxDialogs": 50000
-  },
-  "services": [
-    { "name": "primary", "ssn": 8, "protocol": "map" },
-    { "name": "gsmscf", "ssn": 147, "protocol": "map" },
-    { "name": "hlr", "ssn": 6, "protocol": "map" }
-  ]
-}
-```
-
-**M3UA:** two separate AS; both `ipsp: server`, **`exchangeType: DE`** (dual exchange — Digicom may send ASPUP after SCTP UP; default SE waits forever if peer only HEARTBEATs), RC **12** via single field `routingContext`.
-
-**Services / SSN (MO pull):** `primary` **8**, **`gsmscf` 147**, `hlr` **6**. Without **147**, Balance Plus MO to Digicom GT gets SCCP UDTS (“no local SSN is present”) and never reaches `MapUssdParentSbb`. After Apply/restart, grep logs for `Registered SCCP listener with extra ssn 147`.
-
-### Live status (2026-08-07) — RC12 ACTIVE
-
-Digicom is **LIVE** (`ss7.live=true`): SCTP listen **2011/2019**, M3UA ASP/AS **ACTIVE** after Balance Plus ASPAC RC **12** + Digicom ASPAC_ACK. No ERR **25** after the successful restart.
-
-Path that worked (agent `4607235a` on Digicom — already applied; do **not** re-bounce unless config drifts):
-
-1. Seed JSON = single `"routingContext": 12` (not `routingContexts` list), `ipsp: server`, `exchangeType: DE`, SCTP `type: server`.
-2. Quarantine corrupt / stale `configs/ss7-persist/*` and replace with clean persist (or wipe + re-apply).
-3. Restart `ussdgw` so ra-jss7 loads the RC12 seed.
-4. Peer ASPAC RC12 → ASPAC_ACK → `ss7.live` LIVE.
-
-Proof pcap: [`build/pcap/m3ua-aspac-rc12-20260807-135839.pcap`](../../build/pcap/m3ua-aspac-rc12-20260807-135839.pcap).
-
-**RC 12 vs dual RC (jar footgun — keep):**
-
-| Intent | Digicom `ss7-config-9.2.8` (shipped) | Notes |
-|--------|--------------------------------------|--------|
-| **Prod / LIVE** | `"routingContext": 12` | Peer ASPAC RC **12** → ASP/AS ACTIVE · `ss7.live=true` |
-| Dual ASPAC test `[12, 101]` | **Not supported** on Digicom jar | Coral-valley has `routingContexts` list, but **deployed** `Ss7Config$As` only has single `routingContext`. JSON `routingContexts` is **ignored** → null RC → **RC 0** → peer `Invalid_Routing_Context` (25). Do **not** use dual list until ss7-config jar is upgraded. |
-| Classic `.167` | RC **101** alone | Rejected by Balance Plus (err 25) when Digicom advertised 101 |
-
-**Pcap / debug lessons:** RC **101** → peer err 25. SE-only after Digicom restart → SCTP UP + ASP DOWN (peer HEARTBEAT only) until DE. Success wire = ASPAC RC12 + ASPAC_ACK (pcap above). Admin `ss7.detail` for file apply must show real SCTP listen + `rc=12` — never props-fallback `8013→8014` (`Ss7ApplyService.formatWiredDetail`).
-
-**SRI dual-homing (2026-08-08):** Outbound SRI may leave **L1/2011 → PC 1404** while `returnResultLast` returns on **L2/2019 ← PC 1403** (pcap `build/pcap/ussd-sri-hlr-20260808-020509.pcap`) — or the reverse under loadshare. Prefer **one AS** with both links (`AS-BP` + routes 1404/1403). m3ua must deliver PayloadData when **AS ACTIVE** even if the receive-side ASP FSM is DOWN. After SRI, NI USSD SCCP dest = **MSC `networkNodeNumber`**, not MSISDN.
-
-**NI push prove (2026-08-08 retest):** `POST /ussd` notify MSISDN **251911230398** with `ss7.live=true` → log `USSD NI sent … mscGt=251971200146 imsi=…` + peer `unstructuredSSNotify_Response`. Wire proof: [`build/pcap/ussd-ni-push-msc-20260808-023952.pcap`](../../build/pcap/ussd-ni-push-msc-20260808-023952.pcap) (CalledParty **251971200146**). Handset screen = operator/UE confirm (server cannot see it).
-
-**NI push pcap (2026-08-08 02:51 UTC fresh):** [`build/pcap/ussd-ni-push-msc-20260808-025117.pcap`](../../build/pcap/ussd-ni-push-msc-20260808-025117.pcap) — SCTP **2011/2019**; SRI → HLR GT **251900000006**; result MSC **251971200146** / IMSI **636010024533522**; `unstructuredSS-Notify` CalledParty = MSC (not MSISDN); peer Notify response.
+Localhost stack: `build/ss7-lab.json` (127.0.0.1:8013↔8014). **Do not** point public lab props at a Digicom carrier JSON.
 
 ### Ethiopia MO pull (`*101xxxxxx`) — prep (2026-08-08)
 
@@ -213,7 +81,7 @@ UE ──MAP processUnstructuredSS-Request──► GW (MapUssdParentSbb)
   (continue: UE unstructuredSS-Response → encodeContinue → same AS corr)
 ```
 
-| Check | Digicom state |
+| Check | Lab / live peer state |
 |-------|----------------|
 | `ss7.live` | must be **true** (peer carries MO in) |
 | Local SSN | **8 + 147 + 6** in seed (`gsmscf` **147**) — peer Called SSN is often **147**, not 8 |
@@ -225,10 +93,10 @@ UE ──MAP processUnstructuredSS-Request──► GW (MapUssdParentSbb)
 
 **AS / AdaptiveTimeout footgun:** HTTP 200 with **empty body** → `AS_EMPTY_BODY` (saga compensate). Handset “Please wait…” is easy to misread as the AdaptiveTimeout gate — it is not. Dump endpoints are not an AS; optional as-node `MIRROR_URL` can copy XML to a dump while as-node still replies.
 
-**Prove checklist (live peer or handset):**
+**Prove checklist (operator live peer or handset — Digicom host only):**
 
 1. `ss7.live=true` + boot log `Registered SCCP listener with extra ssn 147` + as-node up on 8090.
-2. Handset / Balance Plus MO: dial `*101xxxxxx#` toward GW GT **251971200490** (Called SSN often **147**).
+2. Handset / Balance Plus MO: dial `*101xxxxxx#` toward the operator GW GT (Called SSN often **147** on some peers).
 3. Logs: `onProcessUnstructured` route (not UDTS / `no-route sc=…` / `dup-skip`) → HTTP pull → AS menu XML → MAP reply out. One dialog → one AS POST (dialogId dedup).
 4. Pcap: inbound `processUnstructuredSS-Request` string=`*101…#`; outbound Request/Response on same dialog. If AS is HTTPS, filter TLS SNI — not cleartext `http`.
 5. AS continue digits `1–4` / `0` exercise same-dialog bridge (as-node interactive menus).

@@ -1,0 +1,70 @@
+{
+  "stackName": "ra-jss7",
+  "protocols": { "map": true, "cap": false },
+  "sctp": {
+    "connectDelay": 10000,
+    "workerThreads": 8,
+    "links": [
+      {
+        "name": "L1-PEER-A",
+        "type": "server",
+        "channel": "sctp",
+        "local": "192.0.2.10:3011",
+        "peer": "198.51.100.10:3501",
+        "localSecondary": []
+      },
+      {
+        "name": "L2-PEER-B",
+        "type": "server",
+        "channel": "sctp",
+        "local": "192.0.2.10:3019",
+        "peer": "198.51.100.11:3502",
+        "localSecondary": []
+      }
+    ]
+  },
+  "m3ua": {
+    "as": [
+      {
+        "name": "AS-PEER-A",
+        "mode": "loadshare",
+        "functionality": "ipsp",
+        "ipsp": "server",
+        "exchangeType": "DE",
+        "routingContext": 12,
+        "links": ["L1-PEER-A"]
+      },
+      {
+        "name": "AS-PEER-B",
+        "mode": "loadshare",
+        "functionality": "ipsp",
+        "ipsp": "server",
+        "exchangeType": "DE",
+        "routingContext": 12,
+        "links": ["L2-PEER-B"]
+      }
+    ],
+    "routes": [
+      { "to": { "dpc": 20, "opc": 10 }, "via": "AS-PEER-A" },
+      { "to": { "dpc": 21, "opc": 10 }, "via": "AS-PEER-B" }
+    ]
+  },
+  "sccp": {
+    "localPoints": [
+      {
+        "pc": 10,
+        "networkIndicator": "national",
+        "networkId": 0,
+        "reachablePointCodes": [20, 21]
+      }
+    ],
+    "routing": [
+      { "from": "remote", "match": { "gt": "*" }, "to": { "pc": 10 }, "mask": "K" },
+      { "from": "local", "match": { "gt": "*" }, "to": { "pc": 20 }, "mask": "K" }
+    ]
+  },
+  "services": [
+    { "name": "primary", "ssn": 8, "protocol": "map" },
+    { "name": "hlr", "ssn": 6, "protocol": "map" }
+  ]
+}

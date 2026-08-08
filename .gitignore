@@ -29,3 +29,10 @@ build/pcap/
 # Digicom rotated secrets (never commit)
 build/digicom-secrets-*.txt
 build/.digicom-rotate.env
+
+# Digicom-ET / carrier prod configs — NEVER on public nhanth87 (operator / digicom-et private SoT)
+configs/digicom/
+**/ss7-digicom*.json
+**/application-digicom.properties
+build/application-digicom.properties
+build/ss7-digicom-balance.json

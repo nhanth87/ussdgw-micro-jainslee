@@ -67,7 +67,7 @@ case "$USSD_LOG_DIR" in
     ;;
 esac
 
-# Heap: Digicom-safe defaults -Xms2g -Xmx4g (live digicom-nb). 8g+AlwaysPreTouch OOM'd ~15 GiB with ss7sim/as-node.
+# Heap: Lab-safe defaults -Xms2g -Xmx4g (shared hosts). 8g+AlwaysPreTouch OOM'd ~15 GiB with ss7sim/as-node.
 # Bigger hosts: USSD_XMS=8g USSD_XMX=8g. AlwaysPreTouch only when USSD_ALWAYS_PRETOUCH=1. Also: JAVA_OPTS / USSD_JAVA_OPTS.
 : "${USSD_XMS:=2g}"
 : "${USSD_XMX:=4g}"

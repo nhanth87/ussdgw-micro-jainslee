@@ -33,7 +33,7 @@ Parked HTTP completes via short lab echo (~50ms) — good smoke without SS7:
 
 ```bash
 KEY=...   # ussd.admin.api-key
-GW=http://127.0.0.1:8088   # or https://100.110.205.176 with -k
+GW=http://127.0.0.1:8088   # override for operator host as needed
 
 curl -sS -D- -o /tmp/ni-body.txt \
   -X POST "${GW}/ussd" \

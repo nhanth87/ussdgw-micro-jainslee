@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Install systemd units on Digicom lab (run as app with passwordless sudo, or root).
-# Usage: sudo ./build/systemd/install-on-digicom.sh
+# Install systemd units on lab host (run as app with passwordless sudo, or root).
+# Usage: sudo ./build/systemd/install-lab-units.sh
 set -euo pipefail
 UNIT_DIR="$(cd "$(dirname "$0")" && pwd)"
 SYS=/etc/systemd/system

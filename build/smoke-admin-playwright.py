@@ -9,7 +9,7 @@ from pathlib import Path
 
 from playwright.sync_api import sync_playwright
 
-BASE = sys.argv[1] if len(sys.argv) > 1 else "http://100.110.205.176"
+BASE = sys.argv[1] if len(sys.argv) > 1 else "http://127.0.0.1:8088"
 USER = sys.argv[2] if len(sys.argv) > 2 else "admin"
 PASS = sys.argv[3] if len(sys.argv) > 3 else "ussd-admin"
 OUT = Path("/tmp/ussdgw-admin-smoke")

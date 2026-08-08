@@ -227,7 +227,7 @@ Hardest open questions after the read. Each: **proposed default** · **evidence 
 
 - **Spec:** 23.090 NI from HLR→VLR→MSC; MSC contacts MS. SRI-SM `networkNodeNumber` is **MSC** for MT SM / USSD push address, not VLR GT. ATI (`anyTimeInterrogation`) is a different MAP service — not the Digicom NI address path.
 - **Default:** Keep SRI-SM → MSC CalledParty + IMSI destRef; do not substitute VLR/ATI for NI CalledParty.
-- **Evidence:** Digicom pcap MSC **251971200146** (done).
+- **Evidence:** Digicom live pcap proved MSC CalledParty (host-local; not in nhanth87).
 
 ### Q5 — `processUnstructured` on NI?
 

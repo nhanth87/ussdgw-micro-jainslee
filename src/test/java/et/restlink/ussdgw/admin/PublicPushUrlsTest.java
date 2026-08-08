@@ -10,11 +10,11 @@ class PublicPushUrlsTest {
     void rejectsWildcardAndUsesPublicBase() {
         assertThat(PublicPushUrls.normalizePublicBase("http://0.0.0.0:8088")).isEmpty();
         assertThat(PublicPushUrls.publicNiPushUrl(
-                "http://100.110.205.176:8088", "0.0.0.0", 8088, "/ussd"))
-                .isEqualTo("http://100.110.205.176:8088/ussd");
+                "http://192.0.2.50:8088", "0.0.0.0", 8088, "/ussd"))
+                .isEqualTo("http://192.0.2.50:8088/ussd");
         assertThat(PublicPushUrls.publicNiPushUrl(
-                "http://100.110.205.176", "0.0.0.0", 8088, "/ussd"))
-                .isEqualTo("http://100.110.205.176/ussd");
+                "http://192.0.2.50", "0.0.0.0", 8088, "/ussd"))
+                .isEqualTo("http://192.0.2.50/ussd");
     }
 
     @Test
@@ -26,10 +26,10 @@ class PublicPushUrlsTest {
     @Test
     void grpcEndpointFromPublicBase() {
         // public-base-url may carry the HTTP port — gRPC must still advertise grpcPort.
-        assertThat(PublicPushUrls.publicGrpcPushEndpoint("http://100.110.205.176:8088", 9099))
-                .isEqualTo("100.110.205.176:9099");
-        assertThat(PublicPushUrls.publicGrpcPushEndpoint("http://100.110.205.176", 9099))
-                .isEqualTo("100.110.205.176:9099");
+        assertThat(PublicPushUrls.publicGrpcPushEndpoint("http://192.0.2.50:8088", 9099))
+                .isEqualTo("192.0.2.50:9099");
+        assertThat(PublicPushUrls.publicGrpcPushEndpoint("http://192.0.2.50", 9099))
+                .isEqualTo("192.0.2.50:9099");
         assertThat(PublicPushUrls.publicGrpcPushEndpoint("http://0.0.0.0:8088", 9099)).isEmpty();
     }
 
