@@ -473,6 +473,90 @@ tbody.hx-table-live.htmx-settling {
   color: var(--color-ink-mute);
 }
 
+/* Expand hero: AS USSD primary + outcome (GATE_ARMED is never the title). */
+.cdr-primary-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 0.65rem 1rem;
+}
+.cdr-primary-ussd {
+  flex: 1 1 12rem;
+  margin: 0;
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+  font-size: 0.85rem;
+  line-height: 1.35;
+  color: var(--color-fg-strong, #e2e8f0);
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+.cdr-primary-ussd--empty {
+  color: var(--color-ink-mute);
+  font-style: italic;
+  font-family: "DM Sans", system-ui, sans-serif;
+  font-size: 0.8rem;
+}
+
+/* STATUS OF ALL SERVICES — human plane chips. */
+.cdr-svc-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(11rem, 1fr));
+  gap: 0.5rem 0.75rem;
+}
+.cdr-svc {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  min-width: 0;
+  padding: 0.4rem 0.55rem;
+  border-radius: 0.3rem;
+  border: 1px solid var(--color-ink-line);
+  background: color-mix(in srgb, var(--color-ink) 70%, transparent);
+}
+.cdr-svc-label {
+  font-size: 0.62rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--color-ink-mute);
+  font-family: "DM Sans", system-ui, sans-serif;
+}
+.cdr-svc-state {
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+  font-size: 0.7rem;
+  color: var(--color-fg-soft);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cdr-svc--ok .cdr-svc-state { color: var(--color-badge-ok-fg, #86efac); }
+.cdr-svc--fail .cdr-svc-state { color: #fca5a5; }
+.cdr-svc--live .cdr-svc-state { color: var(--color-signal); }
+.cdr-svc--gated .cdr-svc-state { color: #f0c674; }
+.cdr-svc--mute .cdr-svc-state { color: var(--color-ink-mute); }
+
+.cdr-advanced {
+  margin-top: 0.85rem;
+  padding: 0.55rem 0.75rem;
+  border: 1px dashed var(--color-ink-line);
+  border-radius: 0.4rem;
+  background: transparent;
+}
+.cdr-advanced > summary {
+  cursor: pointer;
+  font-size: 0.65rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--color-ink-mute);
+  font-family: "DM Sans", system-ui, sans-serif;
+}
+.cdr-timeline-raw {
+  margin-top: 0.5rem;
+  opacity: 0.85;
+}
+
 /* Dashboard KPI cards — long Adaptive EWMA (and any future metric) must not overflow. */
 .metric-card {
   min-width: 0;

@@ -8,6 +8,7 @@ import et.restlink.ussdgw.bridge.VirtualSessionBridge;
 import et.restlink.ussdgw.bridge.VirtualSessionStore;
 import et.restlink.ussdgw.cdr.CdrRecord;
 import et.restlink.ussdgw.cdr.CdrService;
+import et.restlink.ussdgw.cdr.CdrServiceStatuses;
 import et.restlink.ussdgw.cdr.CdrSessionDigest;
 import et.restlink.ussdgw.cdr.CdrStatuses;
 import et.restlink.ussdgw.cdr.CdrUssdSnippet;
@@ -981,7 +982,6 @@ public class AdminHttpHandler {
         int i = 0;
         for (CdrRecord r : rows) {
             String spine = CdrStatuses.ledgerSpineClass(r.phase, r.status);
-            String statusChip = CdrStatuses.ledgerChipClass(r.phase, r.status);
             String rowId = "cdr-" + (r.id != null ? r.id : i);
             // Timeline from events_json (session ledger) — no N+1 same-corr list fetch.
             // Legacy multi-row tape still dual-reads ussd_cdr once per corr (cached).
@@ -991,6 +991,13 @@ public class AdminHttpHandler {
             CdrSessionDigest.Digest dig = CdrSessionDigest.from(r, timeline);
             String asUssdSnip = CdrUssdSnippet.resolveForDisplay(
                     r.asUssd, dig.detailFields().get("asUssd"));
+            CdrServiceStatuses.Outcome primary = CdrServiceStatuses.primaryOutcome(
+                    r, dig.timelineOldestFirst());
+            // Flat ledger status: prefer primary outcome so GATE_ARMED is not the hero chip
+            // when END/CONTINUE/fail/hop already happened (rollup usually already did this).
+            String displayStatus = primary.status();
+            String displayChip = primary.cssClass();
+            String displayHuman = primary.humanLabel();
 
             sb.append("<tr class=\"cdr-ledger-row\" data-cdr-row=\"")
                     .append(esc(rowId)).append("\">");
@@ -1012,8 +1019,10 @@ public class AdminHttpHandler {
                     .append(esc(nullToDash(r.phase))).append("</span></td>");
             sb.append("<td class=\"px-3 py-2.5 cdr-msisdn\">").append(esc(nullToDash(r.msisdn))).append("</td>");
             sb.append("<td class=\"px-3 py-2.5\">").append(esc(nullToDash(r.shortCode))).append("</td>");
-            sb.append("<td class=\"px-3 py-2.5\"><span class=\"cdr-status-chip ").append(statusChip).append("\">")
-                    .append(esc(nullToDash(r.status))).append("</span></td>");
+            sb.append("<td class=\"px-3 py-2.5\"><span class=\"cdr-status-chip ").append(displayChip)
+                    .append("\" title=\"").append(esc(displayHuman)).append(" · ").append(esc(displayStatus))
+                    .append("\">")
+                    .append(esc(nullToDash(displayStatus))).append("</span></td>");
             sb.append("<td class=\"px-3 py-2.5 cdr-as-ussd\">");
             if (asUssdSnip.isEmpty()) {
                 sb.append("<span class=\"cdr-as-ussd-empty\" title=\"No AS USSD text on this session\">—</span>");
@@ -1027,18 +1036,22 @@ public class AdminHttpHandler {
                     .append(esc(nullToDash(r.originationType))).append("</td>");
             sb.append("</tr>");
 
-            // Expand: gate/HLR/AS digest + this row + corr timeline. Stay open across HTMX polls
+            // Expand: AS USSD primary → STATUS OF ALL SERVICES → compact hop/AS →
+            // session keys → human timeline → advanced raw. Stay open across HTMX polls
             // via client sessionStorage (cdr.html) — server always emits class "hidden".
             sb.append("<tr class=\"cdr-detail hidden\" data-cdr-detail=\"").append(esc(rowId)).append("\">")
                     .append("<td colspan=\"8\" class=\"px-3 py-3\">")
                     .append("<div class=\"cdr-detail-panel ink-panel\">");
+            appendCdrPrimaryHero(sb, asUssdSnip, primary);
+            appendCdrServicePlanes(sb, dig, r);
             appendCdrGatedDigest(sb, dig, asUssdSnip);
             sb.append("<div class=\"cdr-digest cdr-record-box\" aria-label=\"This CDR record\">");
             sb.append("<p class=\"cdr-digest-title\">This session</p>");
             sb.append("<dl class=\"cdr-detail-grid\">");
             cdrDetailItem(sb, "Correlation", r.correlationId);
             cdrDetailItem(sb, "Phase (bridge)", r.phase);
-            cdrDetailItem(sb, "Status / result", r.status);
+            cdrDetailItem(sb, "Outcome", displayHuman + " (" + displayStatus + ")");
+            cdrDetailItem(sb, "Rolled status", r.status);
             cdrDetailItem(sb, "MSISDN", r.msisdn);
             cdrDetailItem(sb, "Short code", dig.shortCode() != null ? dig.shortCode() : r.shortCode);
             cdrDetailItem(sb, "Long / redirect", dig.longOrRedirect());
@@ -1052,25 +1065,57 @@ public class AdminHttpHandler {
             cdrDetailItem(sb, "Gate ms", dig.gateMs() == null ? null : Long.toString(dig.gateMs()));
             cdrDetailItem(sb, "Observed EWMA ms",
                     dig.observedEwmaMs() == null ? null : Long.toString(dig.observedEwmaMs()));
-            cdrDetailItem(sb, "Detail (raw)", r.detail);
             cdrDetailItem(sb, "Started at", r.startedAt == null ? null : r.startedAt.toString());
             cdrDetailItem(sb, "Updated at", r.updatedAt == null
                     ? (r.createdAt == null ? null : r.createdAt.toString())
                     : r.updatedAt.toString());
             sb.append("</dl></div>");
             appendCdrTimeline(sb, dig.timelineOldestFirst());
-            // TODO(cdr-parity): classic CdrLineFormatter also emitted local/remote SCCP
-            // (PC/SSN/RI/GTI/GT), orig/dest AddressString, dialog ids, duration,
-            // eri IMSI/VLR — not all persisted on ussd_cdr_session yet.
+            appendCdrAdvancedRaw(sb, r, dig.timelineOldestFirst());
             sb.append("<p class=\"cdr-gap-note\">Classic fields not in store: dialog ids · duration · ")
                     .append("SCCP GT · IMSI/VLR · RecordStatus enum. ")
-                    .append("AS USSD (~50 char) = as_ussd column + detail asUssd=; ")
-                    .append("ledger = 1 row/corr; timeline from events_json (or legacy ussd_cdr tape).")
+                    .append("Primary = AS USSD (~50) + outcome; services = MAP/HLR/Bridge/AS/UE; ")
+                    .append("GATE_ARMED is budget arming only (not hero). ")
+                    .append("ledger = 1 row/corr; timeline from events_json.")
                     .append("</p>");
             sb.append("</div></td></tr>");
             i++;
         }
         return sb.toString();
+    }
+
+    /** Hero block: AS USSD snippet + outcome chip (never GATE_ARMED-as-title). */
+    private static void appendCdrPrimaryHero(StringBuilder sb, String asUssdSnip,
+                                             CdrServiceStatuses.Outcome primary) {
+        sb.append("<div class=\"cdr-digest cdr-primary\" aria-label=\"AS USSD and outcome\">");
+        sb.append("<p class=\"cdr-digest-title\">AS USSD · outcome</p>");
+        sb.append("<div class=\"cdr-primary-row\">");
+        if (asUssdSnip == null || asUssdSnip.isEmpty()) {
+            sb.append("<p class=\"cdr-primary-ussd cdr-primary-ussd--empty\">No AS USSD text on this session</p>");
+        } else {
+            sb.append("<p class=\"cdr-primary-ussd\" title=\"").append(esc(asUssdSnip)).append("\">")
+                    .append(esc(asUssdSnip)).append("</p>");
+        }
+        sb.append("<span class=\"cdr-status-chip ").append(esc(primary.cssClass()))
+                .append("\" title=\"").append(esc(primary.status())).append("\">")
+                .append(esc(primary.humanLabel())).append("</span>");
+        sb.append("</div></div>");
+    }
+
+    /** STATUS OF ALL SERVICES — human-labeled plane chips. */
+    private static void appendCdrServicePlanes(StringBuilder sb, CdrSessionDigest.Digest dig,
+                                               CdrRecord focus) {
+        var planes = CdrServiceStatuses.planes(dig, focus);
+        sb.append("<div class=\"cdr-digest cdr-services\" aria-label=\"Status of all services\">");
+        sb.append("<p class=\"cdr-digest-title\">Status of all services</p>");
+        sb.append("<ul class=\"cdr-svc-list\">");
+        for (CdrServiceStatuses.Plane p : planes) {
+            sb.append("<li class=\"cdr-svc ").append(esc(p.cssClass())).append("\">")
+                    .append("<span class=\"cdr-svc-label\">").append(esc(p.label())).append("</span>")
+                    .append("<span class=\"cdr-svc-state\" title=\"").append(esc(p.state())).append("\">")
+                    .append(esc(p.state())).append("</span></li>");
+        }
+        sb.append("</ul></div>");
     }
 
     private static void appendCdrGatedDigest(StringBuilder sb, CdrSessionDigest.Digest dig,
@@ -1092,7 +1137,6 @@ public class AdminHttpHandler {
         if (hopOutcome != null) {
             cdrDetailItem(sb, "Hop outcome", hopOutcome);
         }
-        // Always surface AS text when known (column and/or detail) — never hide behind expand-only parse.
         cdrDetailItem(sb, "AS ussdString", asUssdSnip == null || asUssdSnip.isEmpty() ? null : asUssdSnip);
         String refuse = dig.detailFields().get("refuseReason");
         if (refuse != null) {
@@ -1119,7 +1163,6 @@ public class AdminHttpHandler {
         if (oldestFirst == null || oldestFirst.isEmpty()) {
             return;
         }
-        // Same panel chrome as Gated · HLR · AS (cdr-digest) — not a bare list in the open.
         sb.append("<div class=\"cdr-digest cdr-timeline\" aria-label=\"Correlation timeline\">");
         sb.append("<p class=\"cdr-digest-title\">Session timeline (same corr)</p>");
         sb.append("<ol class=\"cdr-timeline-list\">");
@@ -1127,24 +1170,58 @@ public class AdminHttpHandler {
             if (t == null) {
                 continue;
             }
+            String human = CdrServiceStatuses.humanStatus(t.status);
+            String summary = CdrServiceStatuses.timelineSummary(t);
             sb.append("<li><span class=\"cdr-timeline-when\">")
                     .append(esc(formatCdrWhen(t.createdAt))).append("</span> ")
                     .append("<span class=\"cdr-status-chip ")
-                    .append(CdrStatuses.ledgerChipClass(t.phase, t.status)).append("\">")
-                    .append(esc(nullToDash(t.status))).append("</span>");
-            if (t.gateMs != null && t.gateMs > 0) {
-                sb.append(" <span class=\"cdr-timeline-meta\">gate=")
-                        .append(esc(Long.toString(t.gateMs))).append("ms</span>");
+                    .append(CdrStatuses.ledgerChipClass(t.phase, t.status))
+                    .append("\" title=\"").append(esc(nullToDash(t.status))).append("\">")
+                    .append(esc(human)).append("</span>");
+            if (t.gateMs != null && t.gateMs > 0
+                    && (CdrStatuses.GATE_ARMED.equalsIgnoreCase(t.status)
+                    || CdrStatuses.GATED.equalsIgnoreCase(t.status)
+                    || CdrStatuses.BRIDGED.equalsIgnoreCase(t.status)
+                    || CdrStatuses.GATE_EXPIRED.equalsIgnoreCase(t.status))) {
+                sb.append(" <span class=\"cdr-timeline-meta\">")
+                        .append(esc(Long.toString(t.gateMs))).append(" ms</span>");
             }
-            if (t.detail != null && !t.detail.isBlank()) {
-                sb.append(" <code class=\"cdr-timeline-detail\" title=\"")
-                        .append(esc(t.detail)).append("\">")
-                        .append(esc(clip(t.detail, 72)))
-                        .append("</code>");
+            if (summary != null && !summary.isBlank()) {
+                sb.append(" <span class=\"cdr-timeline-detail\" title=\"")
+                        .append(esc(summary)).append("\">")
+                        .append(esc(clip(summary, 56)))
+                        .append("</span>");
             }
             sb.append("</li>");
         }
         sb.append("</ol></div>");
+    }
+
+    /** Raw pipe detail / machine statuses — collapsed so default expand is not a log dump. */
+    private static void appendCdrAdvancedRaw(StringBuilder sb, CdrRecord focus,
+                                             List<CdrRecord> oldestFirst) {
+        sb.append("<details class=\"cdr-advanced\">");
+        sb.append("<summary>Advanced · raw detail / machine statuses</summary>");
+        sb.append("<dl class=\"cdr-detail-grid mt-2\">");
+        cdrDetailItem(sb, "Rolled detail (raw)", focus == null ? null : focus.detail);
+        sb.append("</dl>");
+        if (oldestFirst != null && !oldestFirst.isEmpty()) {
+            sb.append("<ol class=\"cdr-timeline-list cdr-timeline-raw\">");
+            for (CdrRecord t : oldestFirst) {
+                if (t == null) {
+                    continue;
+                }
+                sb.append("<li><code>").append(esc(nullToDash(t.status))).append("</code>");
+                if (t.detail != null && !t.detail.isBlank()) {
+                    sb.append(" <code class=\"cdr-timeline-detail\" title=\"")
+                            .append(esc(t.detail)).append("\">")
+                            .append(esc(clip(t.detail, 96))).append("</code>");
+                }
+                sb.append("</li>");
+            }
+            sb.append("</ol>");
+        }
+        sb.append("</details>");
     }
 
     private static void cdrAnswerItem(StringBuilder sb, String label, CdrSessionDigest.Answer a) {
