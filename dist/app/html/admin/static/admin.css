@@ -454,10 +454,12 @@ tbody.hx-table-live.htmx-settling {
   border-radius: 0.25rem;
   vertical-align: middle;
 }
-/* Flat ledger AS USSD snippet (~50 chars) — never blow adjacent columns. */
+/* Flat ledger AS USSD (~50) — keep visible; reuse ink/mono tokens. */
+.cdr-col-as { min-width: 12rem; }
 .cdr-as-ussd {
-  max-width: 14rem;
-  min-width: 0;
+  max-width: 18rem;
+  min-width: 12rem;
+  width: 18rem;
 }
 .cdr-as-ussd-snip {
   display: block;
@@ -465,23 +467,21 @@ tbody.hx-table-live.htmx-settling {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 0.68rem;
+  font-size: 0.72rem;
   color: var(--color-fg-soft);
   letter-spacing: 0.01em;
 }
-.cdr-as-ussd-empty {
-  color: var(--color-ink-mute);
-}
+.cdr-as-ussd-empty { color: var(--color-ink-mute); }
 
-/* Expand hero: AS USSD primary + outcome (GATE_ARMED is never the title). */
+/* Expand hero: AS USSD + outcome — same ink-panel digest shell as Routing. */
 .cdr-primary-row {
   display: flex;
   flex-wrap: wrap;
-  align-items: flex-start;
-  gap: 0.65rem 1rem;
+  align-items: center;
+  gap: 0.5rem 0.85rem;
 }
 .cdr-primary-ussd {
-  flex: 1 1 12rem;
+  flex: 1 1 14rem;
   margin: 0;
   font-family: "JetBrains Mono", ui-monospace, monospace;
   font-size: 0.85rem;
@@ -496,8 +496,85 @@ tbody.hx-table-live.htmx-settling {
   font-family: "DM Sans", system-ui, sans-serif;
   font-size: 0.8rem;
 }
+.cdr-primary-human {
+  font-size: 0.75rem;
+  font-family: "DM Sans", system-ui, sans-serif;
+}
 
-/* STATUS OF ALL SERVICES — human plane chips. */
+/* 6-hop spine — dense list using existing cdr-status chips + svc-like rows. */
+.cdr-hop-list {
+  list-style: none;
+  margin: 0.25rem 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+.cdr-hop {
+  display: grid;
+  grid-template-columns: 1.5rem 1fr;
+  gap: 0.45rem 0.65rem;
+  align-items: start;
+  min-width: 0;
+}
+.cdr-hop-num {
+  width: 1.5rem;
+  height: 1.5rem;
+  border-radius: 0.25rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+  font-size: 0.68rem;
+  font-weight: 600;
+  color: var(--color-ink-mute);
+  background: color-mix(in srgb, var(--color-ink) 70%, transparent);
+  border: 1px solid var(--color-ink-line);
+}
+.cdr-hop--ok .cdr-hop-num { color: var(--color-badge-ok-fg, #86efac); border-color: rgba(134, 239, 172, 0.35); }
+.cdr-hop--fail .cdr-hop-num { color: #fca5a5; border-color: rgba(248, 113, 113, 0.4); }
+.cdr-hop--skip .cdr-hop-num { color: #f0c674; border-color: rgba(232, 163, 23, 0.4); }
+.cdr-hop-body {
+  min-width: 0;
+  padding: 0.4rem 0.55rem;
+  border-radius: 0.3rem;
+  border: 1px solid var(--color-ink-line);
+  background: color-mix(in srgb, var(--color-ink) 70%, transparent);
+}
+.cdr-hop--fail .cdr-hop-body {
+  border-color: rgba(248, 113, 113, 0.35);
+}
+.cdr-hop-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem 0.55rem;
+}
+.cdr-hop-label {
+  flex: 1 1 auto;
+  font-size: 0.62rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--color-ink-mute);
+  font-family: "DM Sans", system-ui, sans-serif;
+}
+.cdr-hop-when {
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+  font-size: 0.65rem;
+  color: var(--color-ink-mute);
+  font-variant-numeric: tabular-nums;
+}
+.cdr-hop-detail {
+  margin: 0.25rem 0 0;
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+  font-size: 0.72rem;
+  line-height: 1.4;
+  color: var(--color-fg-soft);
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+/* Legacy plane chips kept for any residual markup. */
 .cdr-svc-list {
   list-style: none;
   margin: 0;
@@ -538,8 +615,8 @@ tbody.hx-table-live.htmx-settling {
 .cdr-svc--mute .cdr-svc-state { color: var(--color-ink-mute); }
 
 .cdr-advanced {
-  margin-top: 0.85rem;
-  padding: 0.55rem 0.75rem;
+  margin-top: 0.15rem;
+  padding: 0.65rem 0.85rem;
   border: 1px dashed var(--color-ink-line);
   border-radius: 0.4rem;
   background: transparent;
@@ -651,28 +728,26 @@ html:not([data-theme="light"]) .cdr-status-chip.cdr-status--fail {
   border: 1px solid var(--color-ink-line);
   background: var(--color-ink-panel);
   border-radius: 0.5rem;
-  padding: 0.85rem 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.85rem;
+  padding: 1rem 1.1rem 1.15rem;
 }
 .cdr-digest {
-  margin: 0 0 0.85rem;
-  padding: 0.65rem 0.75rem;
+  margin: 0;
+  padding: 0.75rem 0.85rem;
   border: 1px solid var(--color-ink-line);
   border-radius: 0.4rem;
   background: color-mix(in srgb, var(--color-ink-panel) 92%, var(--color-signal) 8%);
 }
 .cdr-digest-title {
-  margin: 0 0 0.5rem;
+  margin: 0 0 0.45rem;
   font-size: 0.65rem;
-  letter-spacing: 0.12em;
+  letter-spacing: 0.14em;
   text-transform: uppercase;
   color: var(--color-signal);
   font-family: "DM Sans", system-ui, sans-serif;
-}
-.cdr-timeline.cdr-digest {
-  margin: 0.85rem 0 0;
-}
-.cdr-record-box.cdr-digest {
-  margin: 0 0 0.85rem;
+  font-weight: 600;
 }
 .cdr-timeline-list {
   margin: 0;

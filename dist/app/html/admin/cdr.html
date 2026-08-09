@@ -51,16 +51,15 @@
   <main class="mx-auto max-w-6xl px-4 py-8">
     {{NOTICE}}
 
-    <p class="text-xs uppercase tracking-[0.25em] text-signal">CDR · session ledger</p>
+    <p class="text-xs uppercase tracking-[0.25em] text-signal">CDR · ops ledger</p>
     <div class="ops-section-indent">
       <div class="mb-4 flex flex-wrap items-end justify-between gap-3">
         <div>
           <h2 class="mt-1 text-xl font-semibold text-slate-50">Call detail records</h2>
           <p class="mt-1 max-w-2xl text-sm text-ink-mute">
-            One row per correlation. Primary signal = AS USSD (~50 chars) + outcome
-            (END / CONTINUE / fail) — not GATE_ARMED bridge internals. Expand shows
-            status of all services (MAP MO · HLR/hop · Bridge/Adaptive · AS HTTP · MAP UE).
-            Filter by MSISDN, correlation, or status (MAP2MAP_* / GATED* / GATE_*).
+            One row per correlation. Ledger shows AS USSD (~50) + outcome.
+            Expand = dense 6-hop spine (msisdn/sc/GT/hop text/asUrl/gateMs · OK/SKIPPED/FAIL)
+            folded from events_json. Filter MAP2MAP_* / GATED*.
           </p>
         </div>
         <div class="flex flex-wrap items-center gap-2 text-xs font-mono text-ink-mute">
@@ -76,13 +75,14 @@
           (<code class="font-mono text-slate-300">MAP2MAP_*</code>,
           <code class="font-mono text-slate-300">GATED*</code>). Limit max
           <span class="font-mono text-signal">100</span>. Table auto-refreshes every 5s via
-          <code class="font-mono text-slate-300">/admin/cdr/partial</code>.
+          <code class="font-mono text-slate-300">/admin/cdr/partial</code>
+          without jumping scroll.
         </p>
         <form id="cdr-filter" method="get" action="/admin/cdr"
               class="filter-bar flex flex-wrap items-end gap-3"
               hx-get="/admin/cdr/partial"
               hx-target="#cdr-rows"
-              hx-swap="innerHTML"
+              hx-swap="innerHTML settle:0 show:none"
               hx-indicator="#cdr-ind"
               hx-push-url="true"
               hx-trigger="submit, change from:select[name='status']">
@@ -132,7 +132,7 @@
               <th class="px-3 py-2.5 font-medium">MSISDN</th>
               <th class="px-3 py-2.5 font-medium">Short code</th>
               <th class="px-3 py-2.5 font-medium">Status</th>
-              <th class="px-3 py-2.5 font-medium">AS USSD</th>
+              <th class="px-3 py-2.5 font-medium cdr-col-as">AS USSD</th>
               <th class="px-3 py-2.5 font-medium">Origin</th>
             </tr>
           </thead>
@@ -141,12 +141,12 @@
                  hx-get="/admin/cdr/partial"
                  hx-trigger="every 5s"
                  hx-include="#cdr-filter"
-                 hx-swap="innerHTML"
+                 hx-swap="innerHTML settle:0 show:none"
                  hx-indicator="#cdr-ind">{{ROWS}}</tbody>
         </table>
       </div>
       <p class="mt-3 text-xs text-ink-mute">
-        Click a timestamp to expand gate / EWMA / detail. TENANT scope hides other tenants’ rows.
+        Click a timestamp to expand the 6-hop spine. Expand state is kept across polls without scrolling the page.
       </p>
     </div>
   </main>
@@ -155,6 +155,14 @@
       var body = document.getElementById('cdr-rows');
       if (!body) return;
       var OPEN_KEY = 'ussd-cdr-open-ids';
+      var scrollY = 0;
+      var restoring = false;
+
+      // HTMX 2 may still focus/scroll the swap target — pin window scroll around polls.
+      if (window.htmx && htmx.config) {
+        htmx.config.scrollBehavior = 'smooth';
+      }
+
       function loadOpen() {
         try {
           var raw = sessionStorage.getItem(OPEN_KEY);
@@ -192,14 +200,19 @@
       function restoreAllOpen() {
         Object.keys(openIds).forEach(function (id) { applyOpenState(id); });
       }
+      function pinScroll() {
+        try { window.scrollTo(0, scrollY); } catch (e) { /* ignore */ }
+      }
       function refreshCount() {
         var n = body.querySelectorAll('.cdr-ledger-row').length;
         var badge = document.querySelector('.cdr-count-badge');
         if (badge) badge.textContent = n + ' shown';
       }
+
       body.addEventListener('click', function (e) {
         var btn = e.target.closest('[data-cdr-open]');
         if (!btn || !body.contains(btn)) return;
+        e.preventDefault();
         var id = btn.getAttribute('data-cdr-open');
         var detail = body.querySelector('[data-cdr-detail="' + id + '"]');
         if (!detail) return;
@@ -209,21 +222,41 @@
         if (row) row.classList.toggle('cdr-ledger-row--open', open);
         setOpen(id, open);
       });
+
+      document.body.addEventListener('htmx:beforeSwap', function (e) {
+        var t = e.detail && e.detail.target;
+        if (t && (t === body || t.id === 'cdr-rows')) {
+          scrollY = window.scrollY || window.pageYOffset || 0;
+          restoring = true;
+        }
+      });
       document.body.addEventListener('htmx:afterSwap', function (e) {
         var t = e.detail && e.detail.target;
-        // Prefer id match — strict === can fail if HTMX retargets / node identity drifts.
         if (t && (t === body || t.id === 'cdr-rows')) {
           refreshCount();
           restoreAllOpen();
+          pinScroll();
+          requestAnimationFrame(pinScroll);
         }
       });
-      // Also catch settle (some HTMX builds fire usefully only here for self-target polls).
       document.body.addEventListener('htmx:afterSettle', function (e) {
         var t = e.detail && e.detail.target;
         if (t && (t === body || t.id === 'cdr-rows')) {
           restoreAllOpen();
+          pinScroll();
+          restoring = false;
         }
       });
+      // Block accidental focus scroll during poll restore.
+      document.body.addEventListener('focusin', function (e) {
+        if (!restoring) return;
+        var t = e.target;
+        if (t && body.contains(t)) {
+          pinScroll();
+        }
+      });
+
+      // Do not auto-expand on first paint — only restore user-opened ids.
       restoreAllOpen();
     })();
   </script>
