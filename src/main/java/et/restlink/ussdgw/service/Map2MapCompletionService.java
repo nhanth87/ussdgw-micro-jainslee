@@ -36,10 +36,12 @@ import java.util.concurrent.atomic.AtomicInteger;
  * On hop <strong>text</strong>, re-arm the gate for the AS budget. On hop
  * <strong>REJECT / Abort / empty / timeout</strong> (RE_ROUTE only): that <em>is</em> the hop
  * response (TCAP Abort is not visible under a {@code gsm_map}-only Wireshark filter) — clear
- * hop-outstanding, pull AS with {@code string="hlr reject"} or {@code string="hlr none"}, then
+ * hop-outstanding, pull AS with {@code string="hlr reject"} or empty {@code string=}
+ * ({@code hlrResult=none}), then
  * MO {@code returnResultLast}. Never second {@code GATE_ARMED}. AS pull always carries
  * {@code originatedUssd} (dialed), {@code redirectUssd}/{@code hopUssd} (re-route codes),
- * and hop RESULT text in {@code ussdString} when present.
+ * and hop RESULT text in {@code ussdString} when present (never a displayable
+ * {@code hlr none} placeholder — AS menus must not echo empty-hop status onto the UE).
  *
  * <p>TC-END often delivers Dialog {@code CLOSE} before the Service
  * {@code processUnstructuredSS-Response} in the same packet. CLOSE is deferred briefly so

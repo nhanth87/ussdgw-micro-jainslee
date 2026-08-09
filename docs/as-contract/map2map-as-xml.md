@@ -1,34 +1,77 @@
-# Digicom-ET USSDGW — AS HTTP XML contract (MO + MAP2MAP)
+# Digicom-ET USSDGW — AS HTTP wire contract (XML + JSON, MO + MAP2MAP)
 
-Application-server integrator guide for the **classic XmlMAPDialog** HTTP wire that Digicom-ET USSDGW
-uses by default when pulling an AS. Dual-mode exists (XML default + optional JSON per tenant); this
-document focuses on **XML**, which Digicom production AS endpoints expect.
+Application-server integrator guide for Digicom-ET USSDGW **HTTP AS pull**. The gateway is
+**dual-mode**: classic XmlMAPDialog **XML** (default) and greenfield **JSON** (`AsRequest` /
+`AsResponse`). Digicom production AS endpoints today typically use **XML**.
+
+| Mode | Content-Type | Codec | Default |
+|------|--------------|-------|---------|
+| **XML** | `text/xml; charset=utf-8` | `ClassicDialogXmlCodec` | **Yes** |
+| **JSON** | `application/json; charset=utf-8` | `AsWireCodec` ↔ `AsRequest` / `AsResponse` | Opt-in per tenant |
+
+**How the tenant selects wire mode**
+
+1. **Routing dashboard** (`/admin/routing`) — form field **HTTP AS wire** (`XML` \| `JSON`).
+   Persists on the rule’s **tenant** (`ussd_tenant.http_as_wire_format`); Live rules table
+   shows a **wire** column. TENANT principals update their locked tenant; ADMIN/OPS pick
+   any tenant on the form. Unbound rules (no tenantId) cannot enable JSON from Routing.
+2. **Tenants catalog** (`/admin/tenants`) — same field `httpAsWireFormat`.
+3. Else global `ussd.as.http.wire-format` (`xml` \| `json`).
+4. Else **XML**.
+
+Resolver: `WireFormatResolver` (tenant → global → XML). Same AS URL; only Content-Type and body shape change.
+Hot-read: next AS pull uses the tenant row immediately after Save (no restart).
 
 Canonical peers:
 
 | Doc | Role |
 |-----|------|
 | [`classic-xml.md`](classic-xml.md) | Full classic `<dialog>` grammar + NI park |
+| [`openapi-as.yaml`](openapi-as.yaml) | JSON schemas (`AsRequest` / `AsResponse`) |
 | [`map2map.md`](map2map.md) | MAP2MAP Case 2 hop / AdaptiveTimeout / CDR |
 | [`ussd-3gpp-notes.md`](ussd-3gpp-notes.md) | Request vs Notify (3GPP) |
-| [`openapi-as.yaml`](openapi-as.yaml) | Greenfield JSON schemas |
-| Codec | `ClassicDialogXmlCodec` (source of truth for attrs) |
+| Codecs | XML: `ClassicDialogXmlCodec` · JSON: `AsWireCodec` |
 
 ---
 
-## HTTP basics (Digicom)
+## HTTP basics
 
-| Item | Value |
-|------|--------|
-| Direction | **GW → AS** HTTP `POST` (AS pull) |
-| Example URL | Short-code rule `as_url` (e.g. `https://bph.vas.et/v2/ussd`) |
-| Content-Type | `text/xml; charset=utf-8` |
-| Body | Raw `<dialog>…</dialog>` — **not** a JSON envelope |
-| Success | HTTP **200** + XML body (or intentionally empty → GW treats as END / `AS_EMPTY_BODY`) |
-| Push-back key | Echo dialog `localId` (= correlation id) on `/as/callback` if using late push |
+| Item | XML | JSON |
+|------|-----|------|
+| Direction | **GW → AS** HTTP `POST` (AS pull) | same |
+| Example URL | Short-code rule `as_url` | same |
+| Content-Type | `text/xml; charset=utf-8` | `application/json; charset=utf-8` |
+| Body | Raw `<dialog>…</dialog>` | Raw `AsRequest` / `AsResponse` JSON — **not** a Callback envelope |
+| Success | HTTP **200** + body (empty body → END / `AS_EMPTY_BODY`) | same |
+| Push-back key | Echo `localId` | Echo `correlationId` (or `virtualBridgeId`) |
 
-AS must answer quickly enough for the AdaptiveTimeout gate on the session
-(`adaptiveTimeoutMs` on the pull). Empty HTTP 200 body is **not** a menu — it ends the dialog.
+AS must answer within `adaptiveTimeoutMs`. Empty HTTP 200 is **not** a menu.
+
+### Identity map (XML attr ↔ JSON field)
+
+| XML dialog attr | JSON field | Role |
+|-----------------|------------|------|
+| `localId` | `correlationId` | Store / push-back key (`ussdTx` PK) |
+| `sessionId` | `sessionId` | Logical `virtualSessionId` |
+| `virtualBridgeId` | `virtualBridgeId` | Bridge arm id (usually = correlationId) |
+| `adaptiveTimeoutMs` | `adaptiveTimeoutMs` | Gate budget ms |
+| `asMode` | `asMode` | `SYNC` \| `BRIDGE` |
+| Child `string=` (pull) | `ussdString` | Hop text or sentinel / empty |
+| AS menu/final `string=` | `text` | Handset text on CONTINUE/END |
+| — (element type) | `action` | `CONTINUE` \| `END` \| `ABORT` |
+| `dataCodingScheme` | `alphabet` | e.g. `72` → `UNICODE`; omit → `AUTO` |
+| `hlrResult` | *(XML-only)* | JSON AS: infer from `ussdString` + `redirectUssd`/`hopUssd` — see below |
+
+**JSON hop outcome (no `hlrResult` field on `AsRequest`):**
+
+| Condition | Treat as |
+|-----------|----------|
+| Non-empty `ussdString` (not a sentinel) + MAP2MAP codes | hop **responded** |
+| `ussdString` empty + `redirectUssd` / `hopUssd` present | hop **none** |
+| `ussdString` = `"hlr reject"` | hop **reject** |
+| `ussdString` = `"hlr pending"` | hop **pending** |
+
+Never echo pull `ussdString` onto the UE unless `action` intentionally forwards hop text (`responded`).
 
 ---
 
@@ -99,7 +142,7 @@ UE dials *804#
   → Outbound hop dialog key    = m2m-{correlationId}  (NOT written as localId)
   → Hop RESULT / CLOSE / REJECT
   → GW POST pull to AS as_url with localId / sessionId / virtualBridgeId
-       string= = hop USSD text | "hlr none" | "hlr reject"
+       string= = hop USSD text | empty (hlrResult=none) | "hlr reject"
   → AS HTTP 200 CONTINUE/END (or later /as/callback with localId echoed)
   → GW MAP toward UE (Request menu or final Response)
 ```
@@ -120,10 +163,14 @@ those live in `originatedUssd` / `shortCode` / `redirectUssd` / `hopUssd`.
 
 | Case | `hlrResult` | `string=` on `processUnstructuredSSRequest_Request` |
 |------|-------------|------------------------------------------------------|
-| Hop **no** response (empty CLOSE / no RESULT text) | **`none`** | **`hlr none`** |
+| Hop **no** response (empty CLOSE / no RESULT text) | **`none`** | **empty** (`string=""`) — do **not** echo onto UE |
 | Hop Dialog **REJECT** | **`reject`** | **`hlr reject`** |
 | Early gated pull while hop in flight | **`pending`** | **`hlr pending`** |
 | Hop **did** respond with USSD text | **`responded`** | **That upper HLR/MSC USSD text** |
+
+AS must use its **own** CONTINUE menu when `hlrResult` is `none` / `reject` / `pending`.
+Only when `hlrResult="responded"` should business logic treat child `string=` as hop content
+(and never blindly echo hop/`hlr*` strings as the handset menu unless that is intentional).
 
 Non-MAP2MAP MO pulls leave `hlrResult` / `redirectUssd` / `hopUssd` unset.
 
@@ -135,6 +182,8 @@ CDR note: GW status `CONTINUE` means the **AS response** was a menu
 ## 1. Normal MO pull (no MAP2MAP) — GW → AS
 
 UE dials a short code that routes straight to HTTP AS (no re-route hop).
+
+**XML**
 
 ```xml
 <?xml version="1.0" encoding="UTF-8"?>
@@ -154,8 +203,29 @@ UE dials a short code that routes straight to HTTP AS (no re-route hop).
 </dialog>
 ```
 
-Generation 0 → `processUnstructuredSSRequest_Request`. Later user digits →
-`unstructuredSSRequest_Request` (continue pull).
+**JSON** (`AsRequest` — fields from `AsWireCodec`)
+
+```json
+{
+  "sessionId": "vs-mo-1",
+  "correlationId": "corr-mo-1",
+  "requestId": "corr-mo-1",
+  "generation": 0,
+  "msisdn": "251911000001",
+  "shortCode": "*100#",
+  "ussdString": "*100#",
+  "networkId": 0,
+  "virtualBridgeId": "corr-mo-1",
+  "adaptiveTimeoutMs": 7000,
+  "asMode": "BRIDGE",
+  "originatedUssd": "*100#",
+  "codeKind": "SHORT"
+}
+```
+
+Generation 0 → XML `processUnstructuredSSRequest_Request` / JSON `generation: 0`. Later user
+digits → XML `unstructuredSSRequest_Request` (continue pull) / JSON `generation` &gt; 0 with
+digit text in `ussdString`.
 
 ---
 
@@ -163,20 +233,37 @@ Generation 0 → `processUnstructuredSSRequest_Request`. Later user digits →
 
 AS wants the handset to show a menu and wait for digits. Return HTTP 200 with:
 
+**XML**
+
 ```xml
-<dialog mapMessagesSize="1">
+<dialog mapMessagesSize="1" localId="corr-mo-1">
   <unstructuredSSRequest_Request dataCodingScheme="15"
       string="1. Balance&#10;2. Topup&#10;0. Exit"/>
 </dialog>
 ```
 
-GW maps this to MAP **`unstructuredSS-Request`** toward the UE (interactive — UE may send
-digits). CDR phase/status **CONTINUE**.
+**JSON** (`Content-Type: application/json; charset=utf-8`)
 
-**Never** use `unstructuredSSNotify_Request` for a menu — Notify is one-shot (no digit
-collection). See [`ussd-3gpp-notes.md`](ussd-3gpp-notes.md) and [`classic-xml.md`](classic-xml.md).
+```json
+{
+  "correlationId": "corr-mo-1",
+  "requestId": "corr-mo-1",
+  "generation": 1,
+  "text": "1. Balance\n2. Topup\n0. Exit",
+  "action": "CONTINUE",
+  "async": false,
+  "alphabet": "AUTO",
+  "sessionId": "vs-mo-1",
+  "virtualBridgeId": "corr-mo-1"
+}
+```
 
-Optional RestLink attrs on the response (echo identity if useful):
+GW maps this to MAP **`unstructuredSS-Request`** toward the UE (interactive). CDR **CONTINUE**.
+
+**Never** use `unstructuredSSNotify_Request` / Notify for a menu — one-shot, no digits.
+See [`ussd-3gpp-notes.md`](ussd-3gpp-notes.md).
+
+Optional RestLink attrs on the XML response (echo identity if useful):
 
 ```xml
 <dialog localId="corr-mo-1" sessionId="vs-mo-1" virtualBridgeId="corr-mo-1"
@@ -189,23 +276,55 @@ Optional RestLink attrs on the response (echo identity if useful):
 
 ## 3. AS → GW final (END)
 
-End the MO dialog with final text (MAP `processUnstructuredSS-Response` / TC-END path):
+End the MO dialog with final text. Use **`processUnstructuredSSRequest_Response`** (XML) or
+JSON **`action":"END"`**. GW maps to MAP **`processUnstructuredSS-Response`** + TC-END
+(`end=true`). CDR **END** (not CONTINUE).
+
+**XML** (Amharic / UCS-2 — must reach the handset)
 
 ```xml
-<dialog mapMessagesSize="1">
-  <processUnstructuredSSRequest_Response dataCodingScheme="15"
-      string="Thank you. Goodbye."/>
+<dialog mapMessagesSize="1" localId="corr-mo-1"
+        sessionId="vs-mo-1" virtualBridgeId="corr-mo-1"
+        prearrangedEnd="false" returnMessageOnError="true">
+  <processUnstructuredSSRequest_Response
+      invokeId="1"
+      dataCodingScheme="72"
+      string="ውድ ደንበኛ ፤ ውጤቱ በአጭር መለእክት ተልኳል፡፡ ኢትዮ ቴሌኮም"/>
 </dialog>
 ```
 
-Empty end (no menu text) — also END:
+**JSON** (same final text)
+
+```json
+{
+  "correlationId": "corr-mo-1",
+  "requestId": "corr-mo-1",
+  "generation": 1,
+  "text": "ውድ ደንበኛ ፤ ውጤቱ በአጭር መለእክት ተልኳል፡፡ ኢትዮ ቴሌኮም",
+  "action": "END",
+  "async": false,
+  "alphabet": "UNICODE",
+  "sessionId": "vs-mo-1",
+  "virtualBridgeId": "corr-mo-1"
+}
+```
+
+| Field | Notes |
+|-------|--------|
+| XML element | **`processUnstructuredSSRequest_Response`** = final; Request = menu |
+| JSON `action` | **`END`** = final; **`CONTINUE`** = menu |
+| `dataCodingScheme="72"` / `alphabet":"UNICODE"` | CBS UCS-2 — Amharic/Ethiopic |
+| `localId` / `correlationId` | Echo from pull when possible; sync pull may omit (GW uses outstanding corr). Late `/as/callback` **must** echo |
+
+Empty end — also END:
 
 ```xml
 <dialog mapMessagesSize="0"/>
 ```
 
-or empty string on a Response / Request element. **Do not** return HTTP 200 with a completely
-empty body if you intended a menu — that logs `AS_EMPTY_BODY` and ends the session.
+```json
+{ "correlationId": "corr-mo-1", "action": "END", "text": "", "async": false }
+```
 
 Abort:
 
@@ -213,18 +332,27 @@ Abort:
 <dialog mapMessagesSize="0" mapUserAbortChoice="isUserSpecificReason"/>
 ```
 
+```json
+{ "correlationId": "corr-mo-1", "action": "ABORT", "text": "", "async": false }
+```
+
+**Common mistake:** putting final text in `unstructuredSSRequest_Request` / `action":"CONTINUE"`,
+or echoing pull `hlr none` — handset shows a menu/placeholder instead of the final message.
+
 ---
 
 ## 4. MAP2MAP after hop — GW → AS
 
 Rule example: UE dials `*804#`, re-route redirect `*875#`, hop may resolve to a long code
-(e.g. `*8775#` after mark/chain fold). Digicom POSTs to the rule `as_url` after the upper hop
-settles (or with `hlr none` / `hlr reject` when the hop had no usable text).
+(e.g. `*8775#` after mark/chain fold). GW POSTs to the rule `as_url` after the upper hop
+settles (or with empty `string=` / `ussdString` / `hlr reject` when the hop had no usable text).
 
 ### 4a. Success — hop RESULT text (`hlrResult=responded`)
 
 Upper HLR/MSC returned USSD text (any alphabet — e.g. UCS-2 Amharic). That text is the
-**only** content of child `string=`:
+**only** content of child `string=` / JSON `ussdString`:
+
+**XML**
 
 ```xml
 <dialog appCntx="networkUnstructuredSsContext"
@@ -247,19 +375,45 @@ Upper HLR/MSC returned USSD text (any alphabet — e.g. UCS-2 Amharic). That tex
 </dialog>
 ```
 
-- `string=` = **upper HLR/MSC USSD text** (Amharic/UTF-8 allowed; XML-escape `<&"`).
+**JSON** (`AsRequest` — no `hlrResult` field; non-empty `ussdString` + MAP2MAP codes ⇒ responded)
+
+```json
+{
+  "sessionId": "4203367b-c862-4307-81a7-3fbaa50b2afd",
+  "correlationId": "e37caa26-9d16-4239-a2ff-deff0687da8d",
+  "requestId": "e37caa26-9d16-4239-a2ff-deff0687da8d",
+  "generation": 0,
+  "msisdn": "251911230398",
+  "shortCode": "*804#",
+  "ussdString": "ውድ ደንበኛ ፣ ውጤቱ በአጭር መልእክት ተልኳል። ኢትዮ ቴሌኮም",
+  "networkId": 0,
+  "virtualBridgeId": "e37caa26-9d16-4239-a2ff-deff0687da8d",
+  "adaptiveTimeoutMs": 25000,
+  "asMode": "BRIDGE",
+  "originatedUssd": "*804#",
+  "codeKind": "SHORT",
+  "redirectUssd": "*875#",
+  "hopUssd": "*8775#"
+}
+```
+
+- `string=` / `ussdString` = **upper HLR/MSC USSD text** (Amharic/UTF-8 allowed; XML-escape `<&"`).
 - `originatedUssd` = what the subscriber dialed.
 - `redirectUssd` = routing-rule redirect short code.
 - `hopUssd` = code actually sent on the outbound hop (short or long).
-- Identity: `localId` = correlation / `ussdTx`; `sessionId` = virtual session; `virtualBridgeId` ≈ `localId`.
+- Identity: `localId` / `correlationId` = `ussdTx` PK; `sessionId` = virtual session; `virtualBridgeId` ≈ correlation.
 
 AS then answers with a **single** CONTINUE menu (§2), a **multi-menu** flow (§4d), or final
-Response (§3).
+Response / `action":"END"` (§3).
 
 ### 4b. Hop empty / CLOSE — no RESULT text (`hlrResult=none`)
 
 When the peer closes the hop dialog without a USSD RESULT (empty TC-END / NOTICE+CLOSE),
-GW still pulls the AS so the application can decide the UE message:
+GW still pulls the AS so the application can decide the UE message. Hop status is on
+**`hlrResult="none"`** (XML); child **`string=` / `ussdString` is empty** so a naive AS that
+echoes inbound text cannot put the literal `hlr none` onto the handset.
+
+**XML**
 
 ```xml
 <dialog appCntx="networkUnstructuredSsContext"
@@ -275,26 +429,69 @@ GW still pulls the AS so the application can decide the UE message:
         hopUssd="*8775#"
         hlrResult="none"
         networkId="0">
-  <processUnstructuredSSRequest_Request dataCodingScheme="15" string="hlr none">
+  <processUnstructuredSSRequest_Request dataCodingScheme="15" string="">
     <msisdn nai="international_number" npi="ISDN" number="251911230398"/>
   </processUnstructuredSSRequest_Request>
 </dialog>
 ```
 
-Honest contract: `string="hlr none"` means **no hop USSD text was available** — not a
-handset-visible HLR phrase. Re-route codes remain on the dialog so the AS can still key off
-`*875#` / `hopUssd` even when the hop body is empty.
+**JSON** (empty `ussdString` + `redirectUssd`/`hopUssd` ⇒ treat as hop **none**)
 
-Example AS CONTINUE after `hlr none` (illustrative; body length varies):
+```json
+{
+  "sessionId": "4203367b-c862-4307-81a7-3fbaa50b2afd",
+  "correlationId": "e37caa26-9d16-4239-a2ff-deff0687da8d",
+  "requestId": "e37caa26-9d16-4239-a2ff-deff0687da8d",
+  "generation": 0,
+  "msisdn": "251911230398",
+  "shortCode": "*804#",
+  "ussdString": "",
+  "networkId": 0,
+  "virtualBridgeId": "e37caa26-9d16-4239-a2ff-deff0687da8d",
+  "adaptiveTimeoutMs": 25000,
+  "asMode": "BRIDGE",
+  "originatedUssd": "*804#",
+  "codeKind": "SHORT",
+  "redirectUssd": "*875#",
+  "hopUssd": "*8775#"
+}
+```
+
+Honest contract: hop **none** means **no hop USSD text was available**. Re-route codes remain
+so the AS can still key off `*875#` / `hopUssd`. Return your configured menu via
+`unstructuredSSRequest_Request` / `action":"CONTINUE"` — do **not** echo pull `string=` /
+`ussdString` unless hop **responded**.
+
+Example AS CONTINUE after empty hop (illustrative):
+
+**XML**
 
 ```xml
 <dialog mapMessagesSize="1" localId="e37caa26-9d16-4239-a2ff-deff0687da8d">
   <unstructuredSSRequest_Request dataCodingScheme="15"
-      string="Service temporarily unavailable. Try again later."/>
+      string="meow meow meow meow"/>
 </dialog>
 ```
 
+**JSON**
+
+```json
+{
+  "correlationId": "e37caa26-9d16-4239-a2ff-deff0687da8d",
+  "requestId": "e37caa26-9d16-4239-a2ff-deff0687da8d",
+  "generation": 1,
+  "text": "meow meow meow meow",
+  "action": "CONTINUE",
+  "async": false,
+  "alphabet": "AUTO"
+}
+```
+
+(Legacy note: older GW builds used `string="hlr none"`; treat that as hop none if still seen.)
+
 ### 4c. Hop REJECT (`hlrResult=reject`)
+
+**XML**
 
 ```xml
 <dialog … shortCode="*804#" originatedUssd="*804#" redirectUssd="*875#" hopUssd="*875#"
@@ -304,6 +501,28 @@ Example AS CONTINUE after `hlr none` (illustrative; body length varies):
     <msisdn nai="international_number" npi="ISDN" number="251911000001"/>
   </processUnstructuredSSRequest_Request>
 </dialog>
+```
+
+**JSON** (`ussdString` = `"hlr reject"`)
+
+```json
+{
+  "sessionId": "vs-…",
+  "correlationId": "corr-…",
+  "requestId": "corr-…",
+  "generation": 0,
+  "msisdn": "251911000001",
+  "shortCode": "*804#",
+  "ussdString": "hlr reject",
+  "networkId": 0,
+  "virtualBridgeId": "corr-…",
+  "adaptiveTimeoutMs": 25000,
+  "asMode": "BRIDGE",
+  "originatedUssd": "*804#",
+  "codeKind": "SHORT",
+  "redirectUssd": "*875#",
+  "hopUssd": "*875#"
+}
 ```
 
 ### 4d. Multi-menu on the return path (AS → GW → UE)
@@ -318,6 +537,8 @@ the AS again with those digits; the AS returns the next menu or END.
 
 **Turn 1 — AS → GW (first menu after hop):**
 
+**XML**
+
 ```xml
 <dialog mapMessagesSize="1"
         localId="e37caa26-9d16-4239-a2ff-deff0687da8d"
@@ -328,10 +549,28 @@ the AS again with those digits; the AS returns the next menu or END.
 </dialog>
 ```
 
+**JSON**
+
+```json
+{
+  "correlationId": "e37caa26-9d16-4239-a2ff-deff0687da8d",
+  "requestId": "e37caa26-9d16-4239-a2ff-deff0687da8d",
+  "generation": 1,
+  "text": "1. Balance\n2. Data\n3. Help\n0. Exit",
+  "action": "CONTINUE",
+  "async": false,
+  "alphabet": "AUTO",
+  "sessionId": "4203367b-c862-4307-81a7-3fbaa50b2afd",
+  "virtualBridgeId": "e37caa26-9d16-4239-a2ff-deff0687da8d"
+}
+```
+
 GW → MAP **`unstructuredSS-Request`** to the UE (stay-on-call). CDR **CONTINUE**.
 
 **Turn 2 — UE digits → GW → AS pull** (generation &gt; 0; child is continue Request with digit
 string — see §1). AS replies with the next menu:
+
+**XML**
 
 ```xml
 <dialog mapMessagesSize="1" localId="e37caa26-9d16-4239-a2ff-deff0687da8d">
@@ -340,7 +579,21 @@ string — see §1). AS replies with the next menu:
 </dialog>
 ```
 
-**Turn 3 — final:**
+**JSON**
+
+```json
+{
+  "correlationId": "e37caa26-9d16-4239-a2ff-deff0687da8d",
+  "text": "Balance menu\n1. Main\n2. Bonus\n0. Back",
+  "action": "CONTINUE",
+  "async": false,
+  "alphabet": "AUTO"
+}
+```
+
+**Turn 3 — final** (must reach UE as END):
+
+**XML**
 
 ```xml
 <dialog mapMessagesSize="1" localId="e37caa26-9d16-4239-a2ff-deff0687da8d">
@@ -349,14 +602,26 @@ string — see §1). AS replies with the next menu:
 </dialog>
 ```
 
-`localId` stays the **same** for the whole MO / MAP2MAP session.
+**JSON**
+
+```json
+{
+  "correlationId": "e37caa26-9d16-4239-a2ff-deff0687da8d",
+  "text": "Thank you.",
+  "action": "END",
+  "async": false,
+  "alphabet": "AUTO"
+}
+```
+
+`localId` / `correlationId` stays the **same** for the whole MO / MAP2MAP session.
 
 #### Optional — `mapMessagesSize` &gt; 1 in one AS body
 
 Classic XmlMAPDialog can list more than one child MAP message. This GW decodes the **first**
 meaningful `unstructuredSSRequest_Request` / Response string and applies **one** MAP action
 toward the UE (same as a single-menu CONTINUE/END). Extra sibling Request elements in the
-**same** HTTP body are **not** queued as later menus.
+**same** HTTP body are **not** queued as later menus. JSON `AsResponse` is always one action.
 
 ```xml
 <!-- Not a multi-step queue: only the first Request string is applied -->
@@ -368,14 +633,14 @@ toward the UE (same as a single-menu CONTINUE/END). Extra sibling Request elemen
 
 For true multi-step menus, use **successive** responses after UE digits (§4d preferred model).
 
-#### How GW maps AS XML → MAP toward UE
+#### How GW maps AS wire → MAP toward UE
 
-| AS child element | MAP toward UE | Interactive? |
-|------------------|---------------|--------------|
-| `unstructuredSSRequest_Request` + non-empty `string=` | `unstructuredSS-Request` | **Yes** — wait for digits |
-| `processUnstructuredSSRequest_Response` / empty dialog / `mapMessagesSize="0"` | Final Response / TC-END | No |
-| `unstructuredSSNotify_Request` | `unstructuredSS-Notify` | **No** — one-shot; do not use as menu |
-| Abort attrs / `mapUserAbortChoice` | MAP abort | No |
+| AS wire (XML / JSON) | MAP toward UE | Interactive? |
+|----------------------|---------------|--------------|
+| `unstructuredSSRequest_Request` + text / `action":"CONTINUE"` | `unstructuredSS-Request` | **Yes** — wait for digits |
+| `processUnstructuredSSRequest_Response` / empty dialog / `action":"END"` | Final Response / TC-END | No |
+| `unstructuredSSNotify_Request` / Notify | `unstructuredSS-Notify` | **No** — one-shot; do not use as menu |
+| Abort attrs / `action":"ABORT"` | MAP abort | No |
 
 Aligns with [`classic-xml.md`](classic-xml.md) and [`ussd-3gpp-notes.md`](ussd-3gpp-notes.md).
 
@@ -383,18 +648,22 @@ Aligns with [`classic-xml.md`](classic-xml.md) and [`ussd-3gpp-notes.md`](ussd-3
 
 ## 5. What the AS should implement (checklist)
 
-1. Accept `POST` + `Content-Type: text/xml; charset=utf-8`.
-2. Parse root `<dialog>`; read `localId`, `sessionId`, `virtualBridgeId`, `msisdn`, `string=`,
-   and MAP2MAP attrs when present. Persist **`localId`** for late push-back.
-3. If `hlrResult="responded"` → treat `string=` as upper-HLR content for your business logic.
-4. If `hlrResult="none"` / `"reject"` → handle sentinel `hlr none` / `hlr reject`; use
-   `redirectUssd` / `hopUssd` / `originatedUssd` for routing context.
-5. Reply 200 with CONTINUE (`unstructuredSSRequest_Request`) or END
-   (`processUnstructuredSSRequest_Response` / empty dialog). Multi-menu = successive CONTINUEs
-   after each UE digit pull (§4d).
-6. Never confuse **Notify** (`unstructuredSSNotify_Request`) with an interactive menu — menus
-   use **Request**.
-7. On `/as/callback`, echo **`localId`** (and ideally `virtualBridgeId`).
+1. Accept `POST` with the tenant wire: `text/xml; charset=utf-8` **or**
+   `application/json; charset=utf-8`. Enable JSON from **Routing → HTTP AS wire**
+   (or Tenants `httpAsWireFormat` / global `ussd.as.http.wire-format`).
+2. Parse `<dialog>` **or** `AsRequest`; read identity (`localId` / `correlationId`), MSISDN,
+   hop text (`string=` / `ussdString`), and MAP2MAP attrs. Persist **`localId`/`correlationId`**
+   for late push-back.
+3. Hop **responded** (`hlrResult="responded"` or non-empty hop `ussdString`) → treat that text
+   as upper-HLR content for business logic.
+4. Hop **none** / **reject** / **pending** → use dialog / `AsRequest` attrs for routing; return
+   **your** menu — never echo pull empty / `hlr reject` / `hlr pending` onto the UE unless
+   intentional.
+5. Reply 200 with CONTINUE or END (§2 / §3). Multi-menu = successive CONTINUEs after each UE
+   digit pull (§4d). Final text that must reach the UE = `processUnstructuredSSRequest_Response`
+   or `action":"END"`.
+6. Never confuse **Notify** with an interactive menu — menus use **Request** / `CONTINUE`.
+7. On `/as/callback`, echo **`localId`/`correlationId`** (and ideally `virtualBridgeId`).
 
 ---
 
@@ -405,11 +674,12 @@ Aligns with [`classic-xml.md`](classic-xml.md) and [`ussd-3gpp-notes.md`](ussd-3
 | HTTP 200 + empty body | CDR / log `AS_EMPTY_BODY`; session ends |
 | Wrong element names (`ProcessUnstructured…` camelCase drift) | Decode miss → END / ignore |
 | Using `unstructuredSSNotify_Request` as a menu | Notify is one-shot; no digit collection |
-| Ignoring `localId` on late callback | Bridge cannot match session |
-| Echoing only `sessionId` | Fragile push-back; always prefer `localId` |
+| Final text in Request / `CONTINUE` instead of Response / `END` | Handset gets another menu, not TC-END |
+| Ignoring `localId` / `correlationId` on late callback | Bridge cannot match session |
+| Echoing only `sessionId` | Fragile push-back; always prefer correlation |
 | Confusing `jsessionId` / Cookie with `localId` | NI park vs pull correlation |
 | Assuming Digicom is JSON-only | Default wire is **XML**; JSON is opt-in per tenant |
-| Expecting hop text inside `originatedUssd` | Dialed stays in `originatedUssd`; hop text is `string=` when `hlrResult=responded` |
+| Expecting hop text inside `originatedUssd` | Dialed stays in `originatedUssd`; hop text is `string=` / `ussdString` when responded |
 | Expecting `*875#` in `shortCode` | `shortCode` is the **matched rule** (`*804#`); redirect is `redirectUssd` / `hopUssd` |
 | Packing many menus in one `mapMessagesSize>1` body | Only first string applied; use successive turns |
 
@@ -422,8 +692,8 @@ UE *804#
   → GW matches re-route rule (redirect *875#, hopUssd maybe *8775#)
   → Outbound MAP hop to upper HLR/MSC
   → Hop RESULT text | CLOSE empty | REJECT
-  → GW POST XML to AS as_url (localId/sessionId/virtualBridgeId + attrs above)
-  → AS returns CONTINUE (menu 1) or END XML
+  → GW POST XML or JSON to AS as_url (identity + attrs above)
+  → AS returns CONTINUE (menu 1) or END
   → [optional multi-menu] UE digits → GW pull → AS menu 2… → END
   → GW MAP reply toward UE (or bridge/gated path if AdaptiveTimeout fired)
 ```

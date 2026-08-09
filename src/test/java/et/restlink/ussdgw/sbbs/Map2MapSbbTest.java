@@ -143,7 +143,7 @@ class Map2MapSbbTest {
         assertThat(ss7.cmds).isEmpty();
         assertThat(pending.size()).isZero();
         assertThat(routed.get()).isNotNull();
-        assertThat(routed.get().ussdString()).isEqualTo(Map2MapCdr.AS_USSD_HLR_NONE);
+        assertThat(routed.get().ussdString()).isEmpty();
         assertThat(routed.get().originatedUssd()).isEqualTo("*804#");
         assertThat(routed.get().codeKind()).isEqualTo("SHORT");
         assertThat(routed.get().msisdn()).isEqualTo("911230398");
@@ -338,7 +338,7 @@ class Map2MapSbbTest {
         assertThat(session.adaptiveBridgeArm()).isTrue();
         assertThat(routed.get().originatedUssd()).isEqualTo("*101123456#");
         assertThat(routed.get().codeKind()).isEqualTo("LONG");
-        assertThat(routed.get().ussdString()).isEqualTo(Map2MapCdr.AS_USSD_HLR_NONE);
+        assertThat(routed.get().ussdString()).isEmpty();
     }
 
 

@@ -42,7 +42,7 @@ Admin: `http://127.0.0.1:8088/admin/login` (form login), or for automation
 `ussd.admin.api-key` before the next boot — otherwise startup fails closed. Checklist:
 [docs/prod-release-path.md](docs/prod-release-path.md).
 
-AS pull (HTTP): short-code rules → POST JSON to AS URL  
+AS pull (HTTP): short-code rules → POST **XML** (default) or **JSON** (per-tenant) to AS URL.
 AS callback: `POST /as/callback`
 
 ## Database (H2 lab / PostgreSQL prod)
@@ -67,9 +67,12 @@ export QUARKUS_DATASOURCE_JDBC_URL=jdbc:postgresql://127.0.0.1:5432/ussdgw
 
 Never `jdbc:h2:mem:` for shipped dist. Schema: Flyway `V1__ussdgw_baseline.sql` + boot guard — see [`docs/agents/schema.md`](docs/agents/schema.md).
 
-See `docs/as-contract/` and `AGENTS.md`. AS HTTP XML (MO + MAP2MAP, session ids, multi-menu):
+See `docs/as-contract/` and `AGENTS.md`. AS HTTP **dual-wire** guide (XML + JSON samples,
+MO + MAP2MAP, session ids, multi-menu, final `processUnstructuredSSRequest_Response` /
+`action":"END"`):
 [`docs/as-contract/map2map-as-xml.md`](docs/as-contract/map2map-as-xml.md)
-(§ Session identity · §4 MAP2MAP · §4d multi-menu).
+(Content-Type / tenant `httpAsWireFormat` · § Session identity · §2 CONTINUE · §3 END ·
+§4 MAP2MAP · §4d multi-menu).
 
 ## Lab SS7 (public tree)
 

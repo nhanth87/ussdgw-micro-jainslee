@@ -76,7 +76,7 @@ class ClassicDialogXmlCodecTest {
         AsResponse resp = ClassicDialogXmlCodec.decodeResponse(asReply, "fb");
         assertThat(resp.correlationId()).isEqualTo("corr-rt");
         assertThat(resp.text()).isEqualTo("Thank you");
-        assertThat(resp.action()).isEqualTo(AsAction.CONTINUE);
+        assertThat(resp.action()).isEqualTo(AsAction.END);
     }
 
     @Test
@@ -163,7 +163,7 @@ class ClassicDialogXmlCodecTest {
     @Test
     void encodePullMap2MapIncludesRedirectAndHopUssd() {
         AsRequest req = new AsRequest("vs-1", "corr-m2m", "r1", 0, "251911230398", "*804#",
-                "hlr none", 0, "corr-m2m", 25000L, "BRIDGE")
+                "", 0, "corr-m2m", 25000L, "BRIDGE")
                 .withOriginated("*804#", "SHORT")
                 .withMap2MapCodes("*875#", "*8775#");
         String xml = ClassicDialogXmlCodec.encodePull(req);
@@ -173,7 +173,8 @@ class ClassicDialogXmlCodecTest {
                 .contains("redirectUssd=\"*875#\"")
                 .contains("hopUssd=\"*8775#\"")
                 .contains("hlrResult=\"none\"")
-                .contains("string=\"hlr none\"")
+                .contains("string=\"\"")
+                .doesNotContain("string=\"hlr none\"")
                 .contains("number=\"251911230398\"");
     }
 
@@ -220,6 +221,40 @@ class ClassicDialogXmlCodecTest {
         assertThat(r.action()).isEqualTo(AsAction.CONTINUE);
         assertThat(r.text()).isEqualTo("Menu 1\n1 Next");
         assertThat(r.correlationId()).isEqualTo("corr-mm");
+    }
+
+    @Test
+    void decodeFinalProcessResponseIsEndWithUcs2Amharic() {
+        String amharic = "ውድ ደንበኛ ፤ ውጤቱ በአጭር መለእክት ተልኳል፡፡ ኢትዮ ቴሌኮም";
+        String xml = """
+                <dialog mapMessagesSize="1" prearrangedEnd="false" returnMessageOnError="true">
+                  <processUnstructuredSSRequest_Response
+                      invokeId="1"
+                      dataCodingScheme="72"
+                      string="%s"/>
+                </dialog>
+                """.formatted(amharic);
+        AsResponse r = ClassicDialogXmlCodec.decodeResponse(xml, "corr-fallback");
+        assertThat(r.action()).isEqualTo(AsAction.END);
+        assertThat(r.text()).isEqualTo(amharic);
+        assertThat(r.alphabet()).isEqualTo(et.restlink.ussdgw.api.UssdAlphabet.UNICODE);
+        // Missing localId → sync pull uses outstanding correlation
+        assertThat(r.correlationId()).isEqualTo("corr-fallback");
+        assertThat(r.text().length()).isNotEqualTo(8);
+    }
+
+    @Test
+    void decodeMenuRequestRemainsContinue() {
+        String xml = """
+                <dialog mapMessagesSize="1" localId="corr-menu">
+                  <unstructuredSSRequest_Request dataCodingScheme="15"
+                      string="meow meow meow meow"/>
+                </dialog>
+                """;
+        AsResponse r = ClassicDialogXmlCodec.decodeResponse(xml, "fb");
+        assertThat(r.action()).isEqualTo(AsAction.CONTINUE);
+        assertThat(r.text()).isEqualTo("meow meow meow meow");
+        assertThat(r.alphabet()).isEqualTo(et.restlink.ussdgw.api.UssdAlphabet.UCS7);
     }
 
     @Test

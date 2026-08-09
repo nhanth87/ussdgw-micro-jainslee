@@ -20,7 +20,9 @@ import com.fasterxml.jackson.annotation.JsonInclude;
  * {@link #redirectUssd()} = rule redirect (e.g. {@code *875#}); {@link #hopUssd()} = resolved
  * hop code actually sent toward upper HLR (may be long {@code *875*…#});
  * {@link #ussdString()} = upper HLR/MSC hop USSD body only (never dialed/redirect codes),
- * or {@code hlr none}/{@code hlr reject} when the hop had no text / REJECT.
+ * or empty / {@code hlr reject} when the hop had no text / REJECT
+ * ({@code hlrResult} carries {@code none}|{@code reject}; empty hop uses empty {@code string=}
+ * so AS default menus are safe to return without echoing a placeholder).
  */
 @JsonIgnoreProperties(ignoreUnknown = true)
 @JsonInclude(JsonInclude.Include.NON_NULL)
