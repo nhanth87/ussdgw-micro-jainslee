@@ -23,6 +23,14 @@
         "local": "172.16.144.163:2019",
         "peer": "10.177.54.241:2502",
         "localSecondary": []
+      },
+      {
+        "name": "L3-LAB-SIM",
+        "type": "server",
+        "channel": "sctp",
+        "local": "127.0.0.1:8023",
+        "peer": "127.0.0.1:8024",
+        "localSecondary": []
       }
     ]
   },
@@ -38,6 +46,17 @@
         "links": [
           "L1-BP-1404",
           "L2-BP-1403"
+        ]
+      },
+      {
+        "name": "AS-LAB",
+        "mode": "loadshare",
+        "functionality": "ipsp",
+        "ipsp": "server",
+        "exchangeType": "SE",
+        "routingContext": 101,
+        "links": [
+          "L3-LAB-SIM"
         ]
       }
     ],
@@ -55,6 +74,13 @@
           "opc": 1470
         },
         "via": "AS-BP"
+      },
+      {
+        "to": {
+          "dpc": 2,
+          "opc": 1470
+        },
+        "via": "AS-LAB"
       }
     ]
   },
@@ -65,14 +91,23 @@
         "networkIndicator": "national",
         "networkId": 0,
         "reachablePointCodes": [
-          1404,
-          1403
+          1403,
+          1404
+        ]
+      },
+      {
+        "pc": 1470,
+        "networkIndicator": "national",
+        "networkId": 1,
+        "reachablePointCodes": [
+          2
         ]
       }
     ],
     "routing": [
       {
         "from": "remote",
+        "networkId": 0,
         "match": {
           "gt": "*"
         },
@@ -83,11 +118,45 @@
       },
       {
         "from": "local",
+        "networkId": 0,
         "match": {
           "gt": "*"
         },
         "to": {
           "pc": 1404
+        },
+        "mask": "K"
+      },
+      {
+        "from": "remote",
+        "networkId": 1,
+        "match": {
+          "gt": "*"
+        },
+        "to": {
+          "pc": 1470
+        },
+        "mask": "K"
+      },
+      {
+        "from": "local",
+        "networkId": 1,
+        "match": {
+          "gt": "251900000200"
+        },
+        "to": {
+          "pc": 2
+        },
+        "mask": "K"
+      },
+      {
+        "from": "local",
+        "networkId": 1,
+        "match": {
+          "gt": "*"
+        },
+        "to": {
+          "pc": 2
         },
         "mask": "K"
       }
