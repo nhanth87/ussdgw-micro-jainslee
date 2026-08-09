@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # Assemble Quarkus fast-jar runtime into worktree dist/ (OTA parity).
 # Usage: ./build/package-dist.sh
+# Agents (Cursor): run with unrestricted Shell (required_permissions: ["all"]) —
+# never under sandbox when using .m2-agent-repo / Digicom ship (see docs/agents/lessons.md).
 #
 # Layout (never uber-jar):
 #   quarkus-run.jar     thin launcher

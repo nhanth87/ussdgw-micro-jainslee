@@ -17,6 +17,17 @@ MAP2MAP Parent always `setAdaptiveBridgeArm(true)`.
 gateMs, EWMA). Distinct from in-flight `ussdTx` (PK = correlationId). Temporary pull EWMA also
 lives in `AdaptiveTimeout` per-MSISDN.
 
+## Call flow (locked) — HLR text vs none → AS → UE
+
+Operator law (do not regress CDR chips or AS wire):
+
+| Hop from HLR/MSC | CDR | Admin chip | AS pull |
+|------------------|-----|------------|---------|
+| **USSD text** response | `MAP2MAP_HOP_CLOSE` (phase `S1_ACTIVE`) | **Amber** `cdr-status--gated` (same family as `GATE_ARMED`) — **never** red via `phase=FAILED` | `string=` = hop text, `hlrResult=responded` |
+| **No** USSD text (empty CLOSE / timeout / abort / reject path) | **FAIL** family (`MAP2MAP_HOP_FAIL` / `HLR_REJECT` / `MAP2MAP_HOP_ABORT` / `MAP2MAP_TIMEOUT`, phase `FAILED`) | **Red** `cdr-status--fail` | `string=` **empty**, `hlrResult=none` (or `reject`); **never** put literal `hlr none` in `string=` |
+| AS replies (CONTINUE/END) | — | — | GW **forwards AS text** to UE |
+| AS silent after AdaptiveTimeout | `BRIDGED` / gate path | — | UE gets **Bridge page** text (`ussd.bridge.async-wait-message` / hard-fail) |
+
 ```
 UE *804#  (or mark *101 → *101123456#)
   → MSC → GW          MAP processUnstructuredSS-Request
@@ -29,17 +40,19 @@ UE *804#  (or mark *101 → *101123456#)
                         Calling SSN 6; destRef + component = MSISDN; USSD = redirect (e.g. *875#)
                       **then** `startAwaitingAs` → CDR `GATE_ARMED` (budget countdown;
                         **not** UE async-wait). Covers remaining hop+AS wait.
-  → peer upper HLR    processUnstructuredSS-Response / REJECT / abort
+  → peer upper HLR    processUnstructuredSS-Response / REJECT / abort / empty CLOSE
                       (legacy UnstructuredSS-Response still accepted)
   → Map2MapCompletion  sync AS pull via AsPullRouter (HTTP|gRPC|SIP per rule_type):
-                        **hop text** → ussdString=hop + dialog `hlrResult=responded`; attrs `redirectUssd`/`hopUssd`; re-arm AdaptiveTimeout for AS budget;
-                        **hop REJECT** → ussdString=`hlr reject` + dialog `hlrResult=reject`;
+                        **hop text** → CDR `MAP2MAP_HOP_CLOSE` (amber) + ussdString=hop + `hlrResult=responded`;
+                          re-arm AdaptiveTimeout for AS budget;
+                        **hop REJECT** → CDR fail + ussdString=`hlr reject` + `hlrResult=reject`;
                           **no second GATE_ARMED** (hop already answered);
-                        **hop empty/timeout/abort/CLOSE** → ussdString empty + `hlrResult=none` (still emit `redirectUssd`/`hopUssd`; AS must not echo placeholder onto UE);
+                        **hop empty/timeout/abort/CLOSE-no-text** → CDR fail + ussdString empty + `hlrResult=none`
+                          (still emit `redirectUssd`/`hopUssd`; AS must not echo placeholder onto UE);
                         additive originatedUssd + shortCode + codeKind + redirectUssd + hopUssd;
                         if already S1_RELEASED → keep bridged (no CAS reset)
-  → AS (HttpClientSbb / GrpcClientSbb / Sip MESSAGE) 200 / OK
-  → GW → MSC → UE     processUnstructuredSS result  (or NI late reconcile)
+  → AS (HttpClientSbb / GrpcClientSbb / Sip MESSAGE) 200 / OK body
+  → GW → MSC → UE     forward AS CONTINUE/END  (or Bridge wait/hard-fail if AS silent)
   (hop+AS still open after budget) BridgeGate → CDR `BRIDGED` + UE async-wait + gated XML
 ```
 
@@ -251,14 +264,19 @@ survive process restart or cross-node (see [lessons.md](../agents/lessons.md) ·
 | `MAP2MAP_HOP_START` | Case 2 hop started (`path=fixed` or `path=upper-gt`) |
 | `MAP2MAP_USSD_SENT` | Outbound UnstructuredSS toward hop GT (gate armed just before/with this) |
 | `MAP2MAP_GATED_HOP` | Gate fired during hop (also classic `BRIDGED`) |
-| `MAP2MAP_OK` / `MAP2MAP_COMPLETE_AFTER_GATE` | Hop done → AS pull (re-arm vs already S1_RELEASED) |
-| `HLR_REJECT` / `MAP2MAP_HOP_ABORT` / `MAP2MAP_HOP_CLOSE` | Peer REJECT / abort / CLOSE-without-RESULT — AS-pulls `hlr reject` / empty+`hlrResult=none` (not a timer) |
+| `MAP2MAP_HOP_CLOSE` | Hop returned **USSD text** → AS pull with that text (`hlrResult=responded`); admin chip **amber** (never red) |
+| `MAP2MAP_OK` / `MAP2MAP_COMPLETE_AFTER_GATE` | Legacy/alias hop-done → AS (prefer `MAP2MAP_HOP_CLOSE` when hop text present) |
+| `MAP2MAP_HOP_FAIL` | Hop **no** USSD text (empty CLOSE/RELEASE) — AS `hlrResult=none` + empty `string=`; chip **red** |
+| `HLR_REJECT` / `MAP2MAP_HOP_ABORT` | Peer REJECT / abort — AS-pulls `hlr reject` / empty+`hlrResult=none` |
 | `MAP2MAP_TIMEOUT` / `MAP2MAP_TIMEOUT_AFTER_BRIDGE` | Real hop TTL (`BridgeGateScheduler`) or MAP `onDialogTimeout` only |
 | `GATE_ARMED` / `BRIDGED` / `GATE_EXPIRED` | Budget armed (not fired) / UE async-wait / NI park |
 | `MAP2MAP_MO_HOLD` | MO end deferred — hop still outstanding |
 | `GATED_AS_NOTIFY` / `GATED_AS_ACK` / `GATED_AS_FAIL` | Gated XmlMAPDialog POST to AS |
+| **`END` / `CONTINUE` / `ABORT`** | **AS body applied toward UE** by `VirtualSessionBridge` (not hop-close). `END` = final AS→UE reply received and forwarded (`phase=COMPLETED`). Detail carries `asUssd=` (~50-char snippet) + `asLen=` + `note=AS→UE` |
 
-Detail pipe fields: `sc|redirect|dialed|hopGt|hopSsn|path|…`. Columns `gate_ms` / `observed_ewma_ms` via `CdrDbFlusher`. Admin filter: `/admin/cdr?status=MAP2MAP_*` or `GATED*`. Catalog: `CdrStatuses` + `Map2MapCdr`.
+Detail pipe fields: `sc|redirect|dialed|hopGt|hopSsn|path|asUssd|asLen|…`. Columns `gate_ms` / `observed_ewma_ms` / `as_ussd` via `CdrDbFlusher`. Admin filter: `/admin/cdr?status=MAP2MAP_*` or `GATED*`. Catalog: `CdrStatuses` + `Map2MapCdr` + `CdrUssdSnippet`.
+
+**Timeline honesty:** `… → MAP2MAP_AS_ROUTED → END` means AS pull was routed, then AS replied and GW applied `action=END` to the UE — **not** “session ended before AS response”. Hop-close is `MAP2MAP_HOP_CLOSE` / `MAP2MAP_HOP_FAIL` only.
 
 ## Digicom note
 

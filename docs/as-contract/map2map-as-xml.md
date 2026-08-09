@@ -40,9 +40,9 @@ Tests exist to **find bugs and block ship**, not to pad green bars.
 
 | Seam | What | Must fail when |
 |------|------|----------------|
-| **A** wire | `Map2MapAsWireContractExamplesTest` — fixtures from this doc | Wrong BEGIN/CONTINUE/END shape; hop `none` embeds `hlr none`; XML≠JSON parity; gated notify missing `adaptiveTimeoutMs` / `gateReason` / `jsessionId` |
-| **B** bridge/MAP | `AsPullBeginContinueEndAndGateTest` | Wrong `Ss7Command` / `endDialog`; CONTINUE bumps generation; gate uses EWMA×1.5 instead of config ceiling; late AS double-NI; hard-fail still NI |
-| **C** Digicom lab | [`build/prove-as-wire-lab.sh`](../../build/prove-as-wire-lab.sh) + checklist | Sim dialog / pcap / AdaptiveTimeout path broken on Digicom after redeploy |
+| **A** wire | `Map2MapAsWireContractExamplesTest` — fixtures from this doc | Wrong BEGIN/CONTINUE/END shape; hop `none` embeds `hlr none`; XML≠JSON parity across N-step multimenu; digit continue still BEGIN shape; gated notify missing `adaptiveTimeoutMs` / `gateReason` / `jsessionId` |
+| **B** bridge/MAP | `AsPullBeginContinueEndAndGateTest` | Wrong `Ss7Command` / `endDialog`; CONTINUE bumps generation; missing CDR `asUssd=` on CONTINUE/END; gate uses EWMA×1.5 instead of config ceiling; late AS double-NI; hard-fail still NI |
+| **C** Digicom lab | [`build/prove-as-wire-lab.sh`](../../build/prove-as-wire-lab.sh) + checklist | Sim dialog / pcap / AdaptiveTimeout / N-step multimenu path broken on Digicom after redeploy |
 
 **Pre-rsync:** **A∧B green** + `package-dist` (JDK 25, build-time `postgresql` then restore local `h2`).
 
@@ -51,11 +51,14 @@ Tests exist to **find bugs and block ship**, not to pad green bars.
 | Step | Gate |
 |------|------|
 | C7 | Preflight: `:8088` `/admin/status.json` → `ss7.live`, `scheduler.gateTicks`, jar mtime — đỏ ⇒ stop |
-| C1–C2 | MO BEGIN → CONTINUE → digit → END (XML tenant, lab SC) |
-| C3 | MAP2MAP **lab** short-code on sim → multimenu → END |
+| C1 | MO BEGIN → AS CONTINUE menu **`abc`** (XML tenant, lab SC e.g. `*100#`) via ss7-sim net 1; CDR `CONTINUE` + `asUssd` |
+| C2 | Digit **`2`** → continue pull (same corr, `ussdString=2`, `originatedUssd`=dialed) → menu **`2-dce`** → … → END **`(xyz)`**; **no** hop op59 on digit |
+| C3 | MAP2MAP **lab** SC on sim (NOT live `*804`) → hop **once** → multimenu → END; first pull has `hlrResult` |
 | C4 | AdaptiveTimeout fire → wait; late AS → NI once |
 | C5 | Same as C1–C2 (and ideally C3) with tenant wire **JSON** |
-| C6 | pcap lab plane: BEGIN / menu Request / final Response (hop op 59 if C3) |
+| C6 | pcap lab plane: BEGIN / menu Request / final Response; hop op59 **only if C3** (once) |
+
+**N-step identity (locked):** `localId` ≡ `correlationId` survives all menus; `generation` bumps **only** on MS digit; `jsessionId` = NI only. MAP2MAP hop **once** at MO — digit continue = same corr AS pull with digit (AS composes next menu). CDR each CONTINUE/END carries `asUssd=` (~50-char snippet). MO menu → MAP `ProcessUnstructuredSS-Response` **end=false** (classic stay-open); final END → same cmd **end=true**. Never Notify as menu.
 
 **C fail ⇒ not shipped.** Rollback **jars/`lib`/`quarkus` only** (never Digicom `configs/`). Brook live handset prove is **manual**, outside the automated C gate.
 
@@ -775,10 +778,25 @@ Example AS CONTINUE after empty hop (illustrative):
 After the hop pull (§4a–4c), the AS may drive an **interactive multi-menu** toward the UE.
 This is the same CONTINUE machine as ordinary MO (§2), including MAP2MAP.
 
+**Locked N-step semantics (verify gate):**
+
+| Rule | Detail |
+|------|--------|
+| Identity | Same `localId` / `correlationId` for hop → menu1 → digit → menuN → END |
+| Hop | MAP2MAP Case 2 hop **once** at MO ingress; **no** second hop on digit continue |
+| Digit pull | `ussdString` / child `string=` = **digit only**; `originatedUssd` = **original dial** (not the digit) |
+| Generation | Bumps **only** on MS digit (`onUserContinue`); never on AS CONTINUE apply |
+| Menu vs final | Menu = XML `unstructuredSSRequest_Request` / JSON `CONTINUE`; final = `processUnstructuredSSRequest_Response` / `END` |
+| Notify | **Never** as interactive menu |
+| GW→UE MAP (MO) | CONTINUE → `ProcessUnstructuredSS-Response` **end=false**; END → same **end=true** |
+| CDR | Each CONTINUE / END detail includes `asUssd=` snippet + `asLen=` + `note=AS→UE` |
+
+Lab AS greppable path (`tools/as-node` `MENU_PICK=multimenu`): **`abc`** → digit `2` → **`2-dce`** → END **`(xyz)`**.
+
 #### Supported model (preferred) — successive HTTP round-trips
 
 Each AS HTTP response carries **one** interactive menu. After the UE presses digits, GW pulls
-the AS again with those digits; the AS returns the next menu or END.
+the AS again with those digits (`ussdString`=digit, same corr); the AS returns the next menu or END.
 
 **Turn 1 — AS → GW (first menu after hop):**
 
@@ -810,10 +828,13 @@ the AS again with those digits; the AS returns the next menu or END.
 }
 ```
 
-GW → MAP **`unstructuredSS-Request`** to the UE (stay-on-call). CDR **CONTINUE**.
+GW → MAP **`ProcessUnstructuredSS-Response` end=false** toward the UE (classic MO stay-open;
+3GPP naming alignment to `UnstructuredSS-Request` is a separate epic). CDR **CONTINUE** with
+`asUssd=` menu snippet.
 
 **Turn 2 — UE digits → GW → AS pull** (generation &gt; 0; child is continue Request with digit
-string — see §1). AS replies with the next menu:
+`string=` / `ussdString`; **`originatedUssd` still the MO dial** — see §1). AS replies with the
+next menu (AS-composed; may remember hop from turn 1 — GW does **not** re-hop):
 
 **XML**
 
@@ -880,13 +901,14 @@ For true multi-step menus, use **successive** responses after UE digits (§4d pr
 
 #### How GW maps AS wire → MAP toward UE
 
-| AS wire (XML / JSON) | MAP toward UE | Interactive? |
-|----------------------|---------------|--------------|
-| `unstructuredSSRequest_Request` + text / `action":"CONTINUE"` | `unstructuredSS-Request` | **Yes** — wait for digits |
-| `processUnstructuredSSRequest_Response` / empty dialog / `action":"END"` | Final Response / TC-END | No |
+| AS wire (XML / JSON) | MAP toward UE (MO path today) | Interactive? |
+|----------------------|-------------------------------|--------------|
+| `unstructuredSSRequest_Request` + text / `action":"CONTINUE"` | `ProcessUnstructuredSS-Response` **end=false** (stay-open) | **Yes** — wait for digits |
+| `processUnstructuredSSRequest_Response` / empty dialog / `action":"END"` | `ProcessUnstructuredSS-Response` **end=true** / TC-END | No |
 | `unstructuredSSNotify_Request` / Notify | `unstructuredSS-Notify` | **No** — one-shot; do not use as menu |
 | Abort attrs / `action":"ABORT"` | MAP abort | No |
 
+NI same-dialog continue uses `MapUnstructuredSsContinue` / `UnstructuredSS-Request` — out of this MO prove path.
 Aligns with [`classic-xml.md`](classic-xml.md) and [`ussd-3gpp-notes.md`](ussd-3gpp-notes.md).
 
 ---

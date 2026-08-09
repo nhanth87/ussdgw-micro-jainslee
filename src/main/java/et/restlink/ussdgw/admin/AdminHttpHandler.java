@@ -973,8 +973,8 @@ public class AdminHttpHandler {
         Map<String, List<CdrRecord>> timelineByCorr = new HashMap<>();
         int i = 0;
         for (CdrRecord r : rows) {
-            String spine = cdrSpineClass(r.phase);
-            String statusChip = cdrStatusChipClass(r.phase, r.status);
+            String spine = CdrStatuses.ledgerSpineClass(r.phase, r.status);
+            String statusChip = CdrStatuses.ledgerChipClass(r.phase, r.status);
             String rowId = "cdr-" + (r.id != null ? r.id : i);
             sb.append("<tr class=\"cdr-ledger-row\" data-cdr-row=\"")
                     .append(esc(rowId)).append("\">");
@@ -986,7 +986,12 @@ public class AdminHttpHandler {
                     .append("</button></td>");
             sb.append("<td class=\"px-3 py-2.5\"><code class=\"cdr-corr\" title=\"")
                     .append(esc(r.correlationId)).append("\">")
-                    .append(esc(shortCorr(r.correlationId))).append("</code></td>");
+                    .append(esc(shortCorr(r.correlationId))).append("</code>");
+            if (r.eventCount != null && r.eventCount > 1) {
+                sb.append(" <span class=\"cdr-events-badge\" title=\"Milestones folded into this session\">")
+                        .append("events=").append(r.eventCount).append("</span>");
+            }
+            sb.append("</td>");
             sb.append("<td class=\"px-3 py-2.5\"><span class=\"cdr-phase-chip ").append(spine).append("\">")
                     .append(esc(nullToDash(r.phase))).append("</span></td>");
             sb.append("<td class=\"px-3 py-2.5 cdr-msisdn\">").append(esc(nullToDash(r.msisdn))).append("</td>");
@@ -997,13 +1002,11 @@ public class AdminHttpHandler {
                     .append(esc(nullToDash(r.originationType))).append("</td>");
             sb.append("</tr>");
 
-            // Cap timeline fetch (per unique corr, cached). Digicom measure: ≤100 ledger rows
-            // ≈80ms wall — keep query small so grow of ussd_cdr does not N×40 blow up.
+            // Timeline from events_json (session ledger) — no N+1 same-corr list fetch.
+            // Legacy multi-row tape still dual-reads ussd_cdr once per corr (cached).
             List<CdrRecord> timeline = timelineByCorr.computeIfAbsent(
                     r.correlationId == null ? "" : r.correlationId,
-                    corrKey -> corrKey.isBlank()
-                            ? List.of(r)
-                            : cdr.listRecords(CDR_TIMELINE_LIMIT, scope, null, corrKey, null));
+                    corrKey -> cdr.timelineFor(r, scope, CDR_TIMELINE_LIMIT));
             CdrSessionDigest.Digest dig = CdrSessionDigest.from(r, timeline);
 
             // Expand: gate/HLR/AS digest + this row + corr timeline. Stay open across HTMX polls
@@ -1013,7 +1016,7 @@ public class AdminHttpHandler {
                     .append("<div class=\"cdr-detail-panel ink-panel\">");
             appendCdrGatedDigest(sb, dig);
             sb.append("<div class=\"cdr-digest cdr-record-box\" aria-label=\"This CDR record\">");
-            sb.append("<p class=\"cdr-digest-title\">This record</p>");
+            sb.append("<p class=\"cdr-digest-title\">This session</p>");
             sb.append("<dl class=\"cdr-detail-grid\">");
             cdrDetailItem(sb, "Correlation", r.correlationId);
             cdrDetailItem(sb, "Phase (bridge)", r.phase);
@@ -1025,19 +1028,24 @@ public class AdminHttpHandler {
             cdrDetailItem(sb, "Origination", r.originationType);
             cdrDetailItem(sb, "Network id", r.networkId == null ? null : Integer.toString(r.networkId));
             cdrDetailItem(sb, "Tenant", r.tenantId);
+            cdrDetailItem(sb, "Events folded",
+                    r.eventCount == null ? null : Integer.toString(r.eventCount));
             cdrDetailItem(sb, "Gate ms", dig.gateMs() == null ? null : Long.toString(dig.gateMs()));
             cdrDetailItem(sb, "Observed EWMA ms",
                     dig.observedEwmaMs() == null ? null : Long.toString(dig.observedEwmaMs()));
             cdrDetailItem(sb, "Detail (raw)", r.detail);
-            cdrDetailItem(sb, "Recorded at", r.createdAt == null ? null : r.createdAt.toString());
+            cdrDetailItem(sb, "Started at", r.startedAt == null ? null : r.startedAt.toString());
+            cdrDetailItem(sb, "Updated at", r.updatedAt == null
+                    ? (r.createdAt == null ? null : r.createdAt.toString())
+                    : r.updatedAt.toString());
             sb.append("</dl></div>");
             appendCdrTimeline(sb, dig.timelineOldestFirst());
             // TODO(cdr-parity): classic CdrLineFormatter also emitted local/remote SCCP
             // (PC/SSN/RI/GTI/GT), orig/dest AddressString, dialog ids, duration, USSD string,
-            // eri IMSI/VLR — not persisted on ussd_cdr yet.
+            // eri IMSI/VLR — not persisted on ussd_cdr_session yet.
             sb.append("<p class=\"cdr-gap-note\">Classic fields not in store: dialog ids · duration · ")
                     .append("USSD string · SCCP GT · IMSI/VLR · RecordStatus enum. ")
-                    .append("Digest answers are derived from this corr's CDR rows + detail k=v only.")
+                    .append("Ledger = 1 row/corr; timeline from events_json (or legacy ussd_cdr tape).")
                     .append("</p>");
             sb.append("</div></td></tr>");
             i++;
@@ -1103,7 +1111,7 @@ public class AdminHttpHandler {
             sb.append("<li><span class=\"cdr-timeline-when\">")
                     .append(esc(formatCdrWhen(t.createdAt))).append("</span> ")
                     .append("<span class=\"cdr-status-chip ")
-                    .append(cdrStatusChipClass(t.phase, t.status)).append("\">")
+                    .append(CdrStatuses.ledgerChipClass(t.phase, t.status)).append("\">")
                     .append(esc(nullToDash(t.status))).append("</span>");
             if (t.gateMs != null && t.gateMs > 0) {
                 sb.append(" <span class=\"cdr-timeline-meta\">gate=")
@@ -1184,52 +1192,11 @@ public class AdminHttpHandler {
     }
 
     private static String cdrSpineClass(String phase) {
-        if (phase == null) return "cdr-spine--unknown";
-        return switch (phase) {
-            case "S1_ACTIVE" -> "cdr-spine--s1";
-            case "S1_RELEASED" -> "cdr-spine--s1r";
-            case "S2_PUSH" -> "cdr-spine--s2";
-            case "COMPLETED" -> "cdr-spine--ok";
-            case "FAILED" -> "cdr-spine--fail";
-            default -> "cdr-spine--unknown";
-        };
+        return CdrStatuses.ledgerSpineClass(phase, null);
     }
 
     private static String cdrStatusChipClass(String phase, String status) {
-        String u = status == null ? "" : status.trim().toUpperCase();
-        // Fail / timeout / empty-AS — red chip with dark ink text (readable on light + dark).
-        if ("FAILED".equals(phase)
-                || u.contains("FAIL")
-                || u.contains("TIMEOUT")
-                || u.contains("REJECT")
-                || u.equals(CdrStatuses.AS_EMPTY_BODY)
-                || u.equals("SRI_NO_MSC")
-                || u.equals("NI_NO_MSC")
-                || u.equals("HLR_REJECT")
-                || u.equals("MAP2MAP_HOP_ABORT")) {
-            return "cdr-status--fail";
-        }
-        if ("COMPLETED".equals(phase) || "SUCCESS".equalsIgnoreCase(status)
-                || u.equals("MAP2MAP_OK")
-                || u.equals("MAP2MAP_COMPLETE_AFTER_GATE")
-                || u.equals("BRIDGED_DONE")) {
-            return "cdr-status--ok";
-        }
-        // Hop CLOSE-without-RESULT — warning amber like GATE_ARMED (not hard fail red).
-        if (u.equals("MAP2MAP_HOP_CLOSE")) {
-            return "cdr-status--gated";
-        }
-        // AS pull after hop-empty / reject — not a green "HLR OK".
-        if (u.equals("MAP2MAP_AS_ROUTED")) {
-            return "cdr-status--map2map";
-        }
-        if (CdrStatuses.isMap2MapFamily(status)) {
-            return "cdr-status--map2map";
-        }
-        if (CdrStatuses.isGateFamily(status)) {
-            return "cdr-status--gated";
-        }
-        return "cdr-status--live";
+        return CdrStatuses.ledgerChipClass(phase, status);
     }
 
     /** Count summary rows (not expand rows) for the seeded {{ROW_COUNT}} badge. */

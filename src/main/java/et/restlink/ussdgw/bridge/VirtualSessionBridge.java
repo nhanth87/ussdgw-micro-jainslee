@@ -7,6 +7,7 @@ import et.restlink.ussdgw.api.AsResponse;
 import et.restlink.ussdgw.api.classic.ClassicNiHttpPark;
 import et.restlink.ussdgw.cdr.CdrPhase;
 import et.restlink.ussdgw.cdr.CdrService;
+import et.restlink.ussdgw.cdr.CdrUssdSnippet;
 import et.restlink.ussdgw.config.UssdConfigService;
 import et.restlink.ussdgw.service.GatedAsNotifyService;
 import et.restlink.ussdgw.service.MapDialogHelper;
@@ -135,7 +136,8 @@ public class VirtualSessionBridge {
             persist(s);
             accessNi.requestNiPush(s, response.text());
             cdrWrite(s, CdrPhase.S2_PUSH, "QUEUED",
-                "service=VirtualSessionBridge late AS reconcile");
+                "service=VirtualSessionBridge|late AS reconcile|"
+                        + CdrUssdSnippet.asUssdDetail(response.text()));
             return;
         }
         // MAP leg died while parked and no abort was observed: nothing is deliverable. Retire
@@ -342,13 +344,19 @@ public class VirtualSessionBridge {
                     ? VirtualSessionState.ABORTED : VirtualSessionState.COMPLETED);
         }
         persist(s);
+        // Status END/CONTINUE/ABORT = AS body applied toward UE (not hop-close).
+        // END here means AS→UE final reply was received and forwarded — not MAP2MAP_HOP_CLOSE.
         CdrPhase phase = switch (action) {
             case CONTINUE -> CdrPhase.S1_ACTIVE;
             case ABORT -> CdrPhase.FAILED;
             case END -> CdrPhase.COMPLETED;
         };
         cdrWrite(s, phase, action.name(),
-                "service=VirtualSessionBridge " + (httpNi ? "http-ni" : "sync"));
+                "service=VirtualSessionBridge|"
+                        + (httpNi ? "http-ni" : "sync")
+                        + "|asAction=" + action.name()
+                        + "|" + CdrUssdSnippet.asUssdDetail(response.text())
+                        + "|note=AS→UE");
     }
 
     /** Write Profile row; remove when terminal (COMPLETED/ABORTED/FAILED/ZOMBIE). */

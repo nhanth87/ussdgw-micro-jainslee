@@ -86,4 +86,67 @@ public final class CdrStatuses {
         String u = status.trim().toUpperCase();
         return u.startsWith("MAP2MAP_") || u.equals("HLR_REJECT");
     }
+
+    /**
+     * Admin CDR ledger status-chip CSS class.
+     * <p>{@code MAP2MAP_HOP_CLOSE} is always amber ({@code cdr-status--gated}), even when
+     * historical rows were stored under {@code phase=FAILED}.
+     */
+    public static String ledgerChipClass(String phase, String status) {
+        String u = status == null ? "" : status.trim().toUpperCase();
+        // Hop USSD text answered — amber like GATE_ARMED. Must run before phase==FAILED.
+        if (u.equals(Map2MapCdr.HOP_CLOSE)) {
+            return "cdr-status--gated";
+        }
+        if ("FAILED".equals(phase)
+                || u.contains("FAIL")
+                || u.contains("TIMEOUT")
+                || u.contains("REJECT")
+                || u.equals(AS_EMPTY_BODY)
+                || u.equals("SRI_NO_MSC")
+                || u.equals("NI_NO_MSC")
+                || u.equals("HLR_REJECT")
+                || u.equals(Map2MapCdr.HOP_ABORT)) {
+            return "cdr-status--fail";
+        }
+        // END = AS→UE final reply applied (VirtualSessionBridge), not hop-close.
+        if ("COMPLETED".equals(phase) || "SUCCESS".equalsIgnoreCase(status)
+                || u.equals("END")
+                || u.equals(Map2MapCdr.OK)
+                || u.equals(Map2MapCdr.COMPLETE_AFTER_GATE)
+                || u.equals(BRIDGED_DONE)) {
+            return "cdr-status--ok";
+        }
+        if (u.equals("CONTINUE")) {
+            return "cdr-status--live";
+        }
+        if (u.equals(Map2MapCdr.AS_ROUTED)) {
+            return "cdr-status--map2map";
+        }
+        if (isMap2MapFamily(status)) {
+            return "cdr-status--map2map";
+        }
+        if (isGateFamily(status)) {
+            return "cdr-status--gated";
+        }
+        return "cdr-status--live";
+    }
+
+    /** Spine / phase-chip class; HOP_CLOSE never paints fail-red even under FAILED phase. */
+    public static String ledgerSpineClass(String phase, String status) {
+        if (status != null && Map2MapCdr.HOP_CLOSE.equalsIgnoreCase(status.trim())) {
+            return "cdr-spine--s1";
+        }
+        if (phase == null) {
+            return "cdr-spine--unknown";
+        }
+        return switch (phase) {
+            case "S1_ACTIVE" -> "cdr-spine--s1";
+            case "S1_RELEASED" -> "cdr-spine--s1r";
+            case "S2_PUSH" -> "cdr-spine--s2";
+            case "COMPLETED" -> "cdr-spine--ok";
+            case "FAILED" -> "cdr-spine--fail";
+            default -> "cdr-spine--unknown";
+        };
+    }
 }

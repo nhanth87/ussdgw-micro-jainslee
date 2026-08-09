@@ -41,6 +41,7 @@ public class UssdSchemaInitializer {
             "ussd_tenant",
             "ussd_admin_user",
             "ussd_cdr",
+            "ussd_cdr_session",
             "ussd_campaign",
             "ussd_campaign_target",
             "ussd_config",
@@ -73,6 +74,13 @@ public class UssdSchemaInitializer {
             new RequiredColumn("ussd_cdr", "hop_outcome"),
             new RequiredColumn("ussd_cdr", "refuse_reason"),
             new RequiredColumn("ussd_cdr", "as_ussd"),
+            new RequiredColumn("ussd_cdr_session", "correlation_id"),
+            new RequiredColumn("ussd_cdr_session", "started_at"),
+            new RequiredColumn("ussd_cdr_session", "updated_at"),
+            new RequiredColumn("ussd_cdr_session", "event_count"),
+            new RequiredColumn("ussd_cdr_session", "events_json"),
+            new RequiredColumn("ussd_cdr_session", "gate_ms"),
+            new RequiredColumn("ussd_cdr_session", "as_ussd"),
             new RequiredColumn("ussd_campaign", "tenant_id"),
             new RequiredColumn("ussd_campaign", "created_by"),
             new RequiredColumn("ussd_campaign", "submitted_at"),
@@ -96,7 +104,8 @@ public class UssdSchemaInitializer {
             "V9__short_code_map2map.sql",
             "V10__short_code_reroute.sql",
             "V11__short_code_hop_dest.sql",
-            "V12__cdr_hop_outcome.sql"
+            "V12__cdr_hop_outcome.sql",
+            "V13__cdr_session_ledger.sql"
     );
 
     @Inject

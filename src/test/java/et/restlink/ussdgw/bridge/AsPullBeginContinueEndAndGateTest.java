@@ -5,6 +5,7 @@ import et.restlink.ussdgw.api.AsAction;
 import et.restlink.ussdgw.api.AsResponse;
 import et.restlink.ussdgw.cdr.CdrPhase;
 import et.restlink.ussdgw.cdr.CdrService;
+import et.restlink.ussdgw.cdr.CdrUssdSnippet;
 import et.restlink.ussdgw.config.UssdConfigService;
 
 import com.microjainslee.api.OutboundCommand;
@@ -127,19 +128,174 @@ class AsPullBeginContinueEndAndGateTest {
     }
 
     @Test
+    @DisplayName("N-step: three CONTINUEs then END; endDialog false mid-path; gen bumps only on digit")
+    void multimenuThreeContinuesThenEnd() {
+        RecordingCdr cdr = new RecordingCdr();
+        set(bridge, "cdr", cdr);
+        VirtualSession s = awaitingSession("corr-3c", 0);
+        bridge.startAwaitingAs(s);
+        int gen = store.get("corr-3c").orElseThrow().generation();
+
+        String[] menus = {"abc", "2-dce", "more-menu"};
+        for (int i = 0; i < menus.length; i++) {
+            ss7.cmds.clear();
+            bridge.onAsResponse(new AsResponse("corr-3c", "r1", gen, menus[i], AsAction.CONTINUE, false), 10 + i);
+            VirtualSession after = store.get("corr-3c").orElseThrow();
+            assertThat(after.state()).isEqualTo(VirtualSessionState.ACTIVE);
+            assertThat(after.generation()).isEqualTo(gen); // AS CONTINUE must not bump
+            var cmd = (Ss7Command.MapProcessUnstructuredSsResponse) ss7.cmds.get(0);
+            assertThat(cmd.endDialog()).isFalse();
+            assertThat(cmd.text()).isEqualTo(menus[i]);
+
+            if (i < menus.length - 1) {
+                // MS digit bump only
+                after.nextGeneration();
+                gen = after.generation();
+                bridge.startAwaitingAs(after);
+            }
+        }
+
+        // Final digit → END
+        VirtualSession live = store.get("corr-3c").orElseThrow();
+        live.nextGeneration();
+        gen = live.generation();
+        bridge.startAwaitingAs(live);
+        ss7.cmds.clear();
+        bridge.onAsResponse(new AsResponse("corr-3c", "r1", gen, "(xyz)", AsAction.END, false), 40);
+
+        assertThat(store.get("corr-3c")).isEmpty();
+        var endCmd = (Ss7Command.MapProcessUnstructuredSsResponse) ss7.cmds.get(0);
+        assertThat(endCmd.endDialog()).isTrue();
+        assertThat(endCmd.text()).isEqualTo("(xyz)");
+        assertThat(cdr.statuses.stream().filter("CONTINUE"::equals).count()).isEqualTo(3);
+        assertThat(cdr.statuses).contains("END");
+    }
+
+    @Test
+    @DisplayName("CONTINUE+END CDR: asUssd snippet on every menu step and final")
+    void continueAndEndCdrAsUssdSnippet() {
+        RecordingCdr cdr = new RecordingCdr();
+        set(bridge, "cdr", cdr);
+        VirtualSession s = awaitingSession("corr-cdr-n", 0);
+        bridge.startAwaitingAs(s);
+
+        String m1 = "abc";
+        String m2 = "2-dce — padded so snippet truncation path is exercised pad pad pad pad pad";
+        String end = "(xyz) Thank you Digicom VAS final text pad pad";
+        bridge.onAsResponse(new AsResponse("corr-cdr-n", "r1", 1, m1, AsAction.CONTINUE, false), 10);
+        VirtualSession live = store.get("corr-cdr-n").orElseThrow();
+        live.nextGeneration();
+        bridge.startAwaitingAs(live);
+        bridge.onAsResponse(new AsResponse("corr-cdr-n", "r1", 2, m2, AsAction.CONTINUE, false), 20);
+        live = store.get("corr-cdr-n").orElseThrow();
+        live.nextGeneration();
+        bridge.startAwaitingAs(live);
+        bridge.onAsResponse(new AsResponse("corr-cdr-n", "r1", 3, end, AsAction.END, false), 30);
+
+        assertThat(cdr.statuses.stream().filter("CONTINUE"::equals).count()).isEqualTo(2);
+        for (int i = 0; i < cdr.statuses.size(); i++) {
+            String st = cdr.statuses.get(i);
+            if (!"CONTINUE".equals(st) && !"END".equals(st)) {
+                continue;
+            }
+            String d = cdr.details.get(i);
+            assertThat(d)
+                    .contains("asUssd=")
+                    .contains("asLen=")
+                    .contains("note=AS→UE")
+                    .contains("asAction=" + st);
+        }
+        assertThat(cdr.details.get(cdr.statuses.indexOf("CONTINUE"))).contains(CdrUssdSnippet.of(m1));
+        assertThat(cdr.details.get(cdr.statuses.lastIndexOf("CONTINUE")))
+                .contains(CdrUssdSnippet.of(m2));
+        assertThat(cdr.details.get(cdr.statuses.lastIndexOf("END"))).contains(CdrUssdSnippet.of(end));
+    }
+
+    @Test
+    @DisplayName("Empty AS body END path: empty text END still records asUssd-empty")
+    void emptyAsBodyEndsSession() {
+        RecordingCdr cdr = new RecordingCdr();
+        set(bridge, "cdr", cdr);
+        VirtualSession s = awaitingSession("corr-empty", 0);
+        bridge.startAwaitingAs(s);
+
+        // Wire decode of empty dialog → END with empty text (HttpClient maps AS_EMPTY_BODY separately;
+        // bridge apply of empty END must still terminate MAP dialog).
+        bridge.onAsResponse(new AsResponse("corr-empty", "r1", 1, "", AsAction.END, false), 5);
+
+        assertThat(store.get("corr-empty")).isEmpty();
+        assertThat(ss7.cmds).hasSize(1);
+        var cmd = (Ss7Command.MapProcessUnstructuredSsResponse) ss7.cmds.get(0);
+        assertThat(cmd.endDialog()).isTrue();
+        assertThat(cdr.statuses).contains("END");
+        assertThat(cdr.details.get(cdr.statuses.lastIndexOf("END")))
+                .contains("asUssd-empty")
+                .contains("note=AS→UE");
+    }
+
+    @Test
+    @DisplayName("Notify decoded as CONTINUE must not be applied as menu — wire seam only here")
+    void notifyMustNotDecodeAsContinue_wireGuard() {
+        // Bridge trusts AsAction; wire codec must refuse Notify→CONTINUE (A seam).
+        // Keep B regression: CONTINUE with menu text still endDialog=false.
+        VirtualSession s = awaitingSession("corr-notify-guard", 0);
+        bridge.startAwaitingAs(s);
+        bridge.onAsResponse(new AsResponse("corr-notify-guard", "r1", 1, "menu", AsAction.CONTINUE, false), 10);
+        var cmd = (Ss7Command.MapProcessUnstructuredSsResponse) ss7.cmds.get(0);
+        assertThat(cmd.endDialog()).isFalse();
+        assertThat(store.get("corr-notify-guard").orElseThrow().generation()).isEqualTo(1);
+    }
+
+    @Test
     @DisplayName("END: MapProcessUnstructuredSsResponse end=true; profile removed")
     void endSendsFinalMapResponseAndRemovesProfile() {
+        RecordingCdr cdr = new RecordingCdr();
+        set(bridge, "cdr", cdr);
         VirtualSession s = awaitingSession("corr-end", 0);
         bridge.startAwaitingAs(s);
 
-        bridge.onAsResponse(new AsResponse("corr-end", "r1", 1, "Thank you.", AsAction.END, false), 50);
+        String asText = "Thank you. Your request was accepted by Digicom VAS.";
+        bridge.onAsResponse(new AsResponse("corr-end", "r1", 1, asText, AsAction.END, false), 50);
 
         assertThat(store.get("corr-end")).isEmpty();
         assertThat(ss7.cmds).hasSize(1);
         assertThat(ss7.cmds.get(0)).isInstanceOf(Ss7Command.MapProcessUnstructuredSsResponse.class);
         var cmd = (Ss7Command.MapProcessUnstructuredSsResponse) ss7.cmds.get(0);
         assertThat(cmd.endDialog()).isTrue();
-        assertThat(cmd.text()).isEqualTo("Thank you.");
+        assertThat(cmd.text()).isEqualTo(asText);
+
+        // END = AS→UE applied (not hop-close); detail carries ~50-char asUssd snippet.
+        assertThat(cdr.statuses).contains("END");
+        int endIdx = cdr.statuses.lastIndexOf("END");
+        assertThat(cdr.phases.get(endIdx)).isEqualTo(CdrPhase.COMPLETED);
+        String endDetail = cdr.details.get(endIdx);
+        assertThat(endDetail)
+                .contains("asAction=END")
+                .contains("note=AS→UE")
+                .contains("asUssd=")
+                .contains("asLen=" + asText.length());
+        assertThat(endDetail).contains(CdrUssdSnippet.of(asText));
+    }
+
+    @Test
+    @DisplayName("CONTINUE: CDR carries AS menu snippet (AS→UE, not hop-close)")
+    void continueCdrIncludesAsUssdSnippet() {
+        RecordingCdr cdr = new RecordingCdr();
+        set(bridge, "cdr", cdr);
+        VirtualSession s = awaitingSession("corr-cont-cdr", 0);
+        bridge.startAwaitingAs(s);
+
+        String menu = "1. Balance\n2. Topup\n0. Exit — pad pad pad pad pad pad pad pad pad pad";
+        bridge.onAsResponse(new AsResponse("corr-cont-cdr", "r1", 1, menu, AsAction.CONTINUE, false), 40);
+
+        assertThat(cdr.statuses).contains("CONTINUE");
+        String d = cdr.details.get(cdr.statuses.lastIndexOf("CONTINUE"));
+        assertThat(d)
+                .contains("asAction=CONTINUE")
+                .contains("note=AS→UE")
+                .contains("asUssd=")
+                .contains("asLen=");
+        assertThat(d).doesNotContain("\n");
     }
 
     @Test
@@ -231,15 +387,26 @@ class AsPullBeginContinueEndAndGateTest {
         set(b, "store", store);
         set(b, "adaptive", new AdaptiveTimeout());
         set(b, "config", config(bridgeEnabled, asyncGateMs));
-        set(b, "cdr", new CdrService() {
-            @Override
-            public void write(String correlationId, CdrPhase phase, String msisdn, String shortCode,
-                              String status, String detail, int networkId, String tenantId,
-                              String originationType) { }
-        });
+        set(b, "cdr", new RecordingCdr());
         set(b, "accessNi", ni);
         set(b, "niHttpPark", new et.restlink.ussdgw.api.classic.ClassicNiHttpPark());
         return b;
+    }
+
+    /** Captures bridge CDR writes (11-arg path used by VirtualSessionBridge.cdrWrite). */
+    static final class RecordingCdr extends CdrService {
+        final List<String> statuses = new ArrayList<>();
+        final List<String> details = new ArrayList<>();
+        final List<CdrPhase> phases = new ArrayList<>();
+
+        @Override
+        public void write(String correlationId, CdrPhase phase, String msisdn, String shortCode,
+                          String status, String detail, int networkId, String tenantId,
+                          String originationType, Long gateMs, Long observedEwmaMs) {
+            phases.add(phase);
+            statuses.add(status);
+            details.add(detail);
+        }
     }
 
     private static UssdConfigService config(boolean bridgeEnabled, long asyncGateMs) {

@@ -39,10 +39,16 @@ public final class Map2MapCdr {
     /** Peer USER_ABORT / PROVIDER_ABORT on outbound hop. */
     public static final String HOP_ABORT = "MAP2MAP_HOP_ABORT";
     /**
-     * Peer Dialog CLOSE/RELEASE on outbound hop <em>without</em> a USSD RESULT
-     * (empty TC-END / NOTICE+CLOSE). Not a timer — never call this {@link #TIMEOUT}.
+     * Hop returned <strong>USSD text</strong> from HLR/MSC — AS pull carries that text
+     * ({@code hlrResult=responded}). Admin chip <strong>amber</strong> (like {@code GATE_ARMED}),
+     * never red via {@code phase=FAILED}.
      */
     public static final String HOP_CLOSE = "MAP2MAP_HOP_CLOSE";
+    /**
+     * Hop finished with <em>no</em> USSD text (empty Dialog CLOSE/RELEASE after defer).
+     * AS pull uses empty {@code string=} + {@code hlrResult=none}. Admin chip <strong>red</strong>.
+     */
+    public static final String HOP_FAIL = "MAP2MAP_HOP_FAIL";
     /**
      * True hop / dialog TIMEOUT only: MAP {@code onDialogTimeout} or
      * {@code BridgeGateScheduler} hop TTL — never CLOSE/REJECT/abort.
@@ -91,7 +97,7 @@ public final class Map2MapCdr {
         return "";
     }
 
-    /** Map dialog-lost kind → CDR status (CLOSE/REJECT/abort ≠ timeout). */
+    /** Map dialog-lost kind → CDR status (CLOSE empty ≠ text hop; REJECT/abort ≠ timeout). */
     public static String statusForDialogLost(String kind, boolean alreadyBridged) {
         String k = kind == null ? "" : kind.trim().toUpperCase();
         if ("REJECT".equals(k)) {
@@ -101,13 +107,14 @@ public final class Map2MapCdr {
             return HOP_ABORT;
         }
         if ("CLOSE".equals(k) || "RELEASE".equals(k)) {
-            return HOP_CLOSE;
+            // No USSD text claimed the pending — fail (red), not HOP_CLOSE (amber/text).
+            return HOP_FAIL;
         }
         if ("TIMEOUT".equals(k)) {
             return alreadyBridged ? TIMEOUT_AFTER_BRIDGE : TIMEOUT;
         }
-        // Unknown kind — fail-closed as hop-close (empty), never invent TIMEOUT.
-        return HOP_CLOSE;
+        // Unknown kind — fail-closed as empty hop, never invent TIMEOUT or amber HOP_CLOSE.
+        return HOP_FAIL;
     }
 
     /** True when dialog-lost kind is a real timer (MAP dialog timeout), not CLOSE/REJECT. */

@@ -216,6 +216,31 @@ public final class UssdTxProfile extends ProfileAbstractCmp {
         set(s("originationType"), v);
     }
 
+    /** Full UE dialed string from MO (survives digit continue pulls). */
+    public String getOriginatedUssd() {
+        return str(g("originatedUssd"));
+    }
+
+    public void setOriginatedUssd(String v) {
+        set(s("originatedUssd"), v);
+    }
+
+    public String getRedirectUssd() {
+        return str(g("redirectUssd"));
+    }
+
+    public void setRedirectUssd(String v) {
+        set(s("redirectUssd"), v);
+    }
+
+    public String getHopUssd() {
+        return str(g("hopUssd"));
+    }
+
+    public void setHopUssd(String v) {
+        set(s("hopUssd"), v);
+    }
+
     /** Absolute expiry for TTL reclaim (dialog timeout ceiling). */
     public Long getExpiresAtMs() {
         return (Long) ProfileAccessorInvoker.getValue(this, g("expiresAtMs"));

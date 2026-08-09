@@ -44,6 +44,10 @@ print_c_checklist() {
 Keep real SS7 / Brook on networkId=0 up, but do NOT dial live *804 / Brook codes
 in this automated prove. Lab short-codes + sim plane only.
 
+N-step multimenu (locked): same correlationId; hop once at MO only; digit continue
+ussdString=digit + originatedUssd=dialed; CDR CONTINUE/END carry asUssd=; never Notify as menu.
+as-node: MENU_PICK=multimenu (npm run pull:multimenu) → greppable abc / 2-dce / (xyz).
+
 C7 preflight (before C1–C6):
   ssh digicom-nb 'sleep 25'
   # KEY from Digicom configs/application.properties ussd.admin.api-key — never invent
@@ -51,17 +55,21 @@ C7 preflight (before C1–C6):
   # Expect HTTP 200; ss7.live true; scheduler.gateTicks climbing; jar mtime fresh
   ssh digicom-nb 'python3 -c "import json;d=json.load(open(\"/tmp/ussdgw-status.json\"));print(d.get(\"ss7.live\"),d.get(\"scheduler.gateTicks\"),d.get(\"bridge.asyncGateMs\"))"'
 
-C1  MO BEGIN → AS pull → CONTINUE menu (XML tenant, lab SC e.g. *100#) via ss7-sim net 1
-C2  Digit → continue pull → menu 2 → END text (must NOT echo hlr none / hop codes)
-C3  MAP2MAP lab short-code on sim (NOT live *804 Brook) → AS multimenu → END
+C1  MO BEGIN → AS CONTINUE menu **abc** (XML tenant, lab SC e.g. *100#) via ss7-sim net 1
+    Pass: CDR CONTINUE + asUssd contains abc; as-node log leaf/menu abc
+C2  Digit **2** → continue pull (same corr; ussdString=2; originatedUssd=dialed) → menu **2-dce**
+    → further digit → END **(xyz)**. Pass: N CONTINUE then END with asUssd snippets; NO hop op59 on digit
+C3  MAP2MAP **lab** SC on sim (NOT live *804 Brook) → hop op59 **once** → multimenu → END
+    Pass: first pull hlrResult; then C2-like multimenu; no second hop on digit
 C4  AdaptiveTimeout: force short async-gate / overdue deadline → UE wait; late AS → NI once
-C5  Repeat C1–C2 (and ideally C3) with tenant HTTP AS wire = JSON
-C6  pcap/filter on lab plane: processUnstructured BEGIN; Request menu; final Response; hop op59 if C3
+C5  Repeat C1–C2 (and ideally C3) with tenant HTTP AS wire = JSON (parity)
+C6  pcap/filter on lab plane: processUnstructured BEGIN; menu/final components; hop op59 only if C3 (once)
 
 Helpers:
   tools/ss7-simulator/pull-lab.sh   # apply-ss7 → as-node → reseed-pull → sim → dial-pull
+  tools/as-node: npm run pull:multimenu | pull:multimenu:map2map
   docs/agents/ss7-lab-pair.md       # dual plane net0 live / net1 lab
-  docs/as-contract/map2map-as-xml.md § Prove / ship gate
+  docs/as-contract/map2map-as-xml.md § Prove / ship gate · §4d
 
 Rollback on C fail (jars only — never configs/):
   # From a prior backup dir on Digicom, e.g. /tmp/ussdgw-jar-bak-<ts>/
