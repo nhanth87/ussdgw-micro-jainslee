@@ -256,6 +256,21 @@ chmod +x "$DIST_ROOT/run.sh"
 cp -f "$APP_DIR/build/dist-README.md" "$DIST_ROOT/README.md"
 echo "SS7 persist XML lives here." > "$DIST_ROOT/configs/ss7-persist/README.md"
 
+# Stamp build-time db-kind so Digicom rsync can refuse an H2 bake (crash-loop footgun).
+# Digicom runtime configs are postgresql — H2-baked quarkus/ + ussdgw-app.jar die with:
+#   "db-kind is set to 'postgresql' but it is build time fixed to 'h2'"
+BAKED_KIND="$(grep -E '^quarkus\.datasource\.db-kind=' \
+  "${APP_DIR}/build/application.properties" 2>/dev/null | tail -1 | cut -d= -f2- | tr -d '[:space:]' || true)"
+if [[ -z "${BAKED_KIND}" ]]; then
+  BAKED_KIND="unknown"
+fi
+printf '%s\n' "${BAKED_KIND}" > "${DIST_ROOT}/.baked-db-kind"
+echo "Baked db-kind stamp: ${DIST_ROOT}/.baked-db-kind → ${BAKED_KIND}"
+if [[ "${USSD_REQUIRE_PG_BAKE:-0}" == "1" && "${BAKED_KIND}" != "postgresql" ]]; then
+  echo "error: USSD_REQUIRE_PG_BAKE=1 but baked db-kind=${BAKED_KIND} (Digicom would crash-loop)" >&2
+  exit 1
+fi
+
 verify_dist "$DIST_ROOT"
 
 if [[ "${USSD_MIRROR_LEGACY:-0}" == "1" ]]; then

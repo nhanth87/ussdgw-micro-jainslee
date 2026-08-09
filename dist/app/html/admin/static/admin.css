@@ -522,7 +522,7 @@ tbody.hx-table-live.htmx-settling {
 
 /* 6-hop spine — signature ops surface: dense, full-width, 2-col on wide. */
 .cdr-spine-journey {
-  border-color: color-mix(in srgb, var(--color-signal) 28%, var(--color-ink-line));
+  border-color: var(--color-ink-line);
 }
 .cdr-hop-list {
   list-style: none;
@@ -566,7 +566,7 @@ tbody.hx-table-live.htmx-settling {
   padding: 0.4rem 0.55rem;
   border-radius: 0.3rem;
   border: 1px solid var(--color-ink-line);
-  background: color-mix(in srgb, var(--color-ink) 70%, transparent);
+  background: color-mix(in srgb, var(--color-ink) 88%, var(--color-ink-panel));
 }
 .cdr-hop--fail .cdr-hop-body {
   border-color: rgba(248, 113, 113, 0.35);
@@ -645,9 +645,10 @@ tbody.hx-table-live.htmx-settling {
 .cdr-advanced {
   margin-top: 0.15rem;
   padding: 0.55rem 0.75rem;
-  border: 1px dashed var(--color-ink-line);
+  border: 1px solid var(--color-ink-line);
   border-radius: 0.4rem;
-  background: transparent;
+  background: var(--color-ink-panel);
+  overflow-anchor: none;
 }
 .cdr-advanced > summary {
   cursor: pointer;
@@ -661,14 +662,14 @@ tbody.hx-table-live.htmx-settling {
 .cdr-advanced > summary::-webkit-details-marker { display: none; }
 .cdr-advanced > summary::before {
   content: "+ ";
-  color: var(--color-signal);
+  color: var(--color-ink-mute);
   font-family: "JetBrains Mono", ui-monospace, monospace;
 }
 .cdr-advanced[open] > summary::before { content: "− "; }
 .cdr-advanced-body {
   margin-top: 0.55rem;
   padding-top: 0.55rem;
-  border-top: 1px dashed var(--color-ink-line);
+  border-top: 1px solid var(--color-ink-line);
 }
 .cdr-advanced-label {
   margin: 0.65rem 0 0.25rem;
@@ -677,6 +678,30 @@ tbody.hx-table-live.htmx-settling {
   text-transform: uppercase;
   color: var(--color-ink-mute);
   font-family: "DM Sans", system-ui, sans-serif;
+}
+/* Full-width pipe: one key=value per line; never mid-word break (overflow-wrap:anywhere). */
+.cdr-pipe-block {
+  margin: 0;
+  padding: 0.65rem 0.75rem;
+  max-width: 100%;
+  box-sizing: border-box;
+  overflow-x: auto;
+  overflow-y: visible;
+  overflow-wrap: normal;
+  word-break: normal;
+  white-space: pre;
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+  font-size: 0.72rem;
+  line-height: 1.45;
+  color: var(--color-fg-soft);
+  background: color-mix(in srgb, var(--color-ink) 92%, transparent);
+  border: 1px solid var(--color-ink-line);
+  border-radius: 0.3rem;
+}
+.cdr-pipe-block--url {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 .cdr-timeline-raw {
   margin-top: 0.35rem;
@@ -689,6 +714,8 @@ tbody.hx-table-live.htmx-settling {
   white-space: normal;
   overflow: visible;
   text-overflow: unset;
+  overflow-wrap: break-word;
+  word-break: normal;
 }
 
 /* Dashboard KPI cards — long Adaptive EWMA (and any future metric) must not overflow. */
@@ -807,16 +834,21 @@ html:not([data-theme="light"]) .cdr-status-chip.cdr-status--fail {
   padding: 0.8rem 0.95rem;
   border: 1px solid var(--color-ink-line);
   border-radius: 0.4rem;
-  background: color-mix(in srgb, var(--color-ink-panel) 92%, var(--color-signal) 8%);
+  /* Solid panel — no gold wash on every block (looks “tè le” next to chips). */
+  background: var(--color-ink-panel);
 }
 .cdr-digest-title {
   margin: 0 0 0.5rem;
   font-size: 0.68rem;
   letter-spacing: 0.14em;
   text-transform: uppercase;
-  color: var(--color-signal);
+  color: var(--color-ink-mute);
   font-family: "DM Sans", system-ui, sans-serif;
   font-weight: 600;
+}
+.cdr-primary .cdr-digest-title,
+.cdr-spine-journey .cdr-digest-title {
+  color: var(--color-signal);
 }
 .cdr-session-grid {
   grid-template-columns: repeat(auto-fill, minmax(13.5rem, 1fr));
@@ -864,7 +896,9 @@ html:not([data-theme="light"]) .cdr-status-chip.cdr-status--fail {
   font-size: 0.78rem;
   line-height: 1.35;
   color: var(--color-fg-soft);
-  overflow-wrap: anywhere;
+  /* break-word at spaces — never overflow-wrap:anywhere (mid-token “Brid|ge”). */
+  overflow-wrap: break-word;
+  word-break: normal;
 }
 .cdr-gap-note {
   margin: 0.15rem 0 0;
