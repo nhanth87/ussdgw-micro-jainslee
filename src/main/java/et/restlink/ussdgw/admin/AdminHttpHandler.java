@@ -1164,18 +1164,24 @@ public class AdminHttpHandler {
     private static void appendCdrAdvancedRaw(StringBuilder sb, CdrRecord focus,
                                              CdrSessionDigest.Digest dig,
                                              List<CdrRecord> oldestFirst) {
-        sb.append("<details class=\"cdr-advanced\">");
+        // data-cdr-advanced ties open state to sessionStorage across HTMX polls.
+        sb.append("<details class=\"cdr-advanced\" data-cdr-advanced=\"1\">");
         sb.append("<summary>Advanced · raw pipe / event tape</summary>");
         sb.append("<div class=\"cdr-advanced-body\">");
-        sb.append("<dl class=\"cdr-detail-grid\">");
-        cdrDetailItem(sb, "Rolled detail (pipe)", focus == null ? null : focus.detail);
+        sb.append("<p class=\"cdr-advanced-label\">Rolled detail (pipe)</p>");
+        // Full-width <pre>: one field per line at '|' — never grid dd + overflow-wrap:anywhere
+        // (that mid-word-breaks Bridge / note / gateBudget and looks like a broken layout).
+        sb.append("<pre class=\"cdr-pipe-block\" translate=\"no\">");
+        sb.append(esc(formatCdrPipeLines(focus == null ? null : focus.detail)));
+        sb.append("</pre>");
         if (dig != null) {
             String asUrl = dig.detailFields().get("asUrl");
             if (asUrl != null) {
-                cdrDetailItem(sb, "AS URL (raw)", asUrl);
+                sb.append("<p class=\"cdr-advanced-label\">AS URL (raw)</p>");
+                sb.append("<pre class=\"cdr-pipe-block cdr-pipe-block--url\" translate=\"no\">")
+                        .append(esc(asUrl)).append("</pre>");
             }
         }
-        sb.append("</dl>");
         if (oldestFirst != null && !oldestFirst.isEmpty()) {
             sb.append("<p class=\"cdr-advanced-label\">Event tape</p>");
             sb.append("<ol class=\"cdr-timeline-list cdr-timeline-raw\">");
@@ -1200,6 +1206,35 @@ public class AdminHttpHandler {
             sb.append("</ol>");
         }
         sb.append("</div></details>");
+    }
+
+    /** Split pipe detail on '|' into one key=value per line for readable Advanced. */
+    private static String formatCdrPipeLines(String detail) {
+        if (detail == null || detail.isBlank()) {
+            return "—";
+        }
+        String d = detail.trim();
+        if (!d.contains("|")) {
+            return d;
+        }
+        StringBuilder out = new StringBuilder(d.length() + 16);
+        int start = 0;
+        for (int i = 0; i < d.length(); i++) {
+            if (d.charAt(i) == '|') {
+                if (out.length() > 0) {
+                    out.append('\n');
+                }
+                out.append(d, start, i);
+                start = i + 1;
+            }
+        }
+        if (start < d.length()) {
+            if (out.length() > 0) {
+                out.append('\n');
+            }
+            out.append(d, start, d.length());
+        }
+        return out.toString();
     }
 
     private static void cdrAnswerItem(StringBuilder sb, String label, CdrSessionDigest.Answer a) {

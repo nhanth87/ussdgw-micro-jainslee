@@ -76,7 +76,7 @@
           <code class="font-mono text-slate-300">GATED*</code>). Limit max
           <span class="font-mono text-signal">100</span>. Table auto-refreshes every 5s via
           <code class="font-mono text-slate-300">/admin/cdr/partial</code>
-          without jumping scroll.
+          — poll pauses while a row is expanded.
         </p>
         <form id="cdr-filter" method="get" action="/admin/cdr"
               class="filter-bar flex flex-wrap items-end gap-3"
@@ -149,7 +149,7 @@
       </div>
       <p class="cdr-ledger-foot mt-3 text-xs text-ink-mute">
         Click a timestamp to expand the full-width 6-hop spine + session fields.
-        Expand stays open across polls; scroll position must not jump.
+        While a row is open the 5s poll is paused (Advanced stays open; scroll does not jump).
       </p>
     </div>
   </main>
@@ -158,18 +158,19 @@
       var body = document.getElementById('cdr-rows');
       if (!body) return;
       var OPEN_KEY = 'ussd-cdr-open-ids';
+      var ADV_KEY = 'ussd-cdr-adv-ids';
       var scrollY = 0;
-      var restoring = false;
+      var interactUntil = 0;
 
-      // Keep HTMX default instant scroll; never enable smooth (fights pin + show:none).
+      // Never enable smooth — fights pin + show:none.
       if (window.htmx && htmx.config) {
         htmx.config.scrollBehavior = 'instant';
         htmx.config.defaultFocusScroll = false;
       }
 
-      function loadOpen() {
+      function loadIdSet(key) {
         try {
-          var raw = sessionStorage.getItem(OPEN_KEY);
+          var raw = sessionStorage.getItem(key);
           if (!raw) return {};
           var arr = JSON.parse(raw);
           var m = {};
@@ -177,20 +178,37 @@
           return m;
         } catch (e) { return {}; }
       }
-      function saveOpen(map) {
+      function saveIdSet(key, map) {
         try {
-          sessionStorage.setItem(OPEN_KEY, JSON.stringify(Object.keys(map)));
+          sessionStorage.setItem(key, JSON.stringify(Object.keys(map)));
         } catch (e) { /* ignore */ }
       }
-      var openIds = loadOpen();
+      var openIds = loadIdSet(OPEN_KEY);
+      var advIds = loadIdSet(ADV_KEY);
+
+      function anyOpen() {
+        return Object.keys(openIds).length > 0;
+      }
+      function markInteract() {
+        interactUntil = Date.now() + 2500;
+      }
       function setOpen(id, open) {
         if (!id) return;
-        if (open) openIds[id] = true; else delete openIds[id];
-        saveOpen(openIds);
+        if (open) openIds[id] = true;
+        else {
+          delete openIds[id];
+          delete advIds[id];
+          saveIdSet(ADV_KEY, advIds);
+        }
+        saveIdSet(OPEN_KEY, openIds);
+      }
+      function setAdv(id, open) {
+        if (!id) return;
+        if (open) advIds[id] = true; else delete advIds[id];
+        saveIdSet(ADV_KEY, advIds);
       }
       function setDetailOpen(detail, open) {
         if (!detail) return;
-        // Prefer HTML hidden attribute (works with Tailwind divide-y :not([hidden])).
         detail.hidden = !open;
         detail.classList.toggle('hidden', !open);
       }
@@ -205,6 +223,8 @@
           var row = btn.closest('tr');
           if (row) row.classList.toggle('cdr-ledger-row--open', want);
         }
+        var adv = detail.querySelector('details.cdr-advanced[data-cdr-advanced]');
+        if (adv) adv.open = !!(want && advIds[id]);
         return want;
       }
       function restoreAllOpen() {
@@ -218,6 +238,7 @@
         pinScroll(y);
         requestAnimationFrame(function () { pinScroll(y); });
         setTimeout(function () { pinScroll(y); }, 0);
+        setTimeout(function () { pinScroll(y); }, 50);
       }
       function refreshCount() {
         var n = body.querySelectorAll('.cdr-ledger-row').length;
@@ -237,6 +258,7 @@
         // ledger foot / later rows in view → perceived jump to page bottom.
         var y = window.scrollY || window.pageYOffset || 0;
         var open = detail.hidden || detail.classList.contains('hidden');
+        markInteract();
         setDetailOpen(detail, open);
         btn.setAttribute('aria-expanded', open ? 'true' : 'false');
         var row = btn.closest('tr');
@@ -245,11 +267,37 @@
         pinScrollSoon(y);
       });
 
+      // Persist Advanced open; stop bubble so parent handlers never see it.
+      body.addEventListener('toggle', function (e) {
+        var adv = e.target;
+        if (!adv || !adv.classList || !adv.classList.contains('cdr-advanced')) return;
+        var detail = adv.closest('[data-cdr-detail]');
+        if (!detail) return;
+        markInteract();
+        setAdv(detail.getAttribute('data-cdr-detail'), !!adv.open);
+      }, true);
+      body.addEventListener('click', function (e) {
+        if (e.target.closest('details.cdr-advanced')) {
+          e.stopPropagation();
+          markInteract();
+        }
+      }, true);
+
+      // While a row is open, skip the 5s tbody poll. Replacing #cdr-rows closed
+      // Advanced instantly and raced pinScroll with a stale beforeSwap Y
+      // (jump to mid-page). Filter form (#cdr-filter) still swaps normally.
+      document.body.addEventListener('htmx:beforeRequest', function (e) {
+        var elt = e.detail && e.detail.elt;
+        if (!elt || elt.id !== 'cdr-rows') return;
+        if (anyOpen() || Date.now() < interactUntil) {
+          e.preventDefault();
+        }
+      });
+
       document.body.addEventListener('htmx:beforeSwap', function (e) {
         var t = e.detail && e.detail.target;
         if (t && (t === body || t.id === 'cdr-rows')) {
           scrollY = window.scrollY || window.pageYOffset || 0;
-          restoring = true;
         }
       });
       document.body.addEventListener('htmx:afterSwap', function (e) {
@@ -257,27 +305,17 @@
         if (t && (t === body || t.id === 'cdr-rows')) {
           refreshCount();
           restoreAllOpen();
-          pinScrollSoon(scrollY);
+          if (Date.now() >= interactUntil) pinScrollSoon(scrollY);
         }
       });
       document.body.addEventListener('htmx:afterSettle', function (e) {
         var t = e.detail && e.detail.target;
         if (t && (t === body || t.id === 'cdr-rows')) {
           restoreAllOpen();
-          pinScrollSoon(scrollY);
-          restoring = false;
-        }
-      });
-      // Block accidental focus scroll during poll restore / expand.
-      document.body.addEventListener('focusin', function (e) {
-        if (!restoring) return;
-        var t = e.target;
-        if (t && body.contains(t)) {
-          pinScroll(scrollY);
+          if (Date.now() >= interactUntil) pinScrollSoon(scrollY);
         }
       });
 
-      // Do not auto-expand on first paint — only restore user-opened ids.
       restoreAllOpen();
     })();
   </script>

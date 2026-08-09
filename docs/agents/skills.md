@@ -94,7 +94,7 @@ SoT: [`build/systemd/99-ussdgw-sctp-buffers.conf`](../../build/systemd/99-ussdgw
 | Step | Do | Prove / never |
 |------|----|---------------|
 | 1. JDK | mise **`zulu-25`** only — never downgrade for compile | `java -version` → 25 |
-| 2. Package for Digicom | Set **`quarkus.datasource.db-kind=postgresql`** in `build/application.properties` → **`./build/package-dist.sh`** → **restore `h2`** for local/dev tree | H2-built jar → Flyway “Driver does not support … postgresql” on Digicom |
+| 2. Package for Digicom | Set **`quarkus.datasource.db-kind=postgresql`** → **`USSD_REQUIRE_PG_BAKE=1 ./build/package-dist.sh`** → confirm **`dist/.baked-db-kind` = `postgresql`** → **restore `h2`** for local/dev | H2 bake → Digicom **crash-loop** (`/tmp/ussdgw.service.log`: build-time fixed to `h2` + Driver does not support `jdbc:postgresql://…`). Killer = **`ussdgw-app.jar` + `quarkus/` + `lib/`** together |
 | 3. Dist layout | `ussdgw-app.jar` + `quarkus-run.jar` at APP_HOME **root**; `lib/{boot,main}/` + `quarkus/` + `app/html/` | No jars under `app/`; `quarkus-application.dat` points at **root** app jar |
 | 4. Shadow | `package-dist.sh` overwrites `ProfileAccessorInvoker` into **`jainslee-api`** from core | `javap -c` shows `ProfileFieldStoreLocator`, not stub UOE string |
 | 5. Bytecode | App jar major **69** (Java 25) | `javap -verbose … \| grep major` or equivalent |
@@ -119,8 +119,10 @@ java -version   # expect 25
 # Digicom build-time db-kind (backup → postgresql → package → restore h2)
 cp -a build/application.properties "build/application.properties.bak-deploy-$(date +%Y%m%d%H%M%S)"
 sed -i 's/^quarkus.datasource.db-kind=h2$/quarkus.datasource.db-kind=postgresql/' build/application.properties
-./build/package-dist.sh
+USSD_REQUIRE_PG_BAKE=1 ./build/package-dist.sh
+test "$(cat dist/.baked-db-kind)" = postgresql   # refuse H2 bake → Digicom crash-loop
 sed -i 's/^quarkus.datasource.db-kind=postgresql$/quarkus.datasource.db-kind=h2/' build/application.properties
+# NOTE: restoring h2 only edits source props for the next local package — dist/ stays PG-baked until you package again without USSD_REQUIRE_PG_BAKE
 
 # Snapshot Digicom jars for rollback (C fail) — never configs/
 ssh digicom-nb 'mkdir -p /tmp/ussdgw-jar-bak-$(date +%Y%m%d%H%M%S) && cd /home/app/ota-push-services/ussdgw-micro-jainslee && B=$(ls -dt /tmp/ussdgw-jar-bak-* | head -1) && cp -a ussdgw-app.jar quarkus-run.jar "$B/" && cp -a lib quarkus "$B/"'

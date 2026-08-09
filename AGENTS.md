@@ -86,6 +86,7 @@ digicom = main + Digicom seeds  ──push──►  digicom-et/main  (PRIVATE)
 - **Per-MSISDN profiles** — `ussdTx` PK = **correlationId** (not MSISDN); each in-flight user gets its own row. Never reuse/overwrite a corr bound to another MSISDN (`VirtualSessionStore.put` fail-closed; NI `/ussd` → **409**). Concurrent users = concurrent corr rows; registries (`AsPullStateRegistry`, `PendingSri*`) stay keyed by corr — never `takeAny`. → [lessons](docs/agents/lessons.md)
 - **5k TPS honesty** — shared-host heap often **2g/4g**; pool knobs ×10 (`sbb-pool-max=40960`, `buffer-size=16384`) are **BUILD_TIME**. Runtime targets for sync AS: HTTP worker **512**, client pool **8192**, JDBC **128/16**, CDR queue **100k**/batch **2k**. Dual live SCTP links help share, not automatic 5k. **5k not measured** without dedicated load host (≥8g) + map/load + AS sim. → [lessons](docs/agents/lessons.md)
 - **Quarkus Digicom ship** — CDI eager bridge/adaptive on boot (`BridgeGateScheduler`); build-time **`db-kind=postgresql`** for Digicom package then restore local **h2**; rsync jars/`lib`/`quarkus`/`app/html` only; after restart wait **`:8088`** `/admin/status.json` (systemd active ≠ ready); NI park = async + AdaptiveTimeout (**never** `Thread.sleep`); status truth = `/admin/status.json` `ss7.live` only. → [skills § Digicom redeploy](docs/agents/skills.md) · [lessons](docs/agents/lessons.md) · [schema](docs/agents/schema.md)
+- **Digicom crash-loop after deploy (SIẾT — H2-baked jar)** — see § below. **Never** rsync a laptop `package-dist` built with `quarkus.datasource.db-kind=h2` onto Digicom. Killer tree = whole fast-jar bake (`ussdgw-app.jar` + **`quarkus/`** + `lib/`), not “one bad class”.
 - **AS pull state** — `@ApplicationScoped` **`AsPullStateRegistry`** (not SBB instance maps); else EWMA never seeds under load. → [lessons](docs/agents/lessons.md)
 - **NI `/ussd` auth** — default **required**; lab opt-out `ussd.http.ni.auth-required=false`. NI header **`X-USSD-Api-Key`** (admin key or tenant/app-user key); admin UI automation stays **`X-USSD-Admin-Key`**. Secrets fail-closed unless `ussd.lab.allow-default-secrets=true`; bcrypt; package-dist never clobbers configs. → [lessons](docs/agents/lessons.md)
 - **NI Digicom 500 / `ussdTx`** — Quarkus can load **api stub** `ProfileAccessorInvoker` (UOE) before core; `package-dist` must shadow core class into `jainslee-api` jar. Also re-bind `ProfileFieldStoreLocator` in `VirtualSessionStore.put` or CMP writes hit empty facility (`No profile table: ussdTx`). Catch must log **exception message**. → [lessons](docs/agents/lessons.md)
@@ -104,6 +105,45 @@ digicom = main + Digicom seeds  ──push──►  digicom-et/main  (PRIVATE)
 - **Lab heap** — `run-dist.sh` defaults **`-Xms2g -Xmx4g`** for shared hosts; **AlwaysPreTouch** only if `USSD_ALWAYS_PRETOUCH=1`; override to **8g** via `USSD_XMS`/`USSD_XMX` on bigger hosts. Do **not** co-force OTA **8G** + ussdgw **8G+PreTouch** on ~15 GiB. → [lessons](docs/agents/lessons.md)
 - **Commits** — **nhanth87 / Tran Nhan** only. No AI `Co-authored-by:` / trailers (Cursor injects — strip / clean `commit-tree`). Hooks reject; never `--no-verify`.
 
+## Digicom crash-loop after deploy — H2-baked jar (SIẾT)
+
+**Symptom:** every `systemctl restart` after rsync → exit **1** in ~8–20s, restart counter climbs, `:8088` never comes up. Digicom `configs/` still say PostgreSQL. Restoring previous `ussdgw-app.jar` + `lib/` + **`quarkus/`** from `/tmp/ussdgw-jar-bak-*` brings the host back.
+
+**Exact mechanism (proven 2026-08-09 in `/tmp/ussdgw.service.log`):**
+```
+Build time property cannot be changed at runtime:
+ - quarkus.datasource.db-kind is set to 'postgresql' but it is build time fixed to 'h2'
+Datasource '<default>': Driver does not support the provided URL: jdbc:postgresql://127.0.0.1:5432/ussdgw
+FlywaySqlUnableToConnectToDbException → Failed to start quarkus
+```
+Digicom **runtime** `configs/application.properties` has `db-kind=postgresql` + `jdbc:postgresql://…/ussdgw`. Quarkus **build-time** kind is baked into the fast-jar (`quarkus/generated-bytecode.jar` + `quarkus-application.dat` + companion `ussdgw-app.jar`). An **H2** package cannot drive a PostgreSQL JDBC URL — Agroal/Flyway die before Log4j app logs look “normal”.
+
+**Which artifacts kill Digicom (all of them, together):**
+| Artifact | Role |
+|----------|------|
+| **`quarkus/generated-bytecode.jar`** | Build-time datasource kind / Agroal recording |
+| **`quarkus/quarkus-application.dat`** | Quarkus app model (also rewritten for root jar path) |
+| **`ussdgw-app.jar`** | App classes from the same Maven package |
+| **`lib/`** (esp. jdbc/flyway jars) | Must match that package |
+
+`app/html/` alone is safe (UI-only). **Never** blame a single “bad class” inside ussdgw-app while leaving an H2 `quarkus/` tree in place.
+
+**What NOT to do:**
+- `./build/package-dist.sh` with `build/application.properties` still `db-kind=h2` → rsync to Digicom
+- Rsync **only** `ussdgw-app.jar` and leave Digicom’s old PG `quarkus/` (or the reverse) — mixed bake
+- Edit Digicom `configs` `db-kind` hoping to override bake (Quarkus warns; kind stays fixed)
+- Declare “deploy OK” from systemd `active` while `:8088` is down / restart loop
+
+**Correct Digicom package (copy-paste SoT in skills):**
+1. `sed` **`db-kind=postgresql`** in `build/application.properties`
+2. `./build/package-dist.sh` → writes `dist/.baked-db-kind` = `postgresql`
+3. **Restore** local `db-kind=h2` immediately
+4. **Preflight before rsync:** `test "$(cat dist/.baked-db-kind)" = postgresql` (and/or `grep` the bake warn will not apply)
+5. Rsync `ussdgw-app.jar` + `quarkus-run.jar` + `lib/` + **`quarkus/`** + `app/html/` (never `configs/`)
+6. Restart → wait `:8088` 200 → prove. On loop: `tail` **`/tmp/ussdgw.service.log`** (systemd stdout/stderr), restore bak.
+
+Detail: [skills.md](docs/agents/skills.md) § Digicom · [lessons.md](docs/agents/lessons.md) · [schema.md](docs/agents/schema.md)
+
 ## CDR scroll jump — agent-failure pattern (SIẾT)
 
 **Symptom:** click CDR timestamp (mid-page) → viewport jumps to **page bottom**. Also seen after HTMX 5s poll while a row is expanded.
@@ -112,22 +152,26 @@ digicom = main + Digicom seeds  ──push──►  digicom-et/main  (PRIVATE)
 1. **Chrome overflow-anchor (primary on click):** expanding a mid-list `<tr class="cdr-detail">` inserts a tall block **above** `.cdr-ledger-foot` / later rows. Scroll anchoring keeps that foot/later content in view → `scrollY` increases → looks like “jump to bottom”. Prior `show:none` + poll-only `pinScroll` **never ran on click**, so click stayed broken.
 2. **Ledger `overflow-x-auto` (amplifier):** CSS spec: non-`visible` `overflow-x` forces `overflow-y` to `auto` → nested scrollport; focus/layout then scrolls that port.
 3. **Bad “fix”:** `htmx.config.scrollBehavior = 'smooth'` fought any pin and made residual show/focus scroll worse.
-4. **HTMX poll path (secondary):** `#cdr-rows` `innerHTML` every 5s + `sessionStorage` restore re-opens tall panels — needs `show:none focus-scroll:false` **and** pin on `afterSwap`/`afterSettle`. `show:none` alone is a no-op for top/bottom but does **not** disable overflow-anchor on click.
+4. **HTMX 5s poll while expanded (Advanced closes + mid-page jump):** `#cdr-rows` `innerHTML` every 5s **destroys** open `<details>` (Advanced snaps shut) and `pinScrollSoon(stale beforeSwap Y)` races the user’s current scroll → jump to **middle**. `sessionStorage` row-open restore alone does **not** keep Advanced open.
+5. **Pipe “bể layout”:** long `events`/`detail` pipe in a grid `<dd>` with `overflow-wrap: anywhere` mid-word-breaks (`Brid`/`ge`, `no`/`te`).
 
 **What NOT to do (already failed across commits):**
 - Only add `hx-swap … show:none` and declare fixed
 - Only pin scroll on `htmx:afterSwap` (poll) — **click path untouched**
+- Keep polling `#cdr-rows` every 5s **while a row is open** (closes Advanced; stale pin)
 - Set `scrollBehavior = 'smooth'`
 - Keep `overflow-x-auto` on `.cdr-ledger` / table-wrap that contains expand rows
+- Render rolled pipe in `.cdr-detail-grid dd` with `overflow-wrap: anywhere`
+- Gold-wash every `.cdr-digest` (signal mix) — looks tè le next to status chips
 - Stuff ops spine/session into `<details class="cdr-advanced">` and call UX done
-- Ship after `mvn test` / html grep **without** Digicom (or packaged UI) **browser** `scrollY` prove
+- Ship after `mvn test` / html grep **without** Digicom (or packaged UI) **browser** `scrollY` prove + Advanced stays open
 
 **Correct pattern (this admin HTMX partial):**
-- CSS: `overflow-anchor: none` on `.cdr-ledger`, `tbody`, `.cdr-detail`, `.cdr-ledger-foot`; ledger wrap **`overflow: visible`** (no `overflow-x-auto`)
-- JS: on expand **click**, capture `scrollY` **before** toggle, restore via rAF/`scrollTo` after; same pin on poll restore
+- CSS: `overflow-anchor: none` on `.cdr-ledger`, `tbody`, `.cdr-detail`, `.cdr-ledger-foot`, `.cdr-advanced`; ledger wrap **`overflow: visible`** (no `overflow-x-auto`); digests = solid `ink-panel`; pipe = `<pre class="cdr-pipe-block">` one `|` field per line (`white-space: pre`, no mid-word break)
+- JS: on expand **click**, capture `scrollY` **before** toggle, restore via rAF/`scrollTo`; **pause** `#cdr-rows` poll while any row open (`htmx:beforeRequest` preventDefault); persist Advanced open in sessionStorage; restore `details.open` after filter swaps
 - HTMX: `hx-swap="innerHTML settle:0 show:none focus-scroll:false"`; `htmx.config.scrollBehavior='instant'`; `defaultFocusScroll=false`
 - Markup: expand = full-width ink-panel (AS hero + 6-hop + session grid); Advanced = raw pipe/tape only
-- Prove: mid-page click → `|scrollY_after - scrollY_before| ≤ 1`; many commits without that prove = **agent failure**
+- Prove: mid-page click → `|scrollY_after - scrollY_before| ≤ 1`; open Advanced → still open after ≥6s; many commits without that prove = **agent failure**
 
 Detail: [lessons.md](docs/agents/lessons.md) · [skills.md](docs/agents/skills.md) § Admin/CDR · `app/html/admin/cdr.html` · `admin.css`
 
