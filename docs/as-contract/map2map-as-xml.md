@@ -34,6 +34,35 @@ Canonical peers:
 
 ---
 
+## Prove / ship gate (A ∧ B ∧ C)
+
+Tests exist to **find bugs and block ship**, not to pad green bars.
+
+| Seam | What | Must fail when |
+|------|------|----------------|
+| **A** wire | `Map2MapAsWireContractExamplesTest` — fixtures from this doc | Wrong BEGIN/CONTINUE/END shape; hop `none` embeds `hlr none`; XML≠JSON parity; gated notify missing `adaptiveTimeoutMs` / `gateReason` / `jsessionId` |
+| **B** bridge/MAP | `AsPullBeginContinueEndAndGateTest` | Wrong `Ss7Command` / `endDialog`; CONTINUE bumps generation; gate uses EWMA×1.5 instead of config ceiling; late AS double-NI; hard-fail still NI |
+| **C** Digicom lab | [`build/prove-as-wire-lab.sh`](../../build/prove-as-wire-lab.sh) + checklist | Sim dialog / pcap / AdaptiveTimeout path broken on Digicom after redeploy |
+
+**Pre-rsync:** **A∧B green** + `package-dist` (JDK 25, build-time `postgresql` then restore local `h2`).
+
+**Digicom C plane:** `ss7-simulator` + short-codes on **`networkId=1` only**. Keep live Brook / **`networkId=0`** up for manual prove — **do not** dial live `*804` / Brook codes inside automated C1–C6.
+
+| Step | Gate |
+|------|------|
+| C7 | Preflight: `:8088` `/admin/status.json` → `ss7.live`, `scheduler.gateTicks`, jar mtime — đỏ ⇒ stop |
+| C1–C2 | MO BEGIN → CONTINUE → digit → END (XML tenant, lab SC) |
+| C3 | MAP2MAP **lab** short-code on sim → multimenu → END |
+| C4 | AdaptiveTimeout fire → wait; late AS → NI once |
+| C5 | Same as C1–C2 (and ideally C3) with tenant wire **JSON** |
+| C6 | pcap lab plane: BEGIN / menu Request / final Response (hop op 59 if C3) |
+
+**C fail ⇒ not shipped.** Rollback **jars/`lib`/`quarkus` only** (never Digicom `configs/`). Brook live handset prove is **manual**, outside the automated C gate.
+
+Helper: `./build/prove-as-wire-lab.sh` (A∧B) · `./build/prove-as-wire-lab.sh --preflight` (A∧B + Digicom C7). Redeploy steps: [`docs/agents/skills.md`](../agents/skills.md) § Digicom.
+
+---
+
 ## HTTP basics
 
 | Item | XML | JSON |
@@ -51,9 +80,10 @@ AS must answer within `adaptiveTimeoutMs`. Empty HTTP 200 is **not** a menu.
 
 | XML dialog attr | JSON field | Role |
 |-----------------|------------|------|
-| `localId` | `correlationId` | Store / push-back key (`ussdTx` PK) |
-| `sessionId` | `sessionId` | Logical `virtualSessionId` |
-| `virtualBridgeId` | `virtualBridgeId` | Bridge arm id (usually = correlationId) |
+| `localId` | `correlationId` | **Primary** store / push-back key (`ussdTx` PK) — see Session identity guide |
+| `sessionId` | `sessionId` | Logical `virtualSessionId` (logs only — not PK) |
+| `virtualBridgeId` | `virtualBridgeId` | Bridge arm id (usually = correlationId when BRIDGE) |
+| — | `requestId` | Usually equals `correlationId`; echo with it |
 | `adaptiveTimeoutMs` | `adaptiveTimeoutMs` | Gate budget ms |
 | `asMode` | `asMode` | `SYNC` \| `BRIDGE` |
 | Child `string=` (pull) | `ussdString` | Hop text or sentinel / empty |
@@ -79,9 +109,10 @@ Never echo pull `ussdString` onto the UE unless `action` intentionally forwards 
 
 | Attr | Who sets | Meaning |
 |------|----------|---------|
-| `localId` | GW | Correlation / push-back key (echo this) — see **Session identity** below |
-| `sessionId` | GW | Logical virtual session id (not the store key) |
-| `virtualBridgeId` | GW | Bridge arm id when AdaptiveTimeout/bridge armed (usually = `localId`) |
+| `localId` | GW | **Primary** session key (= JSON `correlationId` / `ussdTx` PK). Echo this. Full guide: **Session identity** below |
+| `sessionId` | GW | Virtual-session UUID for tracing — **not** the store PK |
+| `virtualBridgeId` | GW | Bridge arm id when AdaptiveTimeout armed (usually = `localId`) |
+| `requestId` | GW (JSON) | Usually same as `correlationId`; echo with it |
 | `adaptiveTimeoutMs` | GW | Live gate budget ms for this session |
 | `asMode` | GW | `SYNC` or `BRIDGE` |
 | `networkId` | GW | SCCP / tenant network id (Digicom live often `0`) |
@@ -96,64 +127,274 @@ Never echo pull `ussdString` onto the UE unless `action` intentionally forwards 
 | Child `string=` | GW or AS | USSD text on the MAP message element |
 | Child `<msisdn …/>` | GW | Subscriber MSISDN |
 
-### Session identity — `localId`, `sessionId`, `virtualBridgeId`
+### Session identity — junior integrator guide
 
-Three string attributes often appear together on GW→AS pulls. They look similar but play
-**different** roles. Getting them wrong is the usual cause of “AS replied but GW ignored it”.
+GW sends **several string IDs** on every pull. They look like interchangeable UUIDs.
+They are **not**. Mixing them up is the #1 reason juniors see “AS returned 200 but handset
+never got the menu / late callback was ignored”.
 
-#### What each is
+This section is written for a **junior web/AS developer** (Node, Java, PHP, …). You do **not**
+need to know MAP/TCAP internals — only which field to **store**, which to **echo**, and which
+to **ignore** for routing.
 
-| Attr | Plain-language role | Internal name |
-|------|---------------------|---------------|
-| **`localId`** | **The session key.** One in-flight USSD transaction. Use this to look up the call on late push-back (`/as/callback`) and in your own AS logs. | `correlationId` |
-| **`sessionId`** | **Logical / display session id.** A UUID for the virtual session object. Useful for tracing; **not** the primary store lookup key. | `virtualSessionId` |
-| **`virtualBridgeId`** | **Bridge arm id** when AdaptiveTimeout / Virtual Session Bridge is armed (`asMode="BRIDGE"`). Tells the AS “this pull can recover via bridge / gated notify”. | Usually equals `correlationId` (= `localId`) when armed; omitted or unused when `asMode="SYNC"` |
+#### 60-second mental model
 
-#### What each equals (and what it does **not** equal)
+Think of one subscriber dial (`*100#` or `*804#`) as **one shopping cart checkout**:
 
-| Attr | Equals | Does **not** equal |
-|------|--------|---------------------|
-| `localId` | `correlationId` · ProfileFacility / saga table **`ussdTx` PK** · VirtualSessionStore key · bridge `claimForAsResponse` / push-back key | `sessionId` · HTTP `JSESSIONID` · outbound MAP hop dialog key (`m2m-{corr}`) |
-| `sessionId` | `virtualSessionId` on the in-memory / profile row | `ussdTx` PK · push-back key (unless you wrongly echo only this and omit `localId`) |
-| `virtualBridgeId` | Usually **`localId` / `correlationId`** when bridge armed | A separate “bridge database”; not `JSESSIONID` |
-| `jsessionId` (when present) | Classic **NI HTTP park** cookie (`Set-Cookie: JSESSIONID=…` on `/ussd`) | `localId` / `ussdTx` — NI park only |
+| Field (XML / JSON) | Analogy | You use it to… |
+|--------------------|---------|----------------|
+| **`localId` / `correlationId`** | **Order number** (primary key) | Look up this call everywhere; echo on late replies |
+| **`requestId`** | Often same as order number | Usually copy = `correlationId`; treat like correlation unless docs say otherwise |
+| **`sessionId`** | Internal tracking UUID / “visit id” | Logs / dashboards only — **not** your DB primary key |
+| **`virtualBridgeId`** | “This order is parked for slow payment” flag id | Same value as `localId` when bridge is on; echo on late callback as backup |
+| **`jsessionId`** | Cookie for a **different** checkout channel (NI push HTTP) | Only classic NI `/ussd` Cookie — **never** replace `localId` |
+| **`m2m-{correlationId}`** (internal) | Warehouse transfer slip for MAP2MAP hop | **Never** appears as your `localId`; do not invent it in AS responses |
 
-**Rule of thumb:** treat **`localId` as the truth**. If only one id can be stored in the AS, store `localId`.
+**Golden rule:** if your AS can remember only **one** string for a call, remember
+**`localId` (XML) = `correlationId` (JSON)**.
 
-#### What the AS must echo back
+#### Name cheat-sheet (XML ↔ JSON ↔ gateway internals)
 
-| Path | Required echo | Optional but useful |
-|------|---------------|---------------------|
-| **Sync pull response** (HTTP 200 body on the same POST) | Identity attrs are **optional** — GW already knows the session from the outstanding pull. Still safe to echo `localId`. | `sessionId`, `virtualBridgeId` |
-| **Late `/as/callback`** (or gRPC Callback) after AdaptiveTimeout / async | **Must** echo **`localId`** (= correlation). GW resolves via `AsResponse.resolvePushBackId()`: `localId` / `correlationId` → else `virtualBridgeId` → else `sessionId`. | Echo all three as received |
-| **Classic NI** subsequent POSTs | Cookie **`JSESSIONID`** (= `jsessionId`), not `localId` | `localId` may also appear on gated bodies |
+| What you see in XML `<dialog …>` | What you see in JSON body | Gateway internal name | Is it the push-back key? |
+|----------------------------------|---------------------------|-------------------------|--------------------------|
+| `localId` | `correlationId` | `correlationId` / **`ussdTx` PK** | **YES — primary** |
+| (same value often) | `requestId` | pull request id (usually = correlation) | Prefer correlation; echo both if easy |
+| `sessionId` | `sessionId` | `virtualSessionId` | No (fallback only) |
+| `virtualBridgeId` | `virtualBridgeId` | bridge arm id (≈ correlation when BRIDGE) | Backup if correlation omitted |
+| `jsessionId` (attr or Cookie) | `jsessionId` | classic NI HTTP park cookie | **NI only** — not MO pull key |
 
-If the AS omits `localId` on a late callback and only sends `sessionId`, GW *may* still match when `sessionId` was the only fallback — but that is fragile. Always echo **`localId`**.
+GW late-callback lookup order (`AsResponse.resolvePushBackId()`):
+
+1. `correlationId` / XML `localId`
+2. else `virtualBridgeId`
+3. else `sessionId`
+
+So: **always put (1)**. (2) and (3) are safety nets, not substitutes.
+
+#### When do you NEED each field? (decision table)
+
+| Situation | Must send / use | Nice to send | Do **not** use as key |
+|-----------|-----------------|--------------|------------------------|
+| **Sync pull reply** (HTTP 200 on the same `POST` GW just made) | Nothing required for identity — GW still has the outstanding pull | Echo `localId`/`correlationId` (+ `sessionId`, `virtualBridgeId`) | — |
+| **Late `/as/callback`** or gRPC Callback after AdaptiveTimeout / slow AS | **`correlationId` / `localId`** | Also echo `virtualBridgeId` + `sessionId` | `sessionId` alone; `jsessionId`; MSISDN; short code |
+| **Multi-menu turn 2+** (user pressed `1`) | Same `localId`/`correlationId` as turn 1 | Same `sessionId` / `virtualBridgeId` | New random UUID each menu |
+| **MAP2MAP after hop** | Same `localId` as the MO that dialed `*804#` | — | Hop dialog id `m2m-…`; hop GT; `hopUssd` as session key |
+| **Classic NI continue** (AS talking on parked `/ussd`) | Cookie **`JSESSIONID`** = `jsessionId` | May also echo `localId` | `localId` **instead of** Cookie |
+| **Gated notify** (GW told you gate fired) | Re-push with **`localId`/`correlationId`**; if NI, also Cookie `jsessionId` | `virtualBridgeId`, `adaptiveTimeoutMs` | Treating `gateReason` as a session id |
+| **Logging / support ticket** | Log all four: corr, sessionId, virtualBridgeId, msisdn | — | — |
+| **Your AS Redis / DB row** | PK = `correlationId` | Store `sessionId` as secondary column | PK = `sessionId` |
+
+#### Concrete examples (copy/paste)
+
+Below, pretend the handset dialed and GW POSTed to your AS. Values are lab-style; production
+uses real UUIDs.
+
+**Example A — Sync CONTINUE (easiest path)**
+
+GW → AS pull (XML excerpt):
+
+```xml
+<dialog localId="corr-mo-1" sessionId="vs-mo-1" virtualBridgeId="corr-mo-1"
+        asMode="BRIDGE" adaptiveTimeoutMs="7000">
+  <processUnstructuredSSRequest_Request string="*100#">…</processUnstructuredSSRequest_Request>
+</dialog>
+```
+
+Your AS can reply **on the same HTTP response** with only the menu (identity optional):
+
+```xml
+<dialog mapMessagesSize="1">
+  <unstructuredSSRequest_Request dataCodingScheme="15" string="1. Balance&#10;2. Exit"/>
+</dialog>
+```
+
+Better (junior-safe): always echo identity so the same code path works for sync **and** late callback:
+
+```xml
+<dialog mapMessagesSize="1" localId="corr-mo-1" sessionId="vs-mo-1" virtualBridgeId="corr-mo-1">
+  <unstructuredSSRequest_Request dataCodingScheme="15" string="1. Balance&#10;2. Exit"/>
+</dialog>
+```
+
+JSON equivalent:
+
+```json
+{
+  "correlationId": "corr-mo-1",
+  "requestId": "corr-mo-1",
+  "sessionId": "vs-mo-1",
+  "virtualBridgeId": "corr-mo-1",
+  "generation": 1,
+  "text": "1. Balance\n2. Exit",
+  "action": "CONTINUE",
+  "async": false
+}
+```
+
+**Example B — Late callback (AdaptiveTimeout already fired)**
+
+GW may have already shown “Please wait…” to the handset. Your reply is **no longer** on the
+original pull socket. You `POST` to GW `/as/callback` (or gRPC Callback).
+
+**Wrong** (GW often drops / cannot match):
+
+```json
+{ "sessionId": "vs-mo-1", "text": "Balance: 12 ETB", "action": "END" }
+```
+
+**Right:**
+
+```json
+{
+  "correlationId": "corr-mo-1",
+  "requestId": "corr-mo-1",
+  "sessionId": "vs-mo-1",
+  "virtualBridgeId": "corr-mo-1",
+  "text": "Balance: 12 ETB",
+  "action": "END",
+  "async": false
+}
+```
+
+XML late callback:
+
+```xml
+<dialog localId="corr-mo-1" sessionId="vs-mo-1" virtualBridgeId="corr-mo-1" mapMessagesSize="1">
+  <processUnstructuredSSRequest_Response dataCodingScheme="15" string="Balance: 12 ETB"/>
+</dialog>
+```
+
+**Example C — Multi-menu: ids must stay the same**
+
+| Turn | Who | `localId` / `correlationId` | Notes |
+|------|-----|-----------------------------|--------|
+| 1 | GW→AS pull | `e37caa26-…` | First menu request |
+| 1 | AS→GW CONTINUE | **same** `e37caa26-…` | Echo it |
+| 2 | GW→AS pull (user digit `1`) | **same** `e37caa26-…` | `generation` may be &gt; 0; child string=`1` |
+| 2 | AS→GW CONTINUE or END | **same** `e37caa26-…` | Never mint a new UUID |
+
+If you generate a new `correlationId` on turn 2, GW treats it as an unknown session → drop.
+
+**Example D — MAP2MAP: do not confuse hop dialog with localId**
+
+Inside GW (you never set this):
+
+- Subscriber MO key: `localId = e37caa26-…` → **your** AS key
+- Outbound hop toward upper HLR: internal dialog `m2m-e37caa26-…`
+
+Your AS still sees only:
+
+```text
+localId / correlationId = e37caa26-…
+sessionId               = 4203367b-…   (different UUID — OK)
+virtualBridgeId         = e37caa26-…   (same as localId when BRIDGE)
+hopUssd / redirectUssd  = routing codes, NOT session keys
+```
+
+Never put `m2m-…` into your response `localId`.
+
+**Example E — `jsessionId` vs `localId` (NI push)**
+
+Classic NI: GW parks your HTTP on `/ussd` and returns `Set-Cookie: JSESSIONID=js-abc; …`.
+Later continues use the **Cookie**, not `localId`.
+
+| Channel | Primary key for “same session” |
+|---------|--------------------------------|
+| MO / MAP2MAP **pull** AS (`as_url`) | `localId` / `correlationId` |
+| Classic **NI** parked HTTP | Cookie `JSESSIONID` (= `jsessionId`) |
+
+Gated NI body may contain **both**. Re-push NI with Cookie; re-push pull/callback with `localId`.
+
+#### Minimal AS code pattern (Node-style)
+
+```js
+// On GW→AS pull (XML or JSON already parsed into `pull`)
+const corr =
+  pull.correlationId || pull.localId; // JSON uses correlationId; XML maps to same
+if (!corr) throw new Error("pull missing localId/correlationId");
+
+// Persist ONE row per in-flight USSD
+await db.ussdSessions.upsert({
+  id: corr,                          // PRIMARY KEY
+  sessionId: pull.sessionId || null, // secondary / logs only
+  virtualBridgeId: pull.virtualBridgeId || corr,
+  msisdn: pull.msisdn,
+  lastPullAt: Date.now(),
+});
+
+// Sync reply (same HTTP response) — still echo corr
+return {
+  correlationId: corr,
+  requestId: corr,
+  sessionId: pull.sessionId,
+  virtualBridgeId: pull.virtualBridgeId || corr,
+  generation: (pull.generation || 0) + 1,
+  text: "1. Balance\n2. Exit",
+  action: "CONTINUE",
+  async: false,
+};
+
+// Later, if you answer via /as/callback:
+async function lateCallback(corr, text) {
+  const row = await db.ussdSessions.get(corr); // MUST look up by correlationId
+  await http.post(GW_CALLBACK_URL, {
+    correlationId: row.id,           // required
+    requestId: row.id,
+    sessionId: row.sessionId,        // optional but good
+    virtualBridgeId: row.virtualBridgeId,
+    text,
+    action: "END",
+    async: false,
+  });
+}
+```
+
+#### Wrong vs right (quick quiz)
+
+| AS behaviour | Result |
+|--------------|--------|
+| Store Redis key = `sessionId` only; callback sends `sessionId` | Fragile / often **ignored** |
+| Store Redis key = `correlationId`; callback sends `correlationId` | **Works** |
+| New UUID every CONTINUE | Multimenu **breaks** |
+| Echo `hopUssd` (`*875#`) as `correlationId` | **Breaks** |
+| Use Cookie `JSESSIONID` on MO pull callback | **Wrong channel** |
+| Omit all ids on sync HTTP 200 CONTINUE | Usually works; still echo for safety |
+| Omit `correlationId` on late callback | **Fails** after AdaptiveTimeout |
 
 #### How they relate on the MAP2MAP hop path
 
 ```
 UE dials *804#
   → GW creates VirtualSession
-       correlationId  = UUID  → XML localId          → ussdTx PK
-       virtualSessionId = UUID → XML sessionId
-  → Bridge armed               → XML virtualBridgeId ≈ localId
+       correlationId  = UUID  → XML localId / JSON correlationId  → ussdTx PK  ← YOUR KEY
+       virtualSessionId = UUID → XML/JSON sessionId                 ← logs only
+  → Bridge armed               → virtualBridgeId ≈ localId
                                → asMode=BRIDGE, adaptiveTimeoutMs=…
   → Outbound hop dialog key    = m2m-{correlationId}  (NOT written as localId)
   → Hop RESULT / CLOSE / REJECT
   → GW POST pull to AS as_url with localId / sessionId / virtualBridgeId
        string= = hop USSD text | empty (hlrResult=none) | "hlr reject"
-  → AS HTTP 200 CONTINUE/END (or later /as/callback with localId echoed)
+  → AS HTTP 200 CONTINUE/END (or later /as/callback with localId / correlationId echoed)
   → GW MAP toward UE (Request menu or final Response)
 ```
 
-Notes for integrators:
+Notes:
 
-1. **`localId` does not change** across hop RESULT → AS pull → UE menu continues for that MO.
-2. The outbound hop uses a **different** dialog id (`m2m-…`); never put that into `localId`.
-3. After hop, AS may start a **multi-menu** (§4d) — each continue pull still uses the **same** `localId`.
-4. If AdaptiveTimeout fires first, GW may send a gated Notify with the same ids; re-push with
-   `localId` (and `jsessionId` / Cookie when NI).
+1. **`localId` / `correlationId` does not change** for the whole MO (hop → AS → multi-menu → END).
+2. Never put `m2m-…` into `localId`.
+3. After hop, multi-menu (§4d) still uses the **same** correlation.
+4. If AdaptiveTimeout fires first, gated Notify keeps the same ids; re-push with `localId`
+   (and `jsessionId` / Cookie when NI).
+
+#### One-line summary (accurate)
+
+> **`localId` (XML) ≡ `correlationId` (JSON) ≡ gateway `ussdTx` primary key** — the only id your
+> AS must treat as the session key. **`sessionId`** is a separate virtual-session UUID for
+> tracing. **`virtualBridgeId`** usually equals the correlation when AdaptiveTimeout/bridge is
+> armed (echo it on late callbacks as backup). **`jsessionId`** is only for classic NI Cookie
+> park — never confuse it with `localId`.
+
+---
 
 ### MAP2MAP `hlrResult` + `string=` (locked)
 
@@ -401,7 +642,11 @@ Upper HLR/MSC returned USSD text (any alphabet — e.g. UCS-2 Amharic). That tex
 - `originatedUssd` = what the subscriber dialed.
 - `redirectUssd` = routing-rule redirect short code.
 - `hopUssd` = code actually sent on the outbound hop (short or long).
-- Identity: `localId` / `correlationId` = `ussdTx` PK; `sessionId` = virtual session; `virtualBridgeId` ≈ correlation.
+- Identity (see **Session identity — junior integrator guide** above):
+  - **`localId` / `correlationId`** = your AS primary key (= gateway `ussdTx` PK) — echo this always
+  - **`sessionId`** = separate virtual-session UUID for logs — not your PK
+  - **`virtualBridgeId`** ≈ `correlationId` when `asMode=BRIDGE` — echo on late `/as/callback`
+  - Never use `hopUssd` / `m2m-…` / `jsessionId` as the pull session key
 
 AS then answers with a **single** CONTINUE menu (§2), a **multi-menu** flow (§4d), or final
 Response / `action":"END"` (§3).

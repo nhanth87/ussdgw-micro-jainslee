@@ -64,6 +64,16 @@ Peer: OTA [`docs/agents/packaging.md`](../../../../ota-service/ota-sim-push/docs
 
 Host shorthand: **`digicom-nb`**, APP_HOME **`/home/app/ota-push-services/ussdgw-micro-jainslee/`**. Do **not** invent Digicom secrets; host `configs/` is operator SoT.
 
+#### AS wire / AdaptiveTimeout ship gate (A∧B before rsync; C Digicom sim)
+
+| Before rsync | After restart on Digicom |
+|--------------|--------------------------|
+| **A∧B must be green:** `./build/prove-as-wire-lab.sh` (`Map2MapAsWireContractExamplesTest` + `AsPullBeginContinueEndAndGateTest`) + `package-dist` | **C7 preflight** then **C1–C6** on **ss7-simulator `networkId=1`** + lab short-codes only |
+
+- Live Brook / **`networkId=0`** stays up for **manual** prove — **not** part of automated C1–C6 (never dial live `*804` in that checklist).
+- C fail ⇒ **not shipped**; rollback jars/`lib`/`quarkus` only — **never** Digicom `configs/`.
+- Contract + checklist: [`map2map-as-xml.md` § Prove / ship gate](../as-contract/map2map-as-xml.md) · script [`build/prove-as-wire-lab.sh`](../../build/prove-as-wire-lab.sh).
+
 #### Digicom OS/SCTP buffers (5k headroom — not a measured 5k claim)
 
 Stock Digicom had `net.core.rmem_max=wmem_max=212992` → SCTP `rcvbuf`/`sndbuf` 212992 → pcap **a_rwnd ≈ 106496** (~104 KiB). Raise via sysctl drop-in (no SS7 topology overwrite; `Ss7Config.Link` does not yet wire `optionSoRcvbuf`):
@@ -99,11 +109,17 @@ export JAVA_HOME=$(ls -d ~/.local/share/mise/installs/java/zulu-25* 2>/dev/null 
 export PATH="$JAVA_HOME/bin:$PATH"
 java -version   # expect 25
 
+# A∧B prove gate (fail ⇒ do not rsync)
+./build/prove-as-wire-lab.sh
+
 # Digicom build-time db-kind (backup → postgresql → package → restore h2)
 cp -a build/application.properties "build/application.properties.bak-deploy-$(date +%Y%m%d%H%M%S)"
 sed -i 's/^quarkus.datasource.db-kind=h2$/quarkus.datasource.db-kind=postgresql/' build/application.properties
 ./build/package-dist.sh
 sed -i 's/^quarkus.datasource.db-kind=postgresql$/quarkus.datasource.db-kind=h2/' build/application.properties
+
+# Snapshot Digicom jars for rollback (C fail) — never configs/
+ssh digicom-nb 'mkdir -p /tmp/ussdgw-jar-bak-$(date +%Y%m%d%H%M%S) && cd /home/app/ota-push-services/ussdgw-micro-jainslee && B=$(ls -dt /tmp/ussdgw-jar-bak-* | head -1) && cp -a ussdgw-app.jar quarkus-run.jar "$B/" && cp -a lib quarkus "$B/"'
 
 # Rsync jars / lib / quarkus / UI only — never configs/
 APP=digicom-nb:/home/app/ota-push-services/ussdgw-micro-jainslee
@@ -114,6 +130,7 @@ rsync -az --delete dist/app/html/ "$APP/app/html/"
 
 # Restart (systemd active ≠ Quarkus ready)
 ssh digicom-nb 'sudo systemctl restart ussdgw.service'
+# Then: export KEY=…; ./build/prove-as-wire-lab.sh --preflight → C1–C6 sim net1
 ```
 
 **Ready + prove** (after restart). Read `ussd.admin.api-key` from Digicom host `configs/application.properties` (or `USSD_ADMIN_API_KEY` if set there) — **never invent** the value; do not paste live secrets into docs/chat.
