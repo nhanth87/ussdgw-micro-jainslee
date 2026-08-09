@@ -70,6 +70,9 @@ public class UssdSchemaInitializer {
             new RequiredColumn("ussd_cdr", "origination_type"),
             new RequiredColumn("ussd_cdr", "gate_ms"),
             new RequiredColumn("ussd_cdr", "observed_ewma_ms"),
+            new RequiredColumn("ussd_cdr", "hop_outcome"),
+            new RequiredColumn("ussd_cdr", "refuse_reason"),
+            new RequiredColumn("ussd_cdr", "as_ussd"),
             new RequiredColumn("ussd_campaign", "tenant_id"),
             new RequiredColumn("ussd_campaign", "created_by"),
             new RequiredColumn("ussd_campaign", "submitted_at"),
@@ -92,7 +95,8 @@ public class UssdSchemaInitializer {
             "V8__short_code_app_username_unique.sql",
             "V9__short_code_map2map.sql",
             "V10__short_code_reroute.sql",
-            "V11__short_code_hop_dest.sql"
+            "V11__short_code_hop_dest.sql",
+            "V12__cdr_hop_outcome.sql"
     );
 
     @Inject

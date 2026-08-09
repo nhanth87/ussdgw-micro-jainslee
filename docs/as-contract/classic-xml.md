@@ -117,7 +117,7 @@ GW includes these on **PULL** encode (HTTP XML attrs / JSON fields; gRPC JSON by
 | `localId` / `correlationId` | `localId` | **Real session id for push-back** — VirtualSessionStore / `bridge.onAsResponse` key. AS must echo on `/as/callback` or gRPC `Callback`. |
 | `sessionId` | `sessionId` | Logical `virtualSessionId` (not the store key). |
 | `virtualBridgeId` | `virtualBridgeId` | Bridge arm identity when armed (usually equals `correlationId`). |
-| `adaptiveTimeoutMs` | `adaptiveTimeoutMs` | Effective adaptive gate ms for this network/session (`AdaptiveTimeout.effectiveGateMs`). |
+| `adaptiveTimeoutMs` | `adaptiveTimeoutMs` | Live gate budget ms for this session (`AdaptiveTimeout.effectiveGateMs` = configured async-gate ceiling, not EWMA). |
 | `asMode` | `asMode` | Hint: `SYNC` \| `BRIDGE` (ASYNC_ACK is AS response `async=true`). |
 | `shortCode` | `shortCode` | Matched routing-rule key. |
 | `originatedUssd` | `originatedUssd` | Full UE dialed string (MAP2MAP keeps hop text in `ussdString`). |

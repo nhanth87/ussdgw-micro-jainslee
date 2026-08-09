@@ -44,6 +44,7 @@ digicom = main + Digicom seeds  ──push──►  digicom-et/main  (PRIVATE)
 | Log4j2 ONLY | [`logging.md`](docs/agents/logging.md) |
 | Admin UX (OTA shell → USSD) | [`skills.md`](docs/agents/skills.md) § Admin · `app/html/admin/` |
 | Fast-jar dist (OTA peer) | OTA [`packaging.md`](../../ota-service/ota-sim-push/docs/agents/packaging.md) · [`skills.md` § Dist](docs/agents/skills.md) |
+| Compile + Digicom redeploy | [`skills.md` § Digicom compile + redeploy](docs/agents/skills.md) — **copy-paste commands** (JDK 25 → PG package→H2 restore → rsync jars only → restart → wait `:8088`); footguns [`lessons.md`](docs/agents/lessons.md) |
 | Schema H2 / PostgreSQL | [`schema.md`](docs/agents/schema.md) |
 | SS7 lab + HLR face | [`ss7-lab-pair.md`](docs/agents/ss7-lab-pair.md) · admin `/admin/hlr` |
 | Operator Digicom / live carrier | [`ss7-lab-pair.md` § Operator Digicom](docs/agents/ss7-lab-pair.md) — dual push [`push-dual.sh`](build/push-dual.sh); public = `ss7-lab.json`; Digicom overlay on digicom-et `main` |
@@ -75,7 +76,7 @@ digicom = main + Digicom seeds  ──push──►  digicom-et/main  (PRIVATE)
 - **AdaptiveTimeout / Virtual bridge on top of MAP NI** — `ClassicNiHttpPark` + EWMA gate + `ussdTx` / `claimForAsResponse` / `onGateExpired` own AS park; MAP Notify/Request/continue/TC-END sit **under** that. Never replace bridge/adaptive with raw MAP-only. → [ussd-3gpp-notes.md](docs/as-contract/ussd-3gpp-notes.md) §6
 - **Per-MSISDN profiles** — `ussdTx` PK = **correlationId** (not MSISDN); each in-flight user gets its own row. Never reuse/overwrite a corr bound to another MSISDN (`VirtualSessionStore.put` fail-closed; NI `/ussd` → **409**). Concurrent users = concurrent corr rows; registries (`AsPullStateRegistry`, `PendingSri*`) stay keyed by corr — never `takeAny`. → [lessons](docs/agents/lessons.md)
 - **5k TPS honesty** — shared-host heap often **2g/4g**; pool knobs ×10 (`sbb-pool-max=40960`, `buffer-size=16384`) are **BUILD_TIME**. Runtime targets for sync AS: HTTP worker **512**, client pool **8192**, JDBC **128/16**, CDR queue **100k**/batch **2k**. Dual live SCTP links help share, not automatic 5k. **5k not measured** without dedicated load host (≥8g) + map/load + AS sim. → [lessons](docs/agents/lessons.md)
-- **Quarkus Digicom ship** — CDI eager bridge/adaptive on boot (`BridgeGateScheduler`); build-time **`db-kind=postgresql`** for Digicom package then restore local **h2**; NI park = async + AdaptiveTimeout (**never** `Thread.sleep`); status truth = `/admin/status.json` `ss7.live` only. → [lessons](docs/agents/lessons.md) · [schema](docs/agents/schema.md)
+- **Quarkus Digicom ship** — CDI eager bridge/adaptive on boot (`BridgeGateScheduler`); build-time **`db-kind=postgresql`** for Digicom package then restore local **h2**; rsync jars/`lib`/`quarkus`/`app/html` only; after restart wait **`:8088`** `/admin/status.json` (systemd active ≠ ready); NI park = async + AdaptiveTimeout (**never** `Thread.sleep`); status truth = `/admin/status.json` `ss7.live` only. → [skills § Digicom redeploy](docs/agents/skills.md) · [lessons](docs/agents/lessons.md) · [schema](docs/agents/schema.md)
 - **AS pull state** — `@ApplicationScoped` **`AsPullStateRegistry`** (not SBB instance maps); else EWMA never seeds under load. → [lessons](docs/agents/lessons.md)
 - **NI `/ussd` auth** — default **required**; lab opt-out `ussd.http.ni.auth-required=false`. NI header **`X-USSD-Api-Key`** (admin key or tenant/app-user key); admin UI automation stays **`X-USSD-Admin-Key`**. Secrets fail-closed unless `ussd.lab.allow-default-secrets=true`; bcrypt; package-dist never clobbers configs. → [lessons](docs/agents/lessons.md)
 - **NI Digicom 500 / `ussdTx`** — Quarkus can load **api stub** `ProfileAccessorInvoker` (UOE) before core; `package-dist` must shadow core class into `jainslee-api` jar. Also re-bind `ProfileFieldStoreLocator` in `VirtualSessionStore.put` or CMP writes hit empty facility (`No profile table: ussdTx`). Catch must log **exception message**. → [lessons](docs/agents/lessons.md)
@@ -147,6 +148,7 @@ Detail: [logging.md](docs/agents/logging.md).
 | Command | Does |
 |---------|------|
 | `./build/package-dist.sh` | Maven fast-jar → **self-contained `./dist/`** with `lib/{boot,main}/` (JDK 25) — **required** before ship |
+| Digicom compile + redeploy | Exact shell copy-paste → [`skills.md` § Digicom compile + redeploy](docs/agents/skills.md) |
 | `./run.sh` / `dist/run.sh` | Start packaged app (errors if jars/`lib` missing) |
 | **Server** | Copy **complete `dist/`** (after package) → `./run.sh` (host JDK 25) |
 | Bare bootstrap | [`dist-package-script.sh`](dist-package-script.sh) (sctp → jss7 → jain-slee → package) |

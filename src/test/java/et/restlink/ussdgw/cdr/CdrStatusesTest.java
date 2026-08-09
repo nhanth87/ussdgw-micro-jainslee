@@ -8,6 +8,7 @@ class CdrStatusesTest {
 
     @Test
     void catalogCoversGateAndGatedAsFamilies() {
+        assertThat(CdrStatuses.GATE_ARMED).isEqualTo("GATE_ARMED");
         assertThat(CdrStatuses.GATED).isEqualTo("GATED");
         assertThat(CdrStatuses.BRIDGED).isEqualTo("BRIDGED");
         assertThat(CdrStatuses.GATE_EXPIRED).isEqualTo("GATE_EXPIRED");
@@ -19,6 +20,7 @@ class CdrStatusesTest {
 
     @Test
     void familyHelpers() {
+        assertThat(CdrStatuses.isGateFamily("GATE_ARMED")).isTrue();
         assertThat(CdrStatuses.isGateFamily("GATED")).isTrue();
         assertThat(CdrStatuses.isGateFamily("GATED_AS_NOTIFY")).isTrue();
         assertThat(CdrStatuses.isGateFamily("MAP2MAP_GATED_HOP")).isTrue();

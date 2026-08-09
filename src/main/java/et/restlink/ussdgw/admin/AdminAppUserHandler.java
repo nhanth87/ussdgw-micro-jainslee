@@ -37,7 +37,7 @@ public class AdminAppUserHandler {
             StringBuilder opts = new StringBuilder(
                     "<div><label class=\"block text-xs uppercase tracking-wider text-ink-mute\">tenantId</label>"
                             + "<select name=\"tenantId\" required class=\"mt-1 w-full rounded-md border border-ink-line "
-                            + "bg-ink px-3 py-2 text-sm focus:border-signal focus:outline-none\">");
+                            + "bg-ink-panel px-3 py-2 text-sm focus:border-signal focus:outline-none\">");
             opts.append("<option value=\"\">—</option>");
             for (TenantEntity t : tenants.list()) {
                 opts.append("<option value=\"").append(esc(t.tenantId)).append("\">")

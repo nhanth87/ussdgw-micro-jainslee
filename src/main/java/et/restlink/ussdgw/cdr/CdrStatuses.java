@@ -13,7 +13,12 @@ public final class CdrStatuses {
     private CdrStatuses() {}
 
     // ── AdaptiveTimeout / VirtualSessionBridge (MO + NI park) ───────────────
-    /** Gate armed; session waiting on AS (or hop). */
+    /**
+     * Gate <em>armed</em> (budget countdown started) — not UE async-wait yet.
+     * Prefer this over legacy {@link #GATED} (same meaning; kept for old rows / filters).
+     */
+    public static final String GATE_ARMED = "GATE_ARMED";
+    /** @deprecated synonym of {@link #GATE_ARMED}; historical CDR rows. */
     public static final String GATED = "GATED";
     /** Gate won → UE async-wait; AS may still reply (late reconcile). */
     public static final String BRIDGED = "BRIDGED";
@@ -37,8 +42,7 @@ public final class CdrStatuses {
     public static final String GATED_AS_FAIL = "GATED_AS_FAIL";
 
     // ── MAP2MAP / RE_ROUTE — see {@link Map2MapCdr} ─────────────────────────
-    // MAP2MAP_ARMED, MAP2MAP_HOP_START, MAP2MAP_USSD_SENT, MAP2MAP_GATED_HOP,
-    // MAP2MAP_OK, MAP2MAP_COMPLETE_AFTER_GATE, MAP2MAP_TIMEOUT, …
+    // MAP2MAP_ARMED, HLR_REJECT, MAP2MAP_AS_ROUTED, MAP2MAP_OK, …
 
     // ── Common AS / saga (filterable) ───────────────────────────────────────
     public static final String AS_EMPTY_BODY = "AS_EMPTY_BODY";
@@ -47,10 +51,11 @@ public final class CdrStatuses {
     /** Admin preset keys → status filter value (trailing {@code *} = prefix). */
     public static final List<StatusPreset> ADMIN_PRESETS = List.of(
             new StatusPreset("", "All statuses"),
-            new StatusPreset("GATED*", "Gated / GATED_AS*"),
+            new StatusPreset("GATED*", "Legacy GATED / GATED_AS*"),
+            new StatusPreset("GATE_*", "GATE_ARMED / expired / no-bridge"),
             new StatusPreset("MAP2MAP_*", "MAP2MAP / re-route"),
-            new StatusPreset("BRIDGED*", "Bridged"),
-            new StatusPreset("GATE_*", "Gate expired / no-bridge"),
+            new StatusPreset("HLR_REJECT", "HLR hop reject (RE_ROUTE)"),
+            new StatusPreset("BRIDGED*", "Bridged (gate fired → UE async-wait)"),
             new StatusPreset("AS_*", "AS pull fails"),
             new StatusPreset("GATED_AS*", "Gated AS notify only"));
 
@@ -62,7 +67,8 @@ public final class CdrStatuses {
             return false;
         }
         String u = status.trim().toUpperCase();
-        return u.equals(GATED)
+        return u.equals(GATE_ARMED)
+                || u.equals(GATED)
                 || u.equals(BRIDGED)
                 || u.equals(GATE_EXPIRED)
                 || u.equals(GATE_NO_BRIDGE)
@@ -72,8 +78,12 @@ public final class CdrStatuses {
                 || u.equals(BRIDGED_DONE);
     }
 
-    /** True when status is MAP2MAP / RE_ROUTE Case 2. */
+    /** True when status is MAP2MAP / RE_ROUTE Case 2 (includes {@code HLR_REJECT}). */
     public static boolean isMap2MapFamily(String status) {
-        return status != null && status.trim().toUpperCase().startsWith("MAP2MAP_");
+        if (status == null || status.isBlank()) {
+            return false;
+        }
+        String u = status.trim().toUpperCase();
+        return u.startsWith("MAP2MAP_") || u.equals("HLR_REJECT");
     }
 }

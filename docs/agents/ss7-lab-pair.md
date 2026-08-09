@@ -54,6 +54,8 @@ Outbound SRI-SM (NI `SriSbb` + PROXY_MAP face) CalledParty = resolved `ussd.hlr.
 
 ## Operator Digicom / live carrier (dual push — Digicom kept, not on nhanth87)
 
+**SCTP buffers (5k headroom):** host sysctl drop-in [`build/systemd/99-ussdgw-sctp-buffers.conf`](../../build/systemd/99-ussdgw-sctp-buffers.conf) — not carrier SS7 JSON. Skills § Digicom OS/SCTP buffers. Restart `ussdgw` after apply; **not** a measured 5k claim.
+
 **Public `nhanth87` `main` = lab/test SS7 only** (`build/ss7-lab.json` / `dist/configs/ss7-lab.json`).
 
 **Keep** Digicom carrier seeds (`ss7-digicom-balance.json`, `application-digicom.properties`, `install-on-digicom.sh`) for Digicom deploys. Push with **`./build/push-dual.sh`**:
@@ -67,10 +69,12 @@ Live Digicom host `configs/` remains operator SoT for secrets/persist. Legacy `p
 
 When deploying to Digicom:
 
+- Full checklist: [`skills.md` § Digicom compile + redeploy](skills.md) (JDK 25 → PG package → restore H2 → rsync → restart → wait `:8088` status → prove jar).
 - Rsync **jars / `lib/` / `quarkus/` / `app/html`** only — **never** overwrite Digicom `configs/` (PG URL, secrets, SS7 seed/persist).
 - Package with build-time **`db-kind=postgresql`**, then restore local **H2** for the public/dev tree.
 - Ask before any Digicom DB mutation (routing / tenants / users / `network_id`).
-- Live peer lessons (IPSP server, RC uniqueness, dual-homed SRI, gsmSCF SSN **147**, `networkId=0`) stay in [`lessons.md`](lessons.md) without embedding carrier topology on **nhanth87**.
+- Live peer lessons (IPSP server, RC uniqueness, dual-homed SRI, gsmSCF SSN **147**, live GTT **`networkId=0`**) stay in [`lessons.md`](lessons.md) without embedding carrier topology on **nhanth87**.
+- **Dual SCCP plane (Digicom host):** live L1/L2-BP + AS-BP = SCCP **`networkId=0`**; co-hosted lab **L3-LAB-SIM** / AS-LAB / PC **2** / `:8023` = **`networkId=1`**. Split GTT per networkId (lab GT `251900000200` → PC 2 only on net **1**; live catch-all `*` → PC **1404** only on net **0**). MAP2MAP Case 2 hop uses `ussd.map.live-network-id` (default **0**) so sim MO on net 1 still hops on BP. Keep `*804` / live tenants `network_id=0` — do not flip routing DB for lab.
 
 Localhost stack: `build/ss7-lab.json` (127.0.0.1:8013↔8014). **Do not** point public lab props at a Digicom carrier JSON.
 

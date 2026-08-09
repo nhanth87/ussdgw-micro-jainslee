@@ -11,6 +11,7 @@ import et.restlink.ussdgw.bridge.VirtualSessionBridge;
 import et.restlink.ussdgw.bridge.VirtualSessionStore;
 import et.restlink.ussdgw.cdr.CdrService;
 import et.restlink.ussdgw.config.UssdConfigService;
+import et.restlink.ussdgw.profile.UssdUserProfileStore;
 import et.restlink.ussdgw.routing.ShortCodeRoutingService;
 import et.restlink.ussdgw.tenant.CallbackAuthService;
 import et.restlink.ussdgw.tenant.TenantGuard;
@@ -38,6 +39,7 @@ public class SbbServices {
     @Inject ShortCodeRoutingService routing;
     @Inject VirtualSessionBridge bridge;
     @Inject VirtualSessionStore store;
+    @Inject UssdUserProfileStore userProfiles;
     @Inject AdaptiveTimeout adaptive;
     @Inject CdrService cdr;
     @Inject UssdConfigService config;
@@ -79,6 +81,7 @@ public class SbbServices {
     public ShortCodeRoutingService routing() { return routing; }
     public VirtualSessionBridge bridge() { return bridge; }
     public VirtualSessionStore store() { return store; }
+    public UssdUserProfileStore userProfiles() { return userProfiles; }
     public AdaptiveTimeout adaptive() { return adaptive; }
     public CdrService cdr() { return cdr; }
     public UssdConfigService config() { return config; }

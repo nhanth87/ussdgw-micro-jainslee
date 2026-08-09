@@ -69,9 +69,23 @@ public class UssdSagaCoordinator {
     }
 
     private void compensate(VirtualSession s, String reason, boolean useWaitMessage) {
-        LOG.warn("Saga compensate corr={} state={} reason={} shortCode={}",
+        LOG.warn("Saga compensate corr={} state={} reason={} shortCode={} hopOutstanding={}",
                 s.correlationId(), s.state(), reason,
-                s.shortCode() == null || s.shortCode().isBlank() ? "-" : s.shortCode());
+                s.shortCode() == null || s.shortCode().isBlank() ? "-" : s.shortCode(),
+                s.map2mapHopOutstanding());
+        // MAP2MAP: never hard-end MO while outbound hop is still outstanding (Brook gsm_map
+        // view looks like "returnResultLast without hop response" when Abort is filtered out —
+        // Abort must clear hopOutstanding first via onMap2MapDialogLost).
+        if (s.map2mapHopOutstanding() && s.originationType() == OriginationType.MAP) {
+            LOG.warn("Saga compensate deferred — MAP2MAP hop still outstanding corr={} reason={}",
+                    s.correlationId(), reason);
+            cdr.write(s.correlationId(), CdrPhase.S1_ACTIVE, s.msisdn(), s.shortCode(),
+                    "MAP2MAP_MO_HOLD",
+                    "service=UssdSagaCoordinator|hopOutstanding|reason=" + reason,
+                    s.networkId(), s.tenantId(), s.originationType().name(),
+                    s.gateMs() > 0 ? s.gateMs() : null, observedEwmaMs(s.networkId()));
+            return;
+        }
         if (s.originationType() == OriginationType.MAP && s.dialogAlive()) {
             RaCommandPort port = ss7();
             if (useWaitMessage) {
@@ -114,7 +128,7 @@ public class UssdSagaCoordinator {
         } catch (RuntimeException ignored) {
             // fall through
         }
-        return "Service temporarily unavailable. Please try again.";
+        return "ማው ማውማው ማውማው ማውማው ማው";
     }
 
     private Long observedEwmaMs(int networkId) {

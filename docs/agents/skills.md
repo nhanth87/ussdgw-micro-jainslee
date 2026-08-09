@@ -11,7 +11,7 @@ What to load before packaging, admin UI, or AS plane work. Prefer these over re-
 
 | If you touch… | Read first |
 |---------------|------------|
-| Dist / `package-dist` / `run.sh` / ship layout | **this file § Dist** + [AGENTS.md](../../AGENTS.md) + [lessons.md](lessons.md) |
+| Dist / `package-dist` / Digicom redeploy / `run.sh` | **this file § Dist** (+ Digicom compile + redeploy) · [AGENTS.md](../../AGENTS.md) · [lessons.md](lessons.md) |
 | H2 / PostgreSQL / Flyway | [schema.md](schema.md) |
 | Logging | [logging.md](logging.md) |
 | `app/html/*` admin shell | [AGENTS.md](../../AGENTS.md) — UI files only under `app/html/` |
@@ -56,8 +56,86 @@ Prove before scp: `test -d dist/lib/main && test -f dist/quarkus-run.jar && test
 4. **Ship `dist/` only** — but only **after** `package-dist.sh`. Ops get `lib/` + html + configs + run.sh — not a mystery single jar. **Never commit** built jars/`lib/` into git.
 5. **JDK 25** (bytecode major **69**) for `ussdgw-app.jar`.
 6. **Incomplete dist = stop.** Missing `lib/main` or root jars → fix by re-running package, not by inventing uber-jar or copying `target/` by hand.
+7. **Digicom ship:** build-time `quarkus.datasource.db-kind=postgresql` for `./build/package-dist.sh`, then **restore local `h2`** in `build/application.properties`. Shadow **`ProfileAccessorInvoker`** into `jainslee-api` (script must do this). Rsync **never** touches Digicom `configs/`.
 
 Peer: OTA [`docs/agents/packaging.md`](../../../../ota-service/ota-sim-push/docs/agents/packaging.md) · micro-jainslee [AGENTS § DIST](../../../../jain-slee/jain-slee/AGENTS.md).
+
+### Digicom compile + redeploy (durable — 2026-08-09)
+
+Host shorthand: **`digicom-nb`**, APP_HOME **`/home/app/ota-push-services/ussdgw-micro-jainslee/`**. Do **not** invent Digicom secrets; host `configs/` is operator SoT.
+
+#### Digicom OS/SCTP buffers (5k headroom — not a measured 5k claim)
+
+Stock Digicom had `net.core.rmem_max=wmem_max=212992` → SCTP `rcvbuf`/`sndbuf` 212992 → pcap **a_rwnd ≈ 106496** (~104 KiB). Raise via sysctl drop-in (no SS7 topology overwrite; `Ss7Config.Link` does not yet wire `optionSoRcvbuf`):
+
+| Key | Value (bytes) | Why |
+|-----|---------------|-----|
+| `net.core.rmem_max` / `wmem_max` | **67108864** (64 MiB) | Caps `SO_*`; unlocks larger SCTP windows (OTA-lab class; shared host — not 1 GiB dedicated) |
+| `net.core.rmem_default` / `wmem_default` | **4194304** (4 MiB) | Default for new sockets without explicit `SO_RCVBUF` |
+| `net.sctp.sctp_rmem` / `sctp_wmem` | **4096 4194304 67108864** | min / default / max for SCTP; default 4 MiB ⇒ a_rwnd ≈ 2 MiB after assoc restart |
+
+SoT: [`build/systemd/99-ussdgw-sctp-buffers.conf`](../../build/systemd/99-ussdgw-sctp-buffers.conf). Apply: `sudo ./build/systemd/install-sctp-buffers.sh` (or Digicom `install-on-digicom.sh`, which also installs units) then **`sudo systemctl restart ussdgw.service`** so assocs recreate. Prove once: `sysctl net.core.rmem_max net.sctp.sctp_rmem` and header+rows for ports 2011/2019 in `/proc/net/sctp/assocs` (`rcvbuf`/`sndbuf` columns). **Buffers ≠ 5k measured.**
+
+
+| Step | Do | Prove / never |
+|------|----|---------------|
+| 1. JDK | mise **`zulu-25`** only — never downgrade for compile | `java -version` → 25 |
+| 2. Package for Digicom | Set **`quarkus.datasource.db-kind=postgresql`** in `build/application.properties` → **`./build/package-dist.sh`** → **restore `h2`** for local/dev tree | H2-built jar → Flyway “Driver does not support … postgresql” on Digicom |
+| 3. Dist layout | `ussdgw-app.jar` + `quarkus-run.jar` at APP_HOME **root**; `lib/{boot,main}/` + `quarkus/` + `app/html/` | No jars under `app/`; `quarkus-application.dat` points at **root** app jar |
+| 4. Shadow | `package-dist.sh` overwrites `ProfileAccessorInvoker` into **`jainslee-api`** from core | `javap -c` shows `ProfileFieldStoreLocator`, not stub UOE string |
+| 5. Bytecode | App jar major **69** (Java 25) | `javap -verbose … \| grep major` or equivalent |
+| 6. Rsync | **Only** `ussdgw-app.jar`, `quarkus-run.jar`, `lib/`, `quarkus/`, `app/html/` → Digicom APP_HOME | **Never** overwrite Digicom `configs/` (PG, secrets, SS7 seed/persist) |
+| 7. Restart | `systemctl restart ussdgw.service` (or host equivalent) | systemd **active ≠ Quarkus ready** |
+| 8. Ready gate | Wait ~25s once (or journal bootstrap), then **one-shot** curl `--connect-timeout 3 --max-time 10` to **`:8088`** `/admin/status.json` (`X-USSD-Admin-Key`) | **Not** 60× poll; systemd active ≠ Quarkus ready; unit uses `KillMode=control-group` + `flock --timeout` |
+| 9. Artifact truth | Jar **mtime** vs source; `jar tf ussdgw-app.jar \| grep` / `strings` for new classes (`GATE_ARMED`, `UssdUserProfile`, …); running PID classpath | Green `mvn test` ≠ deployed; source-only greps lie |
+
+#### Copy-paste (worktree root → Digicom)
+
+Paths below match the live host shorthand (`digicom-nb`, APP_HOME as shown). Run from the **ussd-microjainslee** worktree root. Do **not** invent or paste Digicom secrets into chat/docs — read `X-USSD-Admin-Key` from Digicom host `configs/` only.
+
+```bash
+# JDK 25
+export JAVA_HOME=$(ls -d ~/.local/share/mise/installs/java/zulu-25* 2>/dev/null | head -1)
+export PATH="$JAVA_HOME/bin:$PATH"
+java -version   # expect 25
+
+# Digicom build-time db-kind (backup → postgresql → package → restore h2)
+cp -a build/application.properties "build/application.properties.bak-deploy-$(date +%Y%m%d%H%M%S)"
+sed -i 's/^quarkus.datasource.db-kind=h2$/quarkus.datasource.db-kind=postgresql/' build/application.properties
+./build/package-dist.sh
+sed -i 's/^quarkus.datasource.db-kind=postgresql$/quarkus.datasource.db-kind=h2/' build/application.properties
+
+# Rsync jars / lib / quarkus / UI only — never configs/
+APP=digicom-nb:/home/app/ota-push-services/ussdgw-micro-jainslee
+rsync -az dist/ussdgw-app.jar dist/quarkus-run.jar "$APP/"
+rsync -az --delete dist/lib/ "$APP/lib/"
+rsync -az --delete dist/quarkus/ "$APP/quarkus/"
+rsync -az --delete dist/app/html/ "$APP/app/html/"
+
+# Restart (systemd active ≠ Quarkus ready)
+ssh digicom-nb 'sudo systemctl restart ussdgw.service'
+```
+
+**Ready + prove** (after restart). Read `ussd.admin.api-key` from Digicom host `configs/application.properties` (or `USSD_ADMIN_API_KEY` if set there) — **never invent** the value; do not paste live secrets into docs/chat.
+
+```bash
+# After restart: sleep ~25s once (or journal bootstrap), then ONE-SHOT curl — never 60× poll loops
+# export KEY='…' from Digicom configs (ussd.admin.api-key); never commit / never invent
+ssh digicom-nb 'sleep 25'
+ssh digicom-nb "curl -sS --connect-timeout 3 --max-time 10 -o /tmp/ussdgw-status.json -w '%{http_code}\n' -H 'X-USSD-Admin-Key: $KEY' http://127.0.0.1:8088/admin/status.json"
+
+# Flat status keys (not nested): ss7.live, bridge.asyncGateMs, scheduler.gateTicks
+ssh digicom-nb 'python3 -c "import json; d=json.load(open(\"/tmp/ussdgw-status.json\")); print(\"ss7.live\", d.get(\"ss7.live\")); print(\"bridge.asyncGateMs\", d.get(\"bridge.asyncGateMs\")); print(\"scheduler.gateTicks\", d.get(\"scheduler.gateTicks\"))"'
+
+# Artifact contains expected symbols (adapt to the change you shipped)
+ssh digicom-nb 'strings /home/app/ota-push-services/ussdgw-micro-jainslee/ussdgw-app.jar | grep -E "GATE_ARMED|UssdUserProfile" | head'
+```
+
+Prove checklist: **`ss7.live`** from status JSON (not LISTEN / Apply); **`bridge.asyncGateMs`** present; **`scheduler.gateTicks`** climbing when bridge armed; jar **mtime** + symbols (`GATE_ARMED`, new classes); **systemd active ≠ Quarkus ready** — always wait for `:8088` `/admin/status.json` 200 before SS7/NI debug.
+
+**Optional note:** `ussdUser` ProfileFacility (PK=MSISDN) is **JVM-local** until clustering — same in-process family as `ussdTx`, not Digicom JDBC. → [map2map.md](../as-contract/map2map.md) § ussdUser · [lessons.md](lessons.md).
+
+Footguns for this path: [lessons.md](lessons.md) (Digicom package / rsync / ProfileAccessor / systemd-before-HTTP).
 
 ## Admin UX (OTA shell → USSD)
 
@@ -65,6 +143,7 @@ Peer: OTA [`docs/agents/packaging.md`](../../../../ota-service/ota-sim-push/docs
 - Disk templates under `app/html/admin/` + `partials/` + `static/` via `AdminPageRenderer` (`ussd.admin.ui-dir`). Sync to `dist/app/html/admin/` when editing.
 - Copy **shell** from ota-sim-push (Alpine theme, ink/signal amber `#e8a317`, DM Sans / JetBrains Mono) — never invent purple/cream skins.
 - **Plane pages = Routing shell:** header title (**no** `hx-live-badge` / visible HTMX chrome); progressive `form-card` + `hx-post` → `#plane-notice` where editable; Directory / live status below uses **ink-panel** surfaces (never nested pure-black `bg-ink` status holes).
+- **Theme key = `ussd-theme` only** (`ussd-shell.js`). Never invent `ota-theme` / `mw-theme` as the SoT (Monitor Hub may *read* legacy keys as fallback, but must *write* `ussd-theme`). Light remap in `admin.css` must cover **opacity variants** (`bg-ink/40`, `bg-ink-panel/40`, …) — Tailwind emits separate classes; listing `.bg-ink` alone leaves black holes on light (CDR/dashboard). Form inputs inside `form-card` / filter bars = **`bg-ink-panel`** (or CSS token), never nested `bg-ink`. Monitor Hub jar (`jainslee-monitor`) shares the same ink/signal tokens + brand **Digicom-ET USSDGW**; chart canvases stay transparent / panel — no nested `#0c1220` wells.
 - **Save must HTMX-swap the list (OTA parity):** catalog create/update/delete POSTs return **HTML row fragments** for `hx-target="#…-rows"` (`innerHTML`) plus `HX-Trigger` toast (`ussdToast`) and `ussdCatalogChanged` (re-GET `/admin/…/partial` into the same tbody — fleet-approvals pattern). Never empty body, JSON-only, or full shell page on mutate. `HX-Trigger` values must be **ASCII** (no em-dash) — HTTP headers are Latin-1. Do **not** put Alpine `x-data` on the same `<form>` as `hx-post` (wrap a parent `div`). App-user create notices use **OOB** (`#app-user-notice`), never a `<div>` prepended into `<tbody>`. Set `Vary: HX-Request`.
 - **No hub redirect:** `/admin/ss7|hlr|smpp|http|grpc|diameter|sip` serve the plane shell directly. `/admin/*/config` aliases the same panel for POST/HTMX. Monitor Hub (`/telemetry/`) = metrics only.
 - **SS7 / SMPP = JSON only:** no host/port/OPC/systemId field grids. SS7 = `mapEnabled` + `configFile` + `stackJson` textarea (ADMIN/OPS); TENANT = LIVE/DOWN. SMPP = single `smppJson` via `SmppConfigSupport.activeJsonOrLab()` + Save/Apply/Start/Stop.
@@ -77,7 +156,7 @@ Peer: OTA [`docs/agents/packaging.md`](../../../../ota-service/ota-sim-push/docs
 - **Dashboard Planes:** status-first `form-card` rows (`bg-ink-panel`); Open → `/admin/ss7|hlr|smpp|http|grpc|diameter|sip|lab-mo`; secondary Monitor Hub link.
 - **USSD pages only:** routing, bridge, campaigns, CDR, tenants, users, lab-mo, http sync/async/callback, grpc, diameter, sip, hlr, ss7/smpp/http — **no** fleet/CAP/sendota.
 - Always seed `{{NAV_LINKS}}`, `{{NOTICE}}`, banners; never leave raw mustache. → [lessons.md](lessons.md)
-- **CDR ledger** (`/admin/cdr`): Routing-shell page; filter MSISDN + **correlation** + **status** (exact or `*` prefix: `MAP2MAP_*` / `GATED*` / `GATED_AS*`) + limit → HTMX `#cdr-rows` (`/admin/cdr/partial`, auto every 5s). Seed `{{ROWS}}`, `{{MSISDN}}`, `{{CORR}}`, `{{STATUS}}`, `{{STATUS_OPTIONS}}`, `{{LIMIT}}`, `{{ROW_COUNT}}`. Signature = phase **spine** (not `hx-live-badge`). Status chips: gated / map2map families. Expand row for gate/EWMA/detail; classic SCCP/dialog/USSD-string columns are store gaps — show in expand note, do not invent. TENANT = tenant-scoped list only. Catalog: `CdrStatuses` + `Map2MapCdr`.
+- **CDR ledger** (`/admin/cdr`): Routing-shell page; filter MSISDN + **correlation** + **status** (exact or `*` prefix: `MAP2MAP_*` / `GATED*` / `GATED_AS*`) + limit → HTMX `#cdr-rows` (`/admin/cdr/partial`, auto every 5s). Seed `{{ROWS}}`, `{{MSISDN}}`, `{{CORR}}`, `{{STATUS}}`, `{{STATUS_OPTIONS}}`, `{{LIMIT}}`, `{{ROW_COUNT}}`. Signature = phase **spine** (not `hx-live-badge`). Status chips: gated / map2map / **fail** (`TIMEOUT` / `AS_EMPTY_BODY` / `*FAIL*` → `cdr-status--fail` with **dark ink on soft red**). **Expand must survive the 5s poll** — `sessionStorage` + restore after `htmx:afterSwap`. Expand = three `cdr-digest` panels (Gated·HLR·AS / This record / Session timeline) via `CdrSessionDigest`. Perf: timeline query capped (`CDR_TIMELINE_LIMIT=16`) + cached per corr on the page — Digicom ~0.25s for limit=100 with ~170 rows is fine; if ledger grows huge, batch or lazy-load expand. Classic SCCP gaps stay in note. TENANT scoped. Catalog: `CdrStatuses` + `Map2MapCdr`.
 - Keep `htmx.min.js` for AJAX; **remove** all visible `hx-live-badge` / “HTMX” badges.
 
 ## Compress — remember these
@@ -103,7 +182,13 @@ Peer: OTA [`docs/agents/packaging.md`](../../../../ota-service/ota-sim-push/docs
 - **CAS ≠ then rewrite the row:** after a successful `compareAndSetField`, never `get()`+`put()`. `UssdTxProfileMapper.write` republishes all CMP fields from a detached snapshot and silently reverts concurrent single-field writes (resurrecting `dialogAlive` on a dead dialog). Use `VirtualSessionStore.setDialogAlive` / `ProfileFacility.updateField` for caller-owned fields.
 - **Gate tick:** `BridgeGateScheduler.tickGates` is `ConcurrentExecution.SKIP` with per-session `catch (Throwable)`. The due list is deadline-ordered, so one throwing session would otherwise sit first on every tick and **no gate would ever fire again** — every parked MAP dialog hangs to MSC timeout. Gate discovery walks an in-memory deadline index (O(due), not a full deserialize of every `AWAITING_AS` row at 10 Hz); the Profile table stays the source of truth and every index hit is re-validated.
 - **Store reads never throw:** a row removed mid-read invalidates its `ProfileLocalObject` (micro-jainslee C8). `VirtualSessionStore.get` answers `Optional.empty()`; `put` retries once. Nothing may propagate out of a SLEE event handler.
-- **Adaptive EWMA:** keyed by **`networkId`** (never MSISDN — unbounded cardinality), shared pull+push. Samples clamped to `[FLOOR_MS, dialogTimeoutMs]`, decayed back toward the configured gate while idle, dropped when stale, and resettable (`reset` / `resetAll`) after an AS redeploy. Durations use `System.nanoTime()`; wall clock is only for the durable gate deadline and CDR timestamps.
+- **AdaptiveTimeout:** live `GATE_ARMED` budget = configured
+  `ussd.bridge.async-gate-timeout-ms` ceiling (default 25s) for MAP2MAP hop arm, MO AS wait,
+  and NI HTTP park — **never** `clamp(EWMA×1.5, …)`. EWMA keyed by **`networkId`** (+ temporary
+  per-MSISDN pull profile) stays for telemetry / CDR `observed_ewma_ms` / admin
+  `adaptive.ewma` only. Samples clamped to `[FLOOR_MS, dialogTimeoutMs]`, decayed while idle,
+  dropped when stale, resettable after AS redeploy. Durations use `System.nanoTime()`; wall
+  clock is only for the durable gate deadline and CDR timestamps.
 - **Bridge CDR:** `gate_ms` + `observed_ewma_ms` are real `ussd_cdr` columns (Flyway **V5**, registered in `UssdSchemaInitializer.MIGRATIONS`) — not free-text `detail`. Never edit V1–V4 (checksum break).
 - **Logging:** Log4j2 → `ussd.log.dir` / `dist/logs/`; SLEE boundary = `SleeEventTrace` only.
 - **Commits:** nhanth87 / Tran Nhan only — no AI co-author trailers.

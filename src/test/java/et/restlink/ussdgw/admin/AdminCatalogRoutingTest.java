@@ -157,7 +157,9 @@ class AdminCatalogRoutingTest {
         });
         Map<String, String> vars = catalog.routingPageVars(null);
         assertThat(vars.get("{{UPPER_HLR_GT}}")).isEqualTo("251971200201");
-        assertThat(vars.get("{{UPPER_HLR_GT_PLACEHOLDER}}")).isEqualTo("251971200201");
+        assertThat(vars.get("{{UPPER_HLR_GT_PLACEHOLDER}}")).isEqualTo("blank → 251971200201 (HLR Face)");
+        assertThat(vars.get("{{FORM_RULE_TYPE}}")).isEqualTo("HTTP");
+        assertThat(vars.get("{{FORM_HOP_DEST_GT}}")).isEqualTo("");
     }
 
     @Test
@@ -165,7 +167,82 @@ class AdminCatalogRoutingTest {
         Map<String, String> vars = catalog.routingPageVars(null);
         assertThat(vars.get("{{UPPER_HLR_GT}}")).isEqualTo("");
         assertThat(vars.get("{{UPPER_HLR_GT_PLACEHOLDER}}"))
-                .isEqualTo("HLR number (ussd.hlr.upper-gt)");
+                .isEqualTo("blank = HLR Face upper-gt (ussd.hlr.upper-gt)");
+    }
+
+    @Test
+    void saveBlankHopOnUpdatePreservesExistingHopDest() {
+        catalog.routingPost(
+                "action=save&shortCode=%2A804%23&ruleType=RE_ROUTE&asUrl=http%3A%2F%2Fas%2Fold"
+                        + "&enabled=true&redirectUssd=%2A875%23"
+                        + "&hopDestGt=251971200201&hopDestSsn=6",
+                new AdminAuthService.Principal("ADMIN", null));
+        AdminHttpHandler.HttpReply saved = catalog.routingPost(
+                "action=save&shortCode=%2A804%23&ruleType=RE_ROUTE&asUrl=http%3A%2F%2Fas%2Fnew"
+                        + "&enabled=true&redirectUssd=%2A875%23",
+                new AdminAuthService.Principal("ADMIN", null));
+        assertThat(saved.headers().get("HX-Trigger")).contains("saved");
+        ShortCodeRule r = routing.byKey("*804#", null).orElseThrow();
+        assertThat(r.asUrl()).isEqualTo("http://as/new");
+        assertThat(r.hopDestGt()).isEqualTo("251971200201");
+        assertThat(r.hopDestSsn()).isEqualTo(6);
+    }
+
+    @Test
+    void saveHopDestClearWipesFixedHop() {
+        catalog.routingPost(
+                "action=save&shortCode=%2A804%23&ruleType=RE_ROUTE&asUrl=http%3A%2F%2Fas%2Fx"
+                        + "&enabled=true&redirectUssd=%2A875%23"
+                        + "&hopDestGt=251971200201&hopDestSsn=6",
+                new AdminAuthService.Principal("ADMIN", null));
+        catalog.routingPost(
+                "action=save&shortCode=%2A804%23&ruleType=RE_ROUTE&asUrl=http%3A%2F%2Fas%2Fx"
+                        + "&enabled=true&redirectUssd=%2A875%23&hopDestClear=true",
+                new AdminAuthService.Principal("ADMIN", null));
+        ShortCodeRule r = routing.byKey("*804#", null).orElseThrow();
+        assertThat(r.hopDestGt()).isNull();
+        assertThat(r.hopDestSsn()).isNull();
+        assertThat(r.fixedHopArmed()).isFalse();
+    }
+
+    @Test
+    void tenantCannotChangeHopDestOnUpdate() {
+        catalog.routingPost(
+                "action=save&shortCode=%2A804%23&ruleType=RE_ROUTE&asUrl=http%3A%2F%2Fas%2Fx"
+                        + "&enabled=true&redirectUssd=%2A875%23&tenantId=digicom-push"
+                        + "&hopDestGt=251971200201&hopDestSsn=6",
+                new AdminAuthService.Principal("ADMIN", null));
+        catalog.routingPost(
+                "action=save&shortCode=%2A804%23&ruleType=RE_ROUTE&asUrl=http%3A%2F%2Fas%2Fy"
+                        + "&enabled=true&redirectUssd=%2A875%23&tenantId=digicom-push"
+                        + "&hopDestGt=999&hopDestSsn=8",
+                new AdminAuthService.Principal("TENANT", "digicom-push"));
+        ShortCodeRule r = routing.byKey("*804#", null).orElseThrow();
+        assertThat(r.asUrl()).isEqualTo("http://as/y");
+        assertThat(r.hopDestGt()).isEqualTo("251971200201");
+        assertThat(r.hopDestSsn()).isEqualTo(6);
+    }
+
+    @Test
+    void editQuerySeedsHopDestIntoFormVars() {
+        catalog.routingPost(
+                "action=save&shortCode=%2A804%23&ruleType=RE_ROUTE&asUrl=http%3A%2F%2Fas%2Fsp"
+                        + "&enabled=true&redirectUssd=%2A875%23"
+                        + "&hopDestGt=251971200201&hopDestSsn=6",
+                new AdminAuthService.Principal("ADMIN", null));
+        Map<String, String> vars = catalog.routingPageVars(
+                new AdminAuthService.Principal("ADMIN", null),
+                Map.of("edit", "*804#"));
+        assertThat(vars.get("{{FORM_RULE_TYPE}}")).isEqualTo("RE_ROUTE");
+        assertThat(vars.get("{{FORM_HOP_DEST_GT}}")).isEqualTo("251971200201");
+        assertThat(vars.get("{{FORM_HOP_DEST_SSN}}")).isEqualTo("6");
+        assertThat(vars.get("{{FORM_REDIRECT_USSD}}")).isEqualTo("*875#");
+        assertThat(vars.get("{{FORM_EDIT_BANNER}}")).contains("*804#");
+        assertThat(vars.get("{{HOP_CLEAR_FIELD}}")).contains("hopDestClear");
+        String rows = new String(catalog.routingGet(null).body());
+        assertThat(rows).contains("Edit").contains("Del");
+        assertThat(rows).contains("bg-red-600").contains("bg-amber-400");
+        assertThat(rows).contains("flex flex-row flex-nowrap");
     }
 
     @Test
@@ -450,8 +527,13 @@ class AdminCatalogRoutingTest {
         }
 
         @Override
+        public Optional<ShortCodeRule> byKey(String shortCode, String appUsername) {
+            return Optional.ofNullable(map.get(memKey(shortCode, appUsername)));
+        }
+
+        @Override
         public void putAndPersist(ShortCodeRule rule) {
-            map.put(rule.shortCode().toLowerCase(), rule);
+            map.put(memKey(rule.shortCode(), rule.appUsername()), rule);
         }
 
         @Override
@@ -461,16 +543,23 @@ class AdminCatalogRoutingTest {
 
         @Override
         public boolean delete(String shortCode, String appUsername) {
-            return map.remove(shortCode == null ? "" : shortCode.toLowerCase()) != null;
+            return map.remove(memKey(shortCode, appUsername)) != null;
         }
 
         @Override
         public Optional<ShortCodeRule> find(String shortCode) {
             String sc = shortCode == null ? "" : shortCode.trim();
-            ShortCodeRule exact = map.get(sc.toLowerCase());
-            if (exact != null && exact.enabled() && !exact.mark()) {
-                return Optional.of(exact);
+            ShortCodeRule exact = null;
+            for (ShortCodeRule r : map.values()) {
+                if (!r.enabled() || r.mark()) continue;
+                if (sc.equalsIgnoreCase(r.shortCode() == null ? "" : r.shortCode())) {
+                    if (r.appUsername() == null || r.appUsername().isBlank()) {
+                        return Optional.of(r);
+                    }
+                    if (exact == null) exact = r;
+                }
             }
+            if (exact != null) return Optional.of(exact);
             ShortCodeRule best = null;
             int bestLen = -1;
             for (ShortCodeRule r : map.values()) {
@@ -481,9 +570,7 @@ class AdminCatalogRoutingTest {
                     bestLen = prefix.length();
                 }
             }
-            if (best != null) return Optional.of(best);
-            if (exact != null && exact.enabled()) return Optional.of(exact);
-            return Optional.empty();
+            return Optional.ofNullable(best);
         }
 
         @Override
@@ -495,6 +582,12 @@ class AdminCatalogRoutingTest {
         public Collection<ShortCodeRule> listForTenant(String tenantId) {
             if (tenantId == null || tenantId.isBlank()) return list();
             return map.values().stream().filter(r -> tenantId.equals(r.tenantId())).toList();
+        }
+
+        private static String memKey(String shortCode, String appUsername) {
+            String sc = shortCode == null ? "" : shortCode.trim().toLowerCase();
+            String app = appUsername == null || appUsername.isBlank() ? null : appUsername.trim();
+            return app == null ? sc : sc + "\t" + app;
         }
     }
 

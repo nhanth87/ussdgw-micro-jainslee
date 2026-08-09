@@ -67,41 +67,41 @@
           <div>
             <label class="block text-xs uppercase tracking-wider text-ink-mute">bridgeEnabled</label>
             <input name="bridgeEnabled" value="{{BRIDGE_ENABLED}}" placeholder="true|false"
-                   class="mt-1 w-full rounded-md border border-ink-line bg-ink px-3 py-2 font-mono text-sm focus:border-signal focus:outline-none focus:ring-1 focus:ring-signal/40"/>
+                   class="mt-1 w-full rounded-md border border-ink-line bg-ink-panel px-3 py-2 font-mono text-sm focus:border-signal focus:outline-none focus:ring-1 focus:ring-signal/40"/>
           </div>
           <div>
             <label class="block text-xs uppercase tracking-wider text-ink-mute">asyncGateTimeoutMs</label>
             <input name="asyncGateTimeoutMs" value="{{ASYNC_GATE_MS}}" type="number" min="1000"
-                   class="mt-1 w-full rounded-md border border-ink-line bg-ink px-3 py-2 font-mono text-sm focus:border-signal focus:outline-none focus:ring-1 focus:ring-signal/40"/>
+                   class="mt-1 w-full rounded-md border border-ink-line bg-ink-panel px-3 py-2 font-mono text-sm focus:border-signal focus:outline-none focus:ring-1 focus:ring-signal/40"/>
           </div>
           <div>
             <label class="block text-xs uppercase tracking-wider text-ink-mute">dialogTimeoutMs</label>
             <input name="dialogTimeoutMs" value="{{DIALOG_TIMEOUT_MS}}" type="number" min="1000"
-                   class="mt-1 w-full rounded-md border border-ink-line bg-ink px-3 py-2 font-mono text-sm focus:border-signal focus:outline-none focus:ring-1 focus:ring-signal/40"/>
+                   class="mt-1 w-full rounded-md border border-ink-line bg-ink-panel px-3 py-2 font-mono text-sm focus:border-signal focus:outline-none focus:ring-1 focus:ring-signal/40"/>
           </div>
           <div>
             <label class="block text-xs uppercase tracking-wider text-ink-mute">asyncWaitMessage (Unicode OK)</label>
             <textarea name="asyncWaitMessage" rows="3" accept-charset="UTF-8"
-                      class="mt-1 w-full rounded-md border border-ink-line bg-ink px-3 py-2 text-sm focus:border-signal focus:outline-none focus:ring-1 focus:ring-signal/40"
+                      class="mt-1 w-full rounded-md border border-ink-line bg-ink-panel px-3 py-2 text-sm focus:border-signal focus:outline-none focus:ring-1 focus:ring-signal/40"
                       placeholder="Please wait… / እባክዎ ይጠብቁ / Xin chờ…">{{ASYNC_WAIT_MSG}}</textarea>
             <p class="mt-1 text-xs text-ink-mute">UTF-8. Gate-fire wait text on MAP — Vietnamese / Amharic / Persian use UCS-2 via AUTO alphabet.</p>
           </div>
           <div>
             <label class="block text-xs uppercase tracking-wider text-ink-mute">asyncHardFailMessage (Unicode OK)</label>
             <textarea name="asyncHardFailMessage" rows="3" accept-charset="UTF-8"
-                      class="mt-1 w-full rounded-md border border-ink-line bg-ink px-3 py-2 text-sm focus:border-signal focus:outline-none focus:ring-1 focus:ring-signal/40"
+                      class="mt-1 w-full rounded-md border border-ink-line bg-ink-panel px-3 py-2 text-sm focus:border-signal focus:outline-none focus:ring-1 focus:ring-signal/40"
                       placeholder="Unavailable…">{{ASYNC_HARD_FAIL_MSG}}</textarea>
             <p class="mt-1 text-xs text-ink-mute">Gate expires without bridge arm. Same UTF-8 → AUTO → UCS-2 path via MapDialogHelper.replyAndEnd.</p>
           </div>
           <div>
             <label class="block text-xs uppercase tracking-wider text-ink-mute">httpClientBridgeEnabled</label>
             <input name="httpClientBridgeEnabled" value="{{HTTP_BRIDGE}}" placeholder="true|false"
-                   class="mt-1 w-full rounded-md border border-ink-line bg-ink px-3 py-2 font-mono text-sm focus:border-signal focus:outline-none focus:ring-1 focus:ring-signal/40"/>
+                   class="mt-1 w-full rounded-md border border-ink-line bg-ink-panel px-3 py-2 font-mono text-sm focus:border-signal focus:outline-none focus:ring-1 focus:ring-signal/40"/>
           </div>
           <div>
             <label class="block text-xs uppercase tracking-wider text-ink-mute">grpcClientBridgeEnabled</label>
             <input name="grpcClientBridgeEnabled" value="{{GRPC_BRIDGE}}" placeholder="true|false"
-                   class="mt-1 w-full rounded-md border border-ink-line bg-ink px-3 py-2 font-mono text-sm focus:border-signal focus:outline-none focus:ring-1 focus:ring-signal/40"/>
+                   class="mt-1 w-full rounded-md border border-ink-line bg-ink-panel px-3 py-2 font-mono text-sm focus:border-signal focus:outline-none focus:ring-1 focus:ring-signal/40"/>
           </div>
           <div class="flex flex-wrap items-center gap-3 pt-1">
             <button type="submit" class="rounded-md bg-signal px-4 py-2.5 text-sm font-semibold text-ink hover:bg-signal-dim">

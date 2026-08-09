@@ -111,6 +111,8 @@ public class RuntimeConfigStore {
         public static final String MAP_DPC = "ussd.map.dpc";
         public static final String MAP_CHANNEL = "ussd.map.ip-channel-type";
         public static final String MAP_CONFIG_FILE = "ussd.map.config-file";
+        /** Live BP / carrier SCCP networkId (lab sim may use another). */
+        public static final String MAP_LIVE_NETWORK_ID = "ussd.map.live-network-id";
         public static final String SS7_PERSIST = "ussd.ss7.persist-dir";
         public static final String USSD_GT = "ussd.map.ussd-gt";
         public static final String USSD_SSN = "ussd.map.ussd-ssn";

@@ -33,8 +33,8 @@ import java.util.concurrent.atomic.AtomicReference;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * MAP2MAP bridge arm at hop ingress (not only after hop→AS): gate can fire during a slow
- * SRI/*8744# hop; hop completion after gate must not reset {@code S1_RELEASED}.
+ * MAP2MAP bridge arm after hop USSD sent: gate can fire during a slow hop/AS; hop completion
+ * after gate must not reset {@code S1_RELEASED}.
  */
 class Map2MapBridgeArmTest {
 
@@ -197,7 +197,7 @@ class Map2MapBridgeArmTest {
         assertThat(pending.ttlMs()).isEqualTo(60_000L);
     }
 
-    /** Same contract as MapUssdParentSbb map2map branch: arm before hop is queued. */
+    /** Same contract as armGateAfterHopSent: AdaptiveTimeout armed while hop is in flight. */
     private VirtualSession ingressArmedSession(String corr, String dialogId) {
         VirtualSession session = new VirtualSession(
                 "vs-" + corr, corr, "req-" + corr, "251911000001", 0, dialogId, "*804#");

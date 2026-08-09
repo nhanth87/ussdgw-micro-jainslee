@@ -118,6 +118,7 @@ public final class MapDialogHelper {
     /**
      * NI UnstructuredSS-Request/Notify toward SRI {@code networkNodeNumber} (MSC).
      * {@code imsi} is MAP destReference (land_mobile); {@code notifyOnly} selects Notify vs Request.
+     * Case 2 MAP2MAP hop must use {@link #map2mapProcessHop} (opcode 59), not this path.
      */
     public static void niPush(RaCommandPort ss7, String correlationId,
                               String mscGt, String localGt, String text, int networkId,
@@ -132,6 +133,25 @@ public final class MapDialogHelper {
         int dcs = SmsTextCodec.chooseCbsDataCoding(text, alphabet);
         ss7.sendCommand(new Ss7Command.MapUnstructuredSsRequest(
                 correlationId, msc, local, text, networkId, notifyOnly, dcs, imsi));
+    }
+
+    /**
+     * Case 2 MAP2MAP hop (Ethio Brook wire): {@code processUnstructuredSS-Request} (opcode 59)
+     * toward hop dest GT/SSN; Calling SSN typically 6; MAP destReference + component = MSISDN.
+     */
+    public static void map2mapProcessHop(RaCommandPort ss7, String correlationId,
+                                         String hopGt, String localGt, String text, int networkId,
+                                         UssdAlphabet alphabet, String msisdn,
+                                         int hopSsn, int localSsn) {
+        if (ss7 == null) {
+            LOG.warn("map2mapProcessHop: no ra-jss7");
+            return;
+        }
+        Ss7Address hop = Ss7Address.of(hopGt == null || hopGt.isBlank() ? "0" : hopGt, hopSsn);
+        Ss7Address local = Ss7Address.of(localGt == null || localGt.isBlank() ? "100" : localGt, localSsn);
+        int dcs = SmsTextCodec.chooseCbsDataCoding(text, alphabet == null ? UssdAlphabet.AUTO : alphabet);
+        ss7.sendCommand(new Ss7Command.MapUnstructuredSsRequest(
+                correlationId, hop, local, text, networkId, false, dcs, null, msisdn, true));
     }
 
     /** Resolve local GT/SSN from config for NI/SRI. */

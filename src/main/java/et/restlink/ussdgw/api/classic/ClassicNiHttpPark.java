@@ -160,6 +160,7 @@ public class ClassicNiHttpPark {
     /**
      * Schedule AdaptiveTimeout gate; on fire, if still parked, reply ABORT dialog + Set-Cookie
      * and unpark. Stamps {@code gate_ms}/{@code observed_ewma_ms} onto CDR (GATED / GATE_EXPIRED).
+     * Budget = configured async-gate ceiling (not EWMA×1.5).
      */
     public void scheduleAdaptiveGate(ParkRecord rec) {
         if (rec == null) {
@@ -172,8 +173,8 @@ public class ClassicNiHttpPark {
         rec.appliedGateMs = gateMs;
         stampSessionGate(rec, gateMs);
         scheduleGate(rec, gateMs);
-        cdrWrite(rec, CdrPhase.S1_ACTIVE, "GATED",
-                "service=ClassicNiHttpPark|AdaptiveTimeout");
+        cdrWrite(rec, CdrPhase.S1_ACTIVE, et.restlink.ussdgw.cdr.CdrStatuses.GATE_ARMED,
+                "service=ClassicNiHttpPark|AdaptiveTimeout|gateBudget=ceiling");
     }
 
     public void scheduleGate(ParkRecord rec, long gateMs) {

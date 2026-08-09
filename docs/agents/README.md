@@ -6,8 +6,9 @@ Pattern peer: OTA [`docs/agents/`](../../../../ota-service/ota-sim-push/docs/age
 
 | Topic | Notes |
 |-------|--------|
-| Skills (compress) | [skills.md](skills.md) — dist fast-jar / admin OTA-shell / HLR / Diameter+SIP |
-| Lessons / footguns | [lessons.md](lessons.md) — do not repeat (OTA + USSD) |
+| Skills (compress) | [skills.md](skills.md) — dist fast-jar / Digicom redeploy / admin OTA-shell / HLR / Diameter+SIP |
+| Lessons / footguns | [lessons.md](lessons.md) — do not repeat (OTA + USSD); Digicom package/rsync/ready-gate |
+| Digicom compile + redeploy | [skills.md](skills.md) § Digicom compile + redeploy — **copy-paste** JDK 25 → PG package→H2 restore → rsync jars/`lib`/`quarkus`/`app/html` → restart → wait `:8088` (never `configs/`) |
 | Logging | [logging.md](logging.md) — Log4j2 ONLY |
 | Admin UX | `app/html/admin/` + `AdminPageRenderer` (shell from ota-sim-push; USSD pages only) |
 | SS7 lab / HLR face / Digicom↔Balance Plus | [ss7-lab-pair.md](ss7-lab-pair.md) (live RC **12**, SCTP/IPSP server) |

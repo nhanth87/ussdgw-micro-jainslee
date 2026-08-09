@@ -244,7 +244,22 @@ public final class ClassicDialogXmlCodec {
         openDialog(sb, req.correlationId(), req.networkId(), emptyHandshake,
                 req.sessionId(), req.virtualBridgeId(), req.adaptiveTimeoutMs(),
                 req.asMode(), null, req.jsessionId(), req.gateReason(), req.observedEwmaMs(),
-                req.shortCode(), req.originatedUssd(), req.codeKind());
+                req.shortCode(), req.originatedUssd(), req.codeKind(),
+                hlrResultFromUssd(req.ussdString()));
+    }
+
+    /** RE_ROUTE → dialog {@code hlrResult} + {@code string=hlr pending|reject|none}. */
+    private static String hlrResultFromUssd(String ussd) {
+        if ("hlr pending".equals(ussd)) {
+            return "pending";
+        }
+        if ("hlr reject".equals(ussd)) {
+            return "reject";
+        }
+        if ("hlr none".equals(ussd)) {
+            return "none";
+        }
+        return null;
     }
 
     private static void openDialog(StringBuilder sb, String localId, int networkId,
@@ -252,7 +267,7 @@ public final class ClassicDialogXmlCodec {
                                    String virtualBridgeId, Long adaptiveTimeoutMs,
                                    String asMode, Boolean async) {
         openDialog(sb, localId, networkId, emptyHandshake, sessionId, virtualBridgeId,
-                adaptiveTimeoutMs, asMode, async, null, null, null, null, null, null);
+                adaptiveTimeoutMs, asMode, async, null, null, null, null, null, null, null);
     }
 
     private static void openDialog(StringBuilder sb, String localId, int networkId,
@@ -262,7 +277,7 @@ public final class ClassicDialogXmlCodec {
                                    String jsessionId, String gateReason, Long observedEwmaMs) {
         openDialog(sb, localId, networkId, emptyHandshake, sessionId, virtualBridgeId,
                 adaptiveTimeoutMs, asMode, async, jsessionId, gateReason, observedEwmaMs,
-                null, null, null);
+                null, null, null, null);
     }
 
     private static void openDialog(StringBuilder sb, String localId, int networkId,
@@ -271,6 +286,18 @@ public final class ClassicDialogXmlCodec {
                                    String asMode, Boolean async,
                                    String jsessionId, String gateReason, Long observedEwmaMs,
                                    String shortCode, String originatedUssd, String codeKind) {
+        openDialog(sb, localId, networkId, emptyHandshake, sessionId, virtualBridgeId,
+                adaptiveTimeoutMs, asMode, async, jsessionId, gateReason, observedEwmaMs,
+                shortCode, originatedUssd, codeKind, null);
+    }
+
+    private static void openDialog(StringBuilder sb, String localId, int networkId,
+                                   boolean emptyHandshake, String sessionId,
+                                   String virtualBridgeId, Long adaptiveTimeoutMs,
+                                   String asMode, Boolean async,
+                                   String jsessionId, String gateReason, Long observedEwmaMs,
+                                   String shortCode, String originatedUssd, String codeKind,
+                                   String hlrResult) {
         sb.append("<dialog appCntx=\"").append(APP_CTX).append('"');
         appendIdentityAttrs(sb, localId, sessionId, virtualBridgeId, adaptiveTimeoutMs, asMode,
                 jsessionId, gateReason, observedEwmaMs);
@@ -282,6 +309,9 @@ public final class ClassicDialogXmlCodec {
         }
         if (notBlank(codeKind)) {
             sb.append(" codeKind=\"").append(xmlAttr(codeKind)).append('"');
+        }
+        if (notBlank(hlrResult)) {
+            sb.append(" hlrResult=\"").append(xmlAttr(hlrResult)).append('"');
         }
         if (networkId >= 0) {
             sb.append(" networkId=\"").append(networkId).append('"');

@@ -38,6 +38,7 @@ import org.restcomm.protocols.ss7.map.api.service.sms.LocationInfoWithLMSI;
 import org.restcomm.protocols.ss7.map.api.service.sms.SendRoutingInfoForSMRequest;
 import org.restcomm.protocols.ss7.map.api.service.sms.SendRoutingInfoForSMResponse;
 import org.restcomm.protocols.ss7.map.api.service.supplementary.ProcessUnstructuredSSRequest;
+import org.restcomm.protocols.ss7.map.api.service.supplementary.ProcessUnstructuredSSResponse;
 import org.restcomm.protocols.ss7.map.api.service.supplementary.UnstructuredSSNotifyResponse;
 import org.restcomm.protocols.ss7.map.api.service.supplementary.UnstructuredSSResponse;
 
@@ -151,7 +152,7 @@ public final class MapUssdParentSbb implements Sbb, SleeEventHandler {
             String msg = svc().config().asyncHardFailMessage();
             if (msg != null && !msg.isBlank()) return msg;
         } catch (Throwable ignored) { }
-        return "Service temporarily unavailable. Please try again.";
+        return "ማው ማውማው ማውማው ማውማው ማው";
     }
 
     private void markDialogDead(String dialogId) {
@@ -174,7 +175,7 @@ public final class MapUssdParentSbb implements Sbb, SleeEventHandler {
                 // Outbound hop dialog key = m2m-{corr}; inbound MO uses session.dialogId.
                 var m2m = svc().pendingMap2Map().take(d.dialogId());
                 if (m2m.isPresent()) {
-                    return onMap2MapDialogLost(m2m.get().req(), d.kind().name());
+                    return onMap2MapDialogLost(m2m.get().req(), d.kind().name(), d.detail());
                 }
                 Optional<VirtualSession> inbound = svc().store().byDialogId(d.dialogId());
                 if (inbound.isPresent()) {
@@ -204,6 +205,20 @@ public final class MapUssdParentSbb implements Sbb, SleeEventHandler {
         }
     }
 
+    private void clearMap2mapHopOutstanding(String correlationId) {
+        if (correlationId == null || correlationId.isBlank()) {
+            return;
+        }
+        try {
+            svc().store().get(correlationId).ifPresent(s -> {
+                if (s.map2mapHopOutstanding()) {
+                    s.setMap2mapHopOutstanding(false);
+                    svc().store().put(s);
+                }
+            });
+        } catch (Throwable ignored) { }
+    }
+
     /** UE already got async-wait / late-reconcile path — inbound TC-END is not a network abort. */
     private static boolean isBridgedStayOnCall(VirtualSession s) {
         if (s == null || s.state() == null) {
@@ -221,12 +236,23 @@ public final class MapUssdParentSbb implements Sbb, SleeEventHandler {
                 && svc.message() instanceof ProcessUnstructuredSSRequest req) {
             return onProcessUnstructured(svc.dialogId(), req);
         }
+        // Case 2 hop RESULT: Ethio uses processUnstructuredSS-Response (op 59 pair);
+        // keep unstructuredSSRequest_Response for legacy NI-style hops.
+        if (type == MAPMessageType.processUnstructuredSSRequest_Response
+                && svc.message() instanceof ProcessUnstructuredSSResponse procRsp) {
+            var m2m = svc().pendingMap2Map().takeIfPhase(svc.dialogId(),
+                    et.restlink.ussdgw.service.PendingMap2MapRegistry.Phase.AWAITING_USSD);
+            if (m2m.isPresent()) {
+                return onMap2MapHopResponse(m2m.get().req(), ussdText(procRsp));
+            }
+            return "ignored processUnstructuredSS-Response no-pending";
+        }
         if (type == MAPMessageType.unstructuredSSRequest_Response
                 && svc.message() instanceof UnstructuredSSResponse resp) {
             var m2m = svc().pendingMap2Map().takeIfPhase(svc.dialogId(),
                     et.restlink.ussdgw.service.PendingMap2MapRegistry.Phase.AWAITING_USSD);
             if (m2m.isPresent()) {
-                return onMap2MapHopResponse(m2m.get().req(), resp);
+                return onMap2MapHopResponse(m2m.get().req(), ussdText(resp));
             }
             return onUserContinue(svc.dialogId(), resp);
         }
@@ -294,9 +320,20 @@ public final class MapUssdParentSbb implements Sbb, SleeEventHandler {
         }
         String corr = UUID.randomUUID().toString();
         String reqId = UUID.randomUUID().toString();
-        int networkId = r.networkId();
-        if (admit.tenant() != null && networkId == 0) {
-            networkId = admit.tenant().networkId;
+        // Prefer SCCP/MAP dialog networkId (Digicom lab sim plane=1, live BP=0).
+        // Short-code / tenant network_id stays the live-routing key and must not
+        // overwrite a non-zero dialog plane — else lab MO replies GTT on net 0.
+        int networkId = 0;
+        try {
+            if (req.getMAPDialog() != null) {
+                networkId = req.getMAPDialog().getNetworkId();
+            }
+        } catch (Throwable ignored) { }
+        if (networkId == 0) {
+            networkId = r.networkId();
+            if (admit.tenant() != null && networkId == 0) {
+                networkId = admit.tenant().networkId;
+            }
         }
         VirtualSession session = new VirtualSession(
                 UUID.randomUUID().toString(), corr, reqId, msisdn, networkId, dialogId, shortCode);
@@ -307,10 +344,11 @@ public final class MapUssdParentSbb implements Sbb, SleeEventHandler {
         session.setLocalGt(MapDialogHelper.localGt(svc().config()));
 
         if (r.map2mapArmed()) {
-            // Stay-on-call ≡ AdaptiveTimeout / Virtual bridge at hop ingress so a slow
-            // upper-HLR hop / AS can fire async-wait + gated XML before Map2MapCompletion.
+            // RE_ROUTE order: hop to upper HLR first; arm AdaptiveTimeout only after hop
+            // USSD is sent (countdown for HLR+AS). AS pull runs on hop result — no early
+            // "hlr pending". Gate fires (BRIDGED) only if still waiting when budget elapses.
             session.setAdaptiveBridgeArm(true);
-            svc().bridge().startAwaitingAs(session);
+            svc().store().put(session);
             try {
                 svc().map2MapTelemetry().armed();
             } catch (Throwable ignored) { }
@@ -321,13 +359,9 @@ public final class MapUssdParentSbb implements Sbb, SleeEventHandler {
                     session.virtualSessionId(), reqId, r.mark(), r.hlrMode(),
                     r.hopDestGt(), r.hopDestSsn());
             try {
-                // startAwaitingAs already stamps GATED + gate_ms; MAP2MAP_ARMED is the
-                // re-route-specific ingress row (redirect / hop dest / virtualBridgeId).
-                VirtualSession armed = svc().store().get(corr).orElse(session);
                 svc().cdr().write(corr, CdrPhase.S1_ACTIVE, msisdn, shortCode,
-                        Map2MapCdr.ARMED, Map2MapCdr.detailArmed(m2m, armed),
-                        networkId, r.tenantId(), "MAP",
-                        Map2MapCdr.gateMs(armed), null);
+                        Map2MapCdr.ARMED, Map2MapCdr.detailArmed(m2m, session),
+                        networkId, r.tenantId(), "MAP", null, null);
             } catch (Throwable ignored) { }
             svc().container().routeEvent(m2m,
                     svc().container().createActivityContext("map2map-" + corr));
@@ -349,17 +383,15 @@ public final class MapUssdParentSbb implements Sbb, SleeEventHandler {
     }
 
     /**
-     * Outbound MAP2MAP UnstructuredSS-Response — hop result <strong>must</strong> sync-pull
-     * AS via {@code AsPullRouter} (HTTP|gRPC|SIP per rule) before UE final reply.
-     * Never skip AS after a completed hop.
+     * Outbound MAP2MAP hop result (processUnstructuredSS-Response or UnstructuredSS-Response)
+     * — must sync-pull AS via {@code AsPullRouter} before UE final reply.
      */
-    private String onMap2MapHopResponse(Map2MapRequestEvent req, UnstructuredSSResponse resp) {
-        String hop;
-        try {
-            hop = resp.getUSSDString() == null ? "" : resp.getUSSDString().getString(null);
-        } catch (Exception e) {
+    private String onMap2MapHopResponse(Map2MapRequestEvent req, String hop) {
+        if (hop == null) {
             hop = "";
         }
+        // Hop USSD Response = terminal for outbound dialog; clear MO hold before AS.
+        clearMap2mapHopOutstanding(req.correlationId());
         // Close outbound dialog (prearranged) — inbound MO dialog stays open for AS reply.
         try {
             MapDialogHelper.niClose(ss7, req.outboundCorr(), true);
@@ -370,18 +402,45 @@ public final class MapUssdParentSbb implements Sbb, SleeEventHandler {
         return routed;
     }
 
-    /** @return slee OUT detail including AS route result */
-    private String onMap2MapDialogLost(Map2MapRequestEvent req, String kind) {
+    private static String ussdText(ProcessUnstructuredSSResponse resp) {
+        try {
+            return resp == null || resp.getUSSDString() == null
+                    ? "" : resp.getUSSDString().getString(null);
+        } catch (Exception e) {
+            return "";
+        }
+    }
+
+    private static String ussdText(UnstructuredSSResponse resp) {
+        try {
+            return resp == null || resp.getUSSDString() == null
+                    ? "" : resp.getUSSDString().getString(null);
+        } catch (Exception e) {
+            return "";
+        }
+    }
+
+    /** @return slee OUT detail including AS route result (RE_ROUTE hop lost → hlr reject/none AS). */
+    private String onMap2MapDialogLost(Map2MapRequestEvent req, String kind, String refuseDetail) {
+        // Hop Abort/Reject/Timeout IS the hop response (TCAP, often invisible under gsm_map
+        // filter). Clear MO hold before AS — never replyAndEnd MO while hop still outstanding.
+        clearMap2mapHopOutstanding(req.correlationId());
         // Gate may already have released the UE with async-wait — never double replyAndEnd.
         var session = svc().store().get(req.correlationId()).orElse(null);
         boolean alreadyBridged = session != null && (!session.dialogAlive()
                 || isBridgedStayOnCall(session)
                 || session.state().terminal());
+        String outcome = Map2MapCdr.hopOutcomeForDialogLost(kind);
+        String status = Map2MapCdr.statusForDialogLost(kind, alreadyBridged);
         try {
             svc().cdr().write(req.correlationId(),
                     et.restlink.ussdgw.cdr.CdrPhase.FAILED, req.msisdn(), req.shortCode(),
-                    alreadyBridged ? Map2MapCdr.TIMEOUT_AFTER_BRIDGE : Map2MapCdr.TIMEOUT,
+                    status,
                     Map2MapCdr.detail(req, "kind=" + kind,
+                            "hopOutcome=" + outcome,
+                            refuseDetail == null || refuseDetail.isBlank()
+                                    ? null : ("refuseReason=" + refuseDetail.trim()),
+                            "gateRole=budget",
                             alreadyBridged ? "phase=after-bridge" : "phase=hop"),
                     req.networkId(), req.tenantId(), "MAP",
                     Map2MapCdr.gateMs(session), null);
@@ -393,11 +452,10 @@ public final class MapUssdParentSbb implements Sbb, SleeEventHandler {
                 svc().map2MapTelemetry().hopTimeout();
             }
         } catch (Throwable ignored) { }
-        // After 2 USSD hops (MO + upper-HLR), result MUST still AsPullRouter (HTTP|gRPC|SIP)
-        // even when hop REJECT/ABORT/TIMEOUT (empty hop → originated dial as ussdString).
+        // RE_ROUTE: still AsPullRouter with string=hlr reject|hlr none (no second GATED).
         String routed;
         try {
-            routed = svc().map2MapCompletion().onMap2MapResponse(req, "");
+            routed = svc().map2MapCompletion().onMap2MapResponse(req, "", outcome);
         } catch (Throwable t) {
             routed = "map2map-as-ex=" + t.getClass().getSimpleName();
         }
@@ -581,21 +639,28 @@ public final class MapUssdParentSbb implements Sbb, SleeEventHandler {
         String ussdCode = ShortCodeRule.map2mapUssdString(req.redirectUssd());
         var cfg = svc.config();
         String localGt = MapDialogHelper.localGt(cfg);
+        // Live GTT plane — never inherit lab MO networkId (Digicom lab=1, BP=0).
+        int hopNetworkId = map2mapHopNetworkId(cfg, req);
         MapDialogHelper.niPush(ss7, req.outboundCorr(), r.mscGt(), localGt, ussdCode,
-                req.networkId(), et.restlink.ussdgw.api.UssdAlphabet.AUTO, false, r.imsi(),
+                hopNetworkId, et.restlink.ussdgw.api.UssdAlphabet.AUTO, false, r.imsi(),
                 MapDialogHelper.mscSsn(cfg), MapDialogHelper.localSsn(cfg));
+        armGateAfterHopSent(svc, req);
         try {
+            Long gate = Map2MapCdr.gateMs(svc.store().get(req.correlationId()).orElse(null));
             svc.cdr().write(req.correlationId(), CdrPhase.S1_ACTIVE, req.msisdn(), req.shortCode(),
                     Map2MapCdr.USSD_SENT,
-                    Map2MapCdr.detail(req, "msc=" + r.mscGt(), "code=" + ussdCode, "path=sri-or-fake"),
-                    req.networkId(), req.tenantId(), "MAP", null, null);
+                    Map2MapCdr.detail(req, "msc=" + r.mscGt(), "code=" + ussdCode, "path=sri-or-fake",
+                            "hopNet=" + hopNetworkId),
+                    req.networkId(), req.tenantId(), "MAP", gate, null);
         } catch (Throwable ignored) { }
-        return "map2map-ussd-sent msc=" + r.mscGt() + " code=" + ussdCode;
+        return "map2map-ussd-sent msc=" + r.mscGt() + " code=" + ussdCode
+                + " hopNet=" + hopNetworkId;
     }
 
     /**
-     * Fixed hop dest (SP peer): UnstructuredSS-Request toward configured GT/SSN with redirect
-     * USSD string — no IMSI destRef. Does not use MSC SSN; default peer SSN is 6.
+     * Fixed hop dest (SP peer): processUnstructuredSS-Request (op 59) toward configured GT/SSN
+     * with redirect USSD string — Ethio Brook shape (MSISDN destRef + component; Calling SSN 6).
+     * Does not use MSC SSN; default peer SSN is 6.
      */
     static String applyMap2MapFixedHop(RaCommandPort ss7, SbbServices svc, Map2MapRequestEvent req,
                                        String destGt, int destSsn) {
@@ -612,16 +677,92 @@ public final class MapUssdParentSbb implements Sbb, SleeEventHandler {
         String ussdCode = ShortCodeRule.map2mapUssdString(req.redirectUssd());
         var cfg = svc.config();
         String localGt = MapDialogHelper.localGt(cfg);
-        MapDialogHelper.niPush(ss7, req.outboundCorr(), destGt, localGt, ussdCode,
-                req.networkId(), et.restlink.ussdgw.api.UssdAlphabet.AUTO, false, null,
-                ssn, MapDialogHelper.localSsn(cfg));
+        // Brook: Calling SSN 6 (HLR), not ussd/MSC SSN 8. Fail-closed default 6.
+        int localSsn = MapDialogHelper.hlrSsn(cfg);
+        if (localSsn < 1 || localSsn > 255) {
+            localSsn = 6;
+        }
+        // Case 2 hop toward Ethio / SP peer always on live SCCP plane (networkId 0 on Digicom).
+        // Lab sim MO arrives on networkId 1 — inheriting that would GTT-miss on net1.
+        int hopNetworkId = map2mapHopNetworkId(cfg, req);
+        MapDialogHelper.map2mapProcessHop(ss7, req.outboundCorr(), destGt, localGt, ussdCode,
+                hopNetworkId, et.restlink.ussdgw.api.UssdAlphabet.AUTO, req.msisdn(),
+                ssn, localSsn);
+        armGateAfterHopSent(svc, req);
         try {
+            Long gate = Map2MapCdr.gateMs(svc.store().get(req.correlationId()).orElse(null));
             svc.cdr().write(req.correlationId(), CdrPhase.S1_ACTIVE, req.msisdn(), req.shortCode(),
                     Map2MapCdr.USSD_SENT,
-                    Map2MapCdr.detail(req, "fixedGt=" + destGt, "ssn=" + ssn, "code=" + ussdCode),
-                    req.networkId(), req.tenantId(), "MAP", null, null);
+                    Map2MapCdr.detail(req, "fixedGt=" + destGt, "ssn=" + ssn, "code=" + ussdCode,
+                            "op=processUnstructuredSS-Request", "localSsn=" + localSsn,
+                            "hopNet=" + hopNetworkId, "moNet=" + req.networkId()),
+                    req.networkId(), req.tenantId(), "MAP", gate, null);
         } catch (Throwable ignored) { }
-        return "map2map-ussd-sent gt=" + destGt + " ssn=" + ssn + " code=" + ussdCode;
+        return "map2map-ussd-sent gt=" + destGt + " ssn=" + ssn + " code=" + ussdCode
+                + " hopNet=" + hopNetworkId;
+    }
+
+    /**
+     * Outbound MAP2MAP hop SCCP networkId = configured live plane, not MO dialog networkId.
+     * Session/CDR keep MO {@code req.networkId()} (lab=1 / live=0).
+     */
+    static int map2mapHopNetworkId(et.restlink.ussdgw.config.UssdConfigService cfg,
+                                   Map2MapRequestEvent req) {
+        if (cfg != null) {
+            return cfg.liveNetworkId();
+        }
+        return req == null ? 0 : req.networkId();
+    }
+
+    /**
+     * RE_ROUTE: start the AdaptiveTimeout countdown only after the outbound hop invoke is
+     * on the wire — UE stays on the open MO dialog until hop+AS finish, or until the budget
+     * elapses ({@code BRIDGED} / async-wait). Idempotent if already {@code AWAITING_AS}.
+     */
+    static void armGateAfterHopSent(SbbServices svc, Map2MapRequestEvent req) {
+        if (svc == null || req == null) {
+            return;
+        }
+        try {
+            VirtualSession session = svc.store().get(req.correlationId()).orElse(null);
+            if (session == null) {
+                return;
+            }
+            // Always mark hop outstanding when USSD is on the wire — MO must not end until
+            // hop Response/Abort/Reject/Timeout clears this flag.
+            session.setAdaptiveBridgeArm(true);
+            session.setMap2mapHopOutstanding(true);
+            if (session.state() == VirtualSessionState.AWAITING_AS && session.gateDeadlineMs() > 0) {
+                svc.store().put(session);
+                recordUserMap2MapPending(svc, req, session);
+                return;
+            }
+            svc.store().put(session);
+            svc.bridge().startAwaitingAs(session, "hop");
+            recordUserMap2MapPending(svc, req, session);
+        } catch (Throwable t) {
+            SleeEventTrace.outSbb("MapUssdParentSbb", null,
+                    "map2map-arm-gate-fail " + t.getClass().getSimpleName());
+        }
+    }
+
+    /** Stamp durable ussdUser with hop-armed (pending) MAP2MAP TX for this MSISDN. */
+    private static void recordUserMap2MapPending(SbbServices svc, Map2MapRequestEvent req,
+                                                 VirtualSession session) {
+        try {
+            if (svc.userProfiles() == null) {
+                return;
+            }
+            Long gate = Map2MapCdr.gateMs(session);
+            Long ewma = null;
+            if (svc.adaptive() != null) {
+                double v = svc.adaptive().observedLatencyMs(req.networkId(), req.msisdn());
+                if (v > 0d) {
+                    ewma = Math.round(v);
+                }
+            }
+            svc.userProfiles().recordMap2Map(req, Map2MapCdr.OUTCOME_PENDING, gate, ewma);
+        } catch (Throwable ignored) { }
     }
 
     private void failMap2MapAfterSri(Map2MapRequestEvent req, String reason) {

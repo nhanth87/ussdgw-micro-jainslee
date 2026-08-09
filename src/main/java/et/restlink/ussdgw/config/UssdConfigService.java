@@ -23,14 +23,15 @@ public class UssdConfigService {
     Optional<String> publicBaseUrlProp;
     @ConfigProperty(name = "ussd.bridge.enabled", defaultValue = "true")
     boolean bridgeEnabledProp;
-    @ConfigProperty(name = "ussd.bridge.async-gate-timeout-ms", defaultValue = "7000")
+    /** Gate ceiling under MAP dialog (~30s); default 25s so hop+AS can finish before async-wait. */
+    @ConfigProperty(name = "ussd.bridge.async-gate-timeout-ms", defaultValue = "25000")
     long asyncGateTimeoutMsProp;
     @ConfigProperty(name = "ussd.dialog-timeout-ms", defaultValue = "60000")
     long dialogTimeoutMsProp;
     @ConfigProperty(name = "ussd.bridge.async-wait-message", defaultValue = "Please wait...")
     String asyncWaitMessageProp;
     @ConfigProperty(name = "ussd.bridge.async-hard-fail-message",
-            defaultValue = "Service temporarily unavailable. Please try again.")
+            defaultValue = "ማው ማውማው ማውማው ማውማው ማው")
     String asyncHardFailMessageProp;
     @ConfigProperty(name = "ussd.bridge.http-client-enabled", defaultValue = "true")
     boolean httpClientBridgeEnabledProp;
@@ -82,6 +83,13 @@ public class UssdConfigService {
 
     @ConfigProperty(name = "ussd.map.enabled", defaultValue = "false")
     boolean mapEnabledProp;
+    /**
+     * SCCP {@code networkId} for <strong>live</strong> carrier links (Digicom BP = 0).
+     * Lab sim on a co-hosted stack uses a different id (typically 1). MAP2MAP Case 2 hop /
+     * NI toward Ethio must use this plane even when MO arrived on the lab networkId.
+     */
+    @ConfigProperty(name = "ussd.map.live-network-id", defaultValue = "0")
+    int liveNetworkIdProp = 0;
 
     @ConfigProperty(name = "ussd.grpc.client.enabled", defaultValue = "true")
     boolean grpcClientEnabledProp;
@@ -258,6 +266,14 @@ public class UssdConfigService {
     /** MAP plane enabled (same key as SS7 apply {@code ussd.map.enabled}). */
     public boolean mapEnabled() {
         return bool(RuntimeConfigStore.Keys.MAP_ENABLED, mapEnabledProp);
+    }
+
+    /**
+     * Live-carrier SCCP networkId (default {@code 0}). Digicom dual-stack: BP = 0, lab sim = 1.
+     * Override via {@code ussd.map.live-network-id} / runtime KV.
+     */
+    public int liveNetworkId() {
+        return integer(RuntimeConfigStore.Keys.MAP_LIVE_NETWORK_ID, liveNetworkIdProp);
     }
 
     public boolean grpcClientEnabled() {

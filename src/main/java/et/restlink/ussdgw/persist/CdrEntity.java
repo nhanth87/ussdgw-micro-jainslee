@@ -55,6 +55,21 @@ public class CdrEntity {
     @Column(name = "observed_ewma_ms")
     public Long observedEwmaMs;
 
+    /**
+     * MAP2MAP hop outcome mirror of detail {@code hopOutcome=} —
+     * {@code reject|abort|timeout|text|empty|close}.
+     */
+    @Column(name = "hop_outcome", length = 32)
+    public String hopOutcome;
+
+    /** MAP refuse / dialog reject reason when known (from ra-jss7 Dialog detail). */
+    @Column(name = "refuse_reason", length = 128)
+    public String refuseReason;
+
+    /** USSD string posted (or to be posted) to AS for this completion leg. */
+    @Column(name = "as_ussd", length = 256)
+    public String asUssd;
+
     @Column(name = "csv_line", nullable = false, length = 4000)
     public String csvLine;
 }

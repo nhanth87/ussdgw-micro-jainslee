@@ -73,6 +73,7 @@ public class UssdGatewayBootstrap {
         }
         sessionStore.ensureTable();
         appTelemetry.install(container);
+        // Monitor Hub charts need TelemetryPort before wireRaAdminHub().
         linkStatus.clearSs7();
         linkStatus.clearHttp();
         linkStatus.clearGrpc();
@@ -177,6 +178,7 @@ public class UssdGatewayBootstrap {
     @PreDestroy
     void shutdown() {
         adminHttp.clearRaAdminHub();
+        appTelemetry.close();
         appTelemetry.close();
         teardownPlanes();
         bridge.bindSs7(() -> null);

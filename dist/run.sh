@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Digicom-ET USSDGW — dist starter (Quarkus fast-jar layout).
+# nhanth87 USSDGW — dist starter (Quarkus fast-jar layout).
 # Never java -jar ussdgw-app.jar alone; never ship uber-jar.
 set -euo pipefail
 APP_HOME="$(cd "$(dirname "$0")" && pwd)"
@@ -85,7 +85,7 @@ fi
 # shellcheck disable=SC2206
 EXTRA_JAVA_OPTS=( ${JAVA_OPTS:-${USSD_JAVA_OPTS:-}} )
 
-echo "Starting Digicom-ET USSDGW (fast-jar: quarkus-run.jar + ussdgw-app.jar + lib/)"
+echo "Starting nhanth87 USSDGW (fast-jar: quarkus-run.jar + ussdgw-app.jar + lib/)"
 echo "Data: ${APP_HOME}/data (H2 file DB by default — switch configs to postgresql for prod)"
 echo "Heap: -Xms${USSD_XMS} -Xmx${USSD_XMX}"
 exec java \

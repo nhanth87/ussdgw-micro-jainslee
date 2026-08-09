@@ -63,33 +63,33 @@
               hx-post="/admin/lab/mo" hx-target="#plane-notice" hx-swap="innerHTML" hx-indicator="#lab-ind">
           <div>
             <label class="block text-xs uppercase tracking-wider text-ink-mute">plane</label>
-            <select name="plane" class="mt-1 w-full rounded-md border border-ink-line bg-ink px-3 py-2 text-sm focus:border-signal focus:outline-none focus:ring-1 focus:ring-signal/40">
+            <select name="plane" class="mt-1 w-full rounded-md border border-ink-line bg-ink-panel px-3 py-2 text-sm focus:border-signal focus:outline-none focus:ring-1 focus:ring-signal/40">
               <option>SMPP</option><option>DIAMETER</option><option>SIP</option>
             </select>
           </div>
           <div>
             <label class="block text-xs uppercase tracking-wider text-ink-mute">msisdn</label>
             <input name="msisdn" required placeholder="251911000000"
-                   class="mt-1 w-full rounded-md border border-ink-line bg-ink px-3 py-2 font-mono text-sm focus:border-signal focus:outline-none focus:ring-1 focus:ring-signal/40"/>
+                   class="mt-1 w-full rounded-md border border-ink-line bg-ink-panel px-3 py-2 font-mono text-sm focus:border-signal focus:outline-none focus:ring-1 focus:ring-signal/40"/>
           </div>
           <div>
             <label class="block text-xs uppercase tracking-wider text-ink-mute">shortCode</label>
             <input name="shortCode"  placeholder="*123#"
-                   class="mt-1 w-full rounded-md border border-ink-line bg-ink px-3 py-2 font-mono text-sm focus:border-signal focus:outline-none focus:ring-1 focus:ring-signal/40"/>
+                   class="mt-1 w-full rounded-md border border-ink-line bg-ink-panel px-3 py-2 font-mono text-sm focus:border-signal focus:outline-none focus:ring-1 focus:ring-signal/40"/>
           </div>
           <div>
             <label class="block text-xs uppercase tracking-wider text-ink-mute">ussd text</label>
             <input name="ussd"  placeholder="*123#"
-                   class="mt-1 w-full rounded-md border border-ink-line bg-ink px-3 py-2 font-mono text-sm focus:border-signal focus:outline-none focus:ring-1 focus:ring-signal/40"/>
+                   class="mt-1 w-full rounded-md border border-ink-line bg-ink-panel px-3 py-2 font-mono text-sm focus:border-signal focus:outline-none focus:ring-1 focus:ring-signal/40"/>
           </div>
           <div>
             <label class="block text-xs uppercase tracking-wider text-ink-mute">tenantId</label>
             <input name="tenantId" list="lab-tenant-ids"  placeholder=""
-                   class="mt-1 w-full rounded-md border border-ink-line bg-ink px-3 py-2 font-mono text-sm focus:border-signal focus:outline-none focus:ring-1 focus:ring-signal/40"/>
+                   class="mt-1 w-full rounded-md border border-ink-line bg-ink-panel px-3 py-2 font-mono text-sm focus:border-signal focus:outline-none focus:ring-1 focus:ring-signal/40"/>
           </div>
           <div>
             <label class="block text-xs uppercase tracking-wider text-ink-mute">networkId</label>
-            <input name="networkId" type="number" value="0" min="0" class="mt-1 w-full rounded-md border border-ink-line bg-ink px-3 py-2 font-mono text-sm focus:border-signal focus:outline-none focus:ring-1 focus:ring-signal/40"/>
+            <input name="networkId" type="number" value="0" min="0" class="mt-1 w-full rounded-md border border-ink-line bg-ink-panel px-3 py-2 font-mono text-sm focus:border-signal focus:outline-none focus:ring-1 focus:ring-signal/40"/>
           </div>
           <button type="submit" class="w-full rounded-md bg-signal py-2.5 text-sm font-semibold text-ink hover:bg-signal-dim">
             Inject MO

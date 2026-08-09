@@ -56,7 +56,7 @@ class AdaptiveTimeoutTest {
 
     @Test
     void effectiveGateInvalidAsyncIgnoresEwmaUnlikeCeilingFallback() {
-        // Classic SessionBridgeSupport: invalid asyncGate → dialog, no EWMA shrink.
+        // Invalid asyncGate → dialog; EWMA never shrinks the live budget.
         AdaptiveTimeout at = new AdaptiveTimeout();
         at.recordLatency(3, 1000);
         assertThat(at.effectiveGateMs(3, 0, 60_000)).isEqualTo(60_000);
@@ -64,11 +64,24 @@ class AdaptiveTimeoutTest {
     }
 
     @Test
-    void effectiveGateUsesAsyncCeilingWhenValid() {
+    void effectiveGateAlwaysUsesConfiguredCeilingNotEwma() {
         AdaptiveTimeout at = new AdaptiveTimeout();
         at.recordLatency(9, 2000);
-        long gate = at.effectiveGateMs(9, 7000, 60_000);
-        assertThat(gate).isEqualTo(3000L);
+        // EWMA suggestion still models latency for telemetry.
+        assertThat(at.suggestGateMs(9, 25_000)).isEqualTo(3000L);
+        // Live GATE_ARMED budget = config ceiling (MAP2MAP hop + MO AS + NI park).
+        assertThat(at.effectiveGateMs(9, 25_000, 60_000)).isEqualTo(25_000L);
+        assertThat(at.effectiveGateMs(9, 7000, 60_000)).isEqualTo(7000L);
+    }
+
+    @Test
+    void effectiveGatePullIgnoresMsisdnEwmaForLiveBudget() {
+        AdaptiveTimeout at = new AdaptiveTimeout();
+        at.recordLatency(1, "251900000001", 2000, 30_000);
+        assertThat(at.suggestGateMs(1, "251900000001", 25_000)).isEqualTo(3000L);
+        assertThat(at.effectiveGateMs(1, "251900000001", 25_000, 30_000)).isEqualTo(25_000L);
+        assertThat(at.effectiveGateMs(1, "251900000099", 25_000, 30_000)).isEqualTo(25_000L);
+        assertThat(at.effectiveGateMs(99, "251900000099", 25_000, 30_000)).isEqualTo(25_000L);
     }
 
     @Test
@@ -92,11 +105,11 @@ class AdaptiveTimeoutTest {
         assertThat(steady).isEqualTo(1800L); // 1200 * 1.5
 
         // A single hung AS round trip. Unclamped this alone pegs the EWMA far above the
-        // ceiling and the gate stays at the ceiling for ~20 further samples.
+        // ceiling and the suggestion stays at the ceiling for ~20 further samples.
         at.recordLatency(net, 600_000, dialogTimeout);
         long afterOutlier = at.suggestGateMs(net, 7000);
         assertThat(afterOutlier)
-                .as("one outlier must not peg the gate at the ceiling")
+                .as("one outlier must not peg the EWMA suggestion at the ceiling")
                 .isLessThan(7000L)
                 .isGreaterThan(steady);
 
@@ -104,7 +117,7 @@ class AdaptiveTimeoutTest {
             at.recordLatency(net, 1200, dialogTimeout);
         }
         assertThat(at.suggestGateMs(net, 7000))
-                .as("gate returns close to the steady state once the AS speeds up")
+                .as("suggestion returns close to the steady state once the AS speeds up")
                 .isBetween(steady, steady + 300L);
     }
 
@@ -131,5 +144,20 @@ class AdaptiveTimeoutTest {
         at.recordLatency(79, 2000);
         assertThat(at.resetAll()).isEqualTo(2);
         assertThat(at.snapshot()).isEmpty();
+    }
+
+    @Test
+    void pullMsisdnProfileKeepsEwmaAcrossSessions() {
+        AdaptiveTimeout at = new AdaptiveTimeout();
+        // Slow network-only seed, then a fast pull sample for one MSISDN (also nudges network).
+        at.recordLatency(0, 10_000, 30_000);
+        at.recordLatency(0, "251911230398", 2000, 30_000);
+        assertThat(at.suggestGateMs(0, "251911230398", 25_000)).isEqualTo(3000L);
+        // 0.2*2000 + 0.8*10000 = 8400 → *1.5 = 12600
+        assertThat(at.suggestGateMs(0, 25_000)).isEqualTo(12_600L);
+        assertThat(at.msisdnProfileSize()).isEqualTo(1);
+        assertThat(at.resetMsisdn("+251-911-230-398")).isTrue();
+        // User profile gone → fall back to network EWMA.
+        assertThat(at.suggestGateMs(0, "251911230398", 25_000)).isEqualTo(12_600L);
     }
 }

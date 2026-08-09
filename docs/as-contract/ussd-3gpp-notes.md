@@ -239,9 +239,10 @@ Hardest open questions after the read. Each: **proposed default** · **evidence 
 
 - **Spec:** MAP timers on invoke (29.002 ASN.1); Stage 2 allows app timer release (23.090 §5.2.1). Classic adaptive gate is **AS wait**, separate from MAP invoke.
 - **Default:**
-  - **Park gate** (`AdaptiveTimeout` ~1–7 s EWMA): how long HTTP stays open waiting for **this hop’s** MAP/AS progress before ABORT/bridge policy.
+  - **Park gate** (`ussd.bridge.async-gate-timeout-ms` ceiling, default 25s — **not** EWMA shrink): how long HTTP/MO stays open waiting for **this hop’s** MAP/AS progress before ABORT/bridge policy.
   - **MAP invoke** (`customInvokeTimeout` or default **ml** / 10 min): how long UE may take to answer a Request.
-  - Interactive Request: park gate must be **re-armed or extended** across UE think-time (classic keeps session; greenfield must not abort park on short EWMA while MAP invoke still live) — **gap**.
+  - Interactive Request: park gate must be **re-armed or extended** across UE think-time (classic keeps session; greenfield must not abort park on short budget while MAP invoke still live) — **gap**.
+  - Observed EWMA remains telemetry / `observed_ewma_ms` only.
 - **Evidence:** Classic ChildSbb adaptive vs `customInvokeTimeOut`; measure greenfield park expiry during long UE input.
 
 ### Q7 — NotifyResponse → HTTP park complete

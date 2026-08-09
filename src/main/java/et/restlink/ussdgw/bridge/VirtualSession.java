@@ -26,6 +26,12 @@ public final class VirtualSession {
     private volatile long invokeId;
     private volatile boolean dialogAlive = true;
     private volatile boolean adaptiveBridgeArm = true;
+    /**
+     * MAP2MAP Case 2: outbound hop UnstructuredSS is on the wire and has not yet
+     * terminated (Response / Abort / Reject / Timeout). While true, MO
+     * {@code replyAndEnd} from AS/saga must not run — hop outcome first.
+     */
+    private volatile boolean map2mapHopOutstanding;
     private volatile String mscGt;
     /** IMSI from SRI-SM — MAP NI destReference (land_mobile). */
     private volatile String imsi;
@@ -83,6 +89,10 @@ public final class VirtualSession {
     public void setDialogAlive(boolean dialogAlive) { this.dialogAlive = dialogAlive; }
     public boolean adaptiveBridgeArm() { return adaptiveBridgeArm; }
     public void setAdaptiveBridgeArm(boolean adaptiveBridgeArm) { this.adaptiveBridgeArm = adaptiveBridgeArm; }
+    public boolean map2mapHopOutstanding() { return map2mapHopOutstanding; }
+    public void setMap2mapHopOutstanding(boolean map2mapHopOutstanding) {
+        this.map2mapHopOutstanding = map2mapHopOutstanding;
+    }
     public String mscGt() { return mscGt; }
     public void setMscGt(String mscGt) { this.mscGt = mscGt; }
     public String imsi() { return imsi; }

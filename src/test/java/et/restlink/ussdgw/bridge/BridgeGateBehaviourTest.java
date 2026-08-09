@@ -254,6 +254,34 @@ class BridgeGateBehaviourTest {
         assertThat(saga.niFailCount()).isEqualTo(1);
     }
 
+    @Test
+    void startAwaitingAsHopPhaseUsesConfiguredCeilingNotEwma() {
+        AdaptiveTimeout adaptive = new AdaptiveTimeout();
+        // Floored EWMA would formerly shrink live gate to ~1500ms (1000 * 1.5).
+        adaptive.recordLatency(7, 1000);
+        assertThat(adaptive.suggestGateMs(7, 25_000)).isEqualTo(1500L);
+
+        VirtualSessionBridge bridge = newBridge(store, true);
+        set(bridge, "adaptive", adaptive);
+        UssdConfigService cfg = new UssdConfigService();
+        set(cfg, "bridgeEnabledProp", true);
+        set(cfg, "asyncGateTimeoutMsProp", 25_000L);
+        set(cfg, "dialogTimeoutMsProp", 60_000L);
+        set(cfg, "asyncWaitMessageProp", "Please wait...");
+        set(cfg, "asyncHardFailMessageProp", "unavailable");
+        set(bridge, "config", cfg);
+
+        VirtualSession s = new VirtualSession("vs", "c-ceiling", "r1", "2519", 7, "dlg-c", "*804#");
+        s.setDialogAlive(true);
+        store.put(s);
+
+        bridge.startAwaitingAs(s, "hop");
+        VirtualSession armed = store.get("c-ceiling").orElseThrow();
+        assertThat(armed.gateMs()).isEqualTo(25_000L);
+        assertThat(armed.gateDeadlineMs() - armed.pullStartedAtMs()).isEqualTo(25_000L);
+        assertThat(armed.state()).isEqualTo(VirtualSessionState.AWAITING_AS);
+    }
+
     private static VirtualSessionBridge newBridge(VirtualSessionStore store, boolean bridgeEnabled) {
         return newBridge(store, bridgeEnabled, new CountingNi());
     }

@@ -1,6 +1,7 @@
 package et.restlink.ussdgw.service;
 
 import et.restlink.ussdgw.api.AsRequest;
+import et.restlink.ussdgw.bridge.AdaptiveTimeout;
 import et.restlink.ussdgw.bridge.VirtualSession;
 import et.restlink.ussdgw.bridge.VirtualSessionBridge;
 import et.restlink.ussdgw.bridge.VirtualSessionState;
@@ -9,6 +10,7 @@ import et.restlink.ussdgw.cdr.CdrPhase;
 import et.restlink.ussdgw.cdr.CdrService;
 import et.restlink.ussdgw.cdr.Map2MapCdr;
 import et.restlink.ussdgw.events.Map2MapRequestEvent;
+import et.restlink.ussdgw.profile.UssdUserProfileStore;
 import et.restlink.ussdgw.routing.RuleType;
 import et.restlink.ussdgw.routing.ShortCodeRule;
 import et.restlink.ussdgw.telemetry.Map2MapTelemetry;
@@ -20,22 +22,16 @@ import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
 /**
- * After a MAP2MAP UnstructuredSS-Response (or lab skip), route the MO pull to the rule's
- * {@code asUrl} with hop text + originated dial.
+ * RE_ROUTE (MAP2MAP Case 2) completion: after upper-HLR hop, SLEE-route AS pull.
  *
- * <p>Bridge / AdaptiveTimeout is armed at MAP2MAP <em>ingress</em>
- * ({@code MapUssdParentSbb} map2map branch). Completion must not break CAS:
- * <ul>
- *   <li>{@link VirtualSessionState#AWAITING_AS} — re-arm gate for the AS pull phase
- *       (fresh EWMA sample; hop latency must not consume the AS budget)</li>
- *   <li>{@link VirtualSessionState#S1_RELEASED} — gate already fired during hop
- *       (UE has async-wait + gated XML); keep state and AS-pull for late reconcile</li>
- * </ul>
+ * <p>AdaptiveTimeout budget is armed <em>after hop USSD is sent</em> ({@code GATE_ARMED}).
+ * On hop <strong>text</strong>, re-arm the gate for the AS budget. On hop
+ * <strong>REJECT / Abort / empty / timeout</strong> (RE_ROUTE only): that <em>is</em> the hop
+ * response (TCAP Abort is not visible under a {@code gsm_map}-only Wireshark filter) — clear
+ * hop-outstanding, pull AS with {@code string="hlr reject"} or {@code string="hlr none"}, then
+ * MO {@code returnResultLast}. Never second {@code GATE_ARMED}.
  *
- * <p>AS {@code ussdString} = hop response when non-blank; else original dialed USSD.
- * Additive: {@code originatedUssd}, {@code shortCode}, {@code codeKind} (SHORT|LONG).
- * Slow AS (or slow hop before AS) → {@link VirtualSessionBridge#onGateExpired} →
- * {@link GatedAsNotifyService} gated XML. Never {@code Thread.sleep}.
+ * <p>Also stamps durable {@link UssdUserProfileStore} (PK=MSISDN) with last MAP2MAP TX fields.
  */
 @ApplicationScoped
 public class Map2MapCompletionService {
@@ -46,12 +42,26 @@ public class Map2MapCompletionService {
     @Inject AsPullRouter asPullRouter;
     @Inject CdrService cdr;
     @Inject Map2MapTelemetry map2MapTelemetry;
+    @Inject UssdUserProfileStore userProfiles;
+    @Inject AdaptiveTimeout adaptive;
 
     public String onMap2MapResponse(Map2MapRequestEvent req, String hopText) {
+        String hop = hopText == null ? "" : hopText.trim();
+        String outcome = hop.isEmpty() ? Map2MapCdr.OUTCOME_EMPTY : Map2MapCdr.OUTCOME_TEXT;
+        return onMap2MapResponse(req, hopText, outcome);
+    }
+
+    /**
+     * @param hopOutcome {@link Map2MapCdr#OUTCOME_TEXT} / {@code reject} / {@code empty} / …
+     */
+    public String onMap2MapResponse(Map2MapRequestEvent req, String hopText, String hopOutcome) {
         if (req == null) {
             return "map2map-complete-null";
         }
         String hop = hopText == null ? "" : hopText.trim();
+        String outcome = hopOutcome == null || hopOutcome.isBlank()
+                ? (hop.isEmpty() ? Map2MapCdr.OUTCOME_EMPTY : Map2MapCdr.OUTCOME_TEXT)
+                : hopOutcome.trim();
         VirtualSession session = store.get(req.correlationId()).orElse(null);
         if (session == null) {
             LOG.warn("MAP2MAP complete missing session corr={}", req.correlationId());
@@ -71,26 +81,30 @@ public class Map2MapCompletionService {
         boolean afterGate = st == VirtualSessionState.S1_RELEASED
                 || st == VirtualSessionState.PUSH_PENDING
                 || st == VirtualSessionState.RESPONDING;
+        // RE_ROUTE: terminal hop (reject/empty/…) → keep ingress gate, never second GATED.
+        boolean terminalHop = Map2MapCdr.isTerminalHopOutcome(outcome) || hop.isEmpty();
+        boolean rearmed = false;
         if (afterGate) {
-            // Gate already won during hop — do not startAwaitingAs (would reset S1_RELEASED
-            // and double-break CAS). AS pull continues; claimForAsResponse late-reconciles.
             store.put(session);
-            LOG.info("MAP2MAP complete after gate corr={} state={} hopLen={}",
-                    req.correlationId(), st, hop.length());
+            LOG.info("MAP2MAP complete after gate corr={} state={} hopOutcome={}",
+                    req.correlationId(), st, outcome);
             try {
                 map2MapTelemetry.completionAfterGate();
             } catch (Throwable ignored) { }
+        } else if (terminalHop && st == VirtualSessionState.AWAITING_AS) {
+            store.put(session);
+            LOG.info("MAP2MAP RE_ROUTE hop-terminal no-rearm corr={} hopOutcome={}",
+                    req.correlationId(), outcome);
         } else if (st == VirtualSessionState.AWAITING_AS) {
-            // Re-arm for AS pull: reset gate deadline + pullStartedAt so hop RTT does not
-            // starve the AS budget / poison EWMA.
             bridge.startAwaitingAs(session);
+            rearmed = true;
         } else {
-            // Lab skip / unexpected ACTIVE — arm for AS.
             bridge.startAwaitingAs(session);
+            rearmed = true;
         }
 
         String dialed = req.dialedUssd() == null ? "" : req.dialedUssd();
-        String asUssd = !hop.isEmpty() ? hop : dialed;
+        String asUssd = Map2MapCdr.asUssdForReRouteHop(hop, outcome);
         String codeKind = ShortCodeRule.codeKind(dialed, req.mark(), req.shortCode());
         AsRequest asReq = new AsRequest(
                 session.virtualSessionId(), req.correlationId(), req.requestId(),
@@ -98,7 +112,6 @@ public class Map2MapCompletionService {
                 .withOriginated(dialed.isEmpty() ? null : dialed, codeKind);
         ShortCodeRule rule = ShortCodeRule.ofReroute(
                 req.shortCode(),
-                // SLEE AS plane only — never persist/route RE_ROUTE as a wire type.
                 req.ruleType() == null ? RuleType.HTTP : req.ruleType().asPullPlane(),
                 req.asUrl(),
                 true,
@@ -120,6 +133,8 @@ public class Map2MapCompletionService {
                 cdr.write(req.correlationId(), CdrPhase.FAILED, req.msisdn(),
                         req.shortCode(), Map2MapCdr.AS_ROUTE_FAIL,
                         Map2MapCdr.detail(req, "err=" + ex.getMessage(),
+                                "hopOutcome=" + outcome,
+                                "asUssd=" + asUssd,
                                 afterGate ? "phase=after-gate" : "phase=as"),
                         req.networkId(), req.tenantId(), "MAP",
                         Map2MapCdr.gateMs(session), null);
@@ -127,22 +142,57 @@ public class Map2MapCompletionService {
             return "map2map-as-fail";
         }
         try {
-            map2MapTelemetry.hopOk();
+            if (!terminalHop) {
+                map2MapTelemetry.hopOk();
+            }
             map2MapTelemetry.asRouted();
         } catch (Throwable ignored) { }
         try {
-            String status = afterGate ? Map2MapCdr.COMPLETE_AFTER_GATE : Map2MapCdr.OK;
+            String status;
+            if (afterGate) {
+                status = Map2MapCdr.COMPLETE_AFTER_GATE;
+            } else if (terminalHop) {
+                status = Map2MapCdr.AS_ROUTED;
+            } else {
+                status = Map2MapCdr.OK;
+            }
             String d = Map2MapCdr.detail(req,
+                    "hopOutcome=" + outcome,
+                    "asUssd=" + asUssd,
                     hop.isEmpty() ? "hop-empty" : ("hopLen=" + hop.length()),
                     "codeKind=" + codeKind,
                     "virtualBridgeId=" + session.virtualSessionId(),
-                    afterGate ? "phase=after-gate" : "phase=as-rearm",
+                    afterGate ? "phase=after-gate"
+                            : (rearmed ? "phase=as-rearm" : "phase=as-no-rearm"),
                     "asRouted=true");
             cdr.write(req.correlationId(), CdrPhase.S1_ACTIVE, req.msisdn(),
                     req.shortCode(), status, d,
                     req.networkId(), req.tenantId(), "MAP",
                     Map2MapCdr.gateMs(session), null);
         } catch (Throwable ignored) { }
+        persistUserMap2Map(req, session, outcome);
         return "map2map-ok " + routed;
+    }
+
+    /** Last MAP2MAP TX → durable per-MSISDN {@code ussdUser} profile (not ussdTx). */
+    private void persistUserMap2Map(Map2MapRequestEvent req, VirtualSession session,
+                                    String hopOutcome) {
+        if (userProfiles == null || req == null) {
+            return;
+        }
+        try {
+            Long gate = Map2MapCdr.gateMs(session);
+            Long ewma = null;
+            if (adaptive != null) {
+                double v = adaptive.observedLatencyMs(req.networkId(), req.msisdn());
+                if (v > 0d) {
+                    ewma = Math.round(v);
+                }
+            }
+            userProfiles.recordMap2Map(req, hopOutcome, gate, ewma);
+        } catch (Throwable t) {
+            LOG.warn("ussdUser MAP2MAP persist failed msisdn={}: {}",
+                    req.msisdn(), t.toString());
+        }
     }
 }
