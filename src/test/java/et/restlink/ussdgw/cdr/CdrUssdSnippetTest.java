@@ -31,4 +31,16 @@ class CdrUssdSnippetTest {
         assertThat(CdrUssdSnippet.asUssdDetail("Thank you."))
                 .isEqualTo("asUssd=Thank you.|asLen=10");
     }
+
+    @Test
+    void resolveForDisplay_prefersColumnThenDetail() {
+        String longText = "A".repeat(60);
+        assertThat(CdrUssdSnippet.resolveForDisplay(longText, "ignored"))
+                .startsWith("A".repeat(50))
+                .endsWith("…");
+        assertThat(CdrUssdSnippet.resolveForDisplay(null, "menu pick 2"))
+                .isEqualTo("menu pick 2");
+        assertThat(CdrUssdSnippet.resolveForDisplay("  ", null)).isEmpty();
+        assertThat(CdrUssdSnippet.resolveForDisplay(null, null)).isEmpty();
+    }
 }

@@ -210,6 +210,64 @@ public class AdaptiveTimeout {
         return out;
     }
 
+    /**
+     * Short human string for dashboard KPI hero — never {@link Map#toString()}
+     * ({@code {1=1000.0}} overflows metric cards).
+     *
+     * <ul>
+     *   <li>empty → {@code —}</li>
+     *   <li>one network → {@code 1000 ms} (compact {@code 1.2k ms} when ≥ 10_000)</li>
+     *   <li>several → {@code n0:900ms · n1:1.2k} (cap 3 nets + {@code +N})</li>
+     * </ul>
+     */
+    public String displayEwma() {
+        return formatSnapshotForDisplay(snapshot());
+    }
+
+    /** Pure formatter for tests / status HTML (accepts {@link #snapshot()} map). */
+    public static String formatSnapshotForDisplay(Map<Integer, Double> snap) {
+        if (snap == null || snap.isEmpty()) {
+            return "—";
+        }
+        if (snap.size() == 1) {
+            Map.Entry<Integer, Double> only = snap.entrySet().iterator().next();
+            return formatMsCompact(only.getValue()) + " ms";
+        }
+        StringBuilder sb = new StringBuilder();
+        int shown = 0;
+        for (Map.Entry<Integer, Double> e : snap.entrySet()) {
+            if (shown >= 3) {
+                sb.append(" · +").append(snap.size() - shown);
+                break;
+            }
+            if (shown > 0) {
+                sb.append(" · ");
+            }
+            sb.append('n').append(e.getKey()).append(':')
+                    .append(formatMsCompact(e.getValue()));
+            if (e.getValue() != null && e.getValue() < 10_000d) {
+                sb.append("ms");
+            }
+            shown++;
+        }
+        return sb.toString();
+    }
+
+    static String formatMsCompact(Double ms) {
+        if (ms == null || !Double.isFinite(ms) || ms < 0) {
+            return "0";
+        }
+        long rounded = Math.round(ms);
+        if (rounded >= 10_000L) {
+            double k = rounded / 1000.0;
+            if (Math.abs(k - Math.rint(k)) < 0.05) {
+                return ((long) Math.rint(k)) + "k";
+            }
+            return String.format(java.util.Locale.ROOT, "%.1fk", k);
+        }
+        return Long.toString(rounded);
+    }
+
     /** Bound size of the temporary per-MSISDN pull profile map (telemetry). */
     public int msisdnProfileSize() {
         return perMsisdn.size();
