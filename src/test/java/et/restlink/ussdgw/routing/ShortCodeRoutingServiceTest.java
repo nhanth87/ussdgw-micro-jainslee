@@ -127,4 +127,30 @@ class ShortCodeRoutingServiceTest {
         assertThat(svc.find("*300#", "app-b")).get().extracting(ShortCodeRule::asUrl)
                 .isEqualTo("http://as/b");
     }
+
+    @Test
+    void map2mapHopChainPreservesSuffixAcrossReroutes() {
+        ShortCodeRoutingService svc = new ShortCodeRoutingService();
+        ShortCodeRule first = ShortCodeRule.ofReroute("*804*", RuleType.HTTP, "http://as/a", true,
+                null, 0, true, null, true, "*875*", null);
+        svc.put(first);
+        svc.put(ShortCodeRule.ofReroute("*875*", RuleType.HTTP, "http://as/b", true,
+                null, 0, true, null, true, "*8775*", null));
+
+        assertThat(svc.resolveMap2MapHopUssd("*804*1234#", first))
+                .isEqualTo("*8775*1234#");
+        assertThat(svc.resolveMap2MapHopUssd("*804#", false, "*804#", "*875#"))
+                .isEqualTo("*875#");
+    }
+
+    @Test
+    void map2mapHopChainStopsWhenNextNotArmed() {
+        ShortCodeRoutingService svc = new ShortCodeRoutingService();
+        ShortCodeRule first = ShortCodeRule.ofReroute("*804*", RuleType.HTTP, "http://as/a", true,
+                null, 0, true, null, true, "*875*", null);
+        svc.put(first);
+        svc.put(new ShortCodeRule("*875*", RuleType.HTTP, "http://as/plain", true, null, 0, true));
+
+        assertThat(svc.resolveMap2MapHopUssd("*804*1#", first)).isEqualTo("*875*1#");
+    }
 }

@@ -113,6 +113,28 @@ class Map2MapCompletionReRouteHopTest {
     }
 
     @Test
+    void hopAmharicText_encodesInXmlString() {
+        String amharic = "ውድ ደንበኛ ፣ ውጤቱ በአጭር መልእክት ተልኳል። ኢትዮ ቴሌኮም";
+        completion.onMap2MapResponse(sample(), amharic, Map2MapCdr.OUTCOME_TEXT);
+        assertThat(lastAs.get().ussdString()).isEqualTo(amharic);
+        String xml = et.restlink.ussdgw.api.classic.ClassicDialogXmlCodec.encodePull(lastAs.get());
+        assertThat(xml)
+                .contains("hlrResult=\"responded\"")
+                .contains("string=\"" + amharic + "\"")
+                .contains("redirectUssd=\"*875#\"")
+                .doesNotContain("string=\"hlr none\"");
+    }
+
+    @Test
+    void secondComplete_isIdempotent_keepsFirstHopText() {
+        completion.onMap2MapResponse(sample(), "first hop", Map2MapCdr.OUTCOME_TEXT);
+        String second = completion.onMap2MapResponse(sample(), "", Map2MapCdr.OUTCOME_CLOSE);
+        assertThat(second).isEqualTo("map2map-already-routed");
+        assertThat(lastAs.get().ussdString()).isEqualTo("first hop");
+        assertThat(gateArms.get()).isEqualTo(1);
+    }
+
+    @Test
     void close_noRearm_stillExposesRedirectAndHopCodes() {
         completion.onMap2MapResponse(sample(), "", Map2MapCdr.OUTCOME_CLOSE);
         assertThat(gateArms.get()).isZero();

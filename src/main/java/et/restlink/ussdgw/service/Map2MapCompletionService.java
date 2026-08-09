@@ -15,11 +15,19 @@ import et.restlink.ussdgw.routing.RuleType;
 import et.restlink.ussdgw.routing.ShortCodeRule;
 import et.restlink.ussdgw.telemetry.Map2MapTelemetry;
 
+import jakarta.annotation.PreDestroy;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
+
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * RE_ROUTE (MAP2MAP Case 2) completion: after upper-HLR hop, SLEE-route AS pull.
@@ -33,11 +41,17 @@ import org.apache.logging.log4j.Logger;
  * {@code originatedUssd} (dialed), {@code redirectUssd}/{@code hopUssd} (re-route codes),
  * and hop RESULT text in {@code ussdString} when present.
  *
+ * <p>TC-END often delivers Dialog {@code CLOSE} before the Service
+ * {@code processUnstructuredSS-Response} in the same packet. CLOSE is deferred briefly so
+ * RESULT text can claim the AS pull first; empty CLOSE then no-ops if pending was taken.
+ *
  * <p>Also stamps durable {@link UssdUserProfileStore} (PK=MSISDN) with last MAP2MAP TX fields.
  */
 @ApplicationScoped
 public class Map2MapCompletionService {
     private static final Logger LOG = LogManager.getLogger(Map2MapCompletionService.class);
+    /** Grace so same-TC-END RESULT can win over Dialog CLOSE ordering. */
+    public static final long HOP_CLOSE_DEFER_MS = 100L;
 
     @Inject VirtualSessionStore store;
     @Inject VirtualSessionBridge bridge;
@@ -46,6 +60,53 @@ public class Map2MapCompletionService {
     @Inject Map2MapTelemetry map2MapTelemetry;
     @Inject UssdUserProfileStore userProfiles;
     @Inject AdaptiveTimeout adaptive;
+
+    private final ConcurrentHashMap<String, ScheduledFuture<?>> deferredClose =
+            new ConcurrentHashMap<>();
+    private final AtomicInteger deferThreads = new AtomicInteger();
+    private final ScheduledExecutorService hopCloseDefer = Executors.newScheduledThreadPool(1, r -> {
+        Thread t = new Thread(r, "map2map-hop-close-defer-" + deferThreads.incrementAndGet());
+        t.setDaemon(true);
+        return t;
+    });
+
+    @PreDestroy
+    void shutdown() {
+        deferredClose.values().forEach(f -> f.cancel(false));
+        deferredClose.clear();
+        hopCloseDefer.shutdownNow();
+    }
+
+    /**
+     * Soft-CLOSE: leave pending for RESULT; after {@link #HOP_CLOSE_DEFER_MS} run
+     * {@code onStillPending} only if the hop was not completed by RESULT.
+     */
+    public void deferHopClose(String outboundCorr, Runnable onStillPending) {
+        if (outboundCorr == null || outboundCorr.isBlank() || onStillPending == null) {
+            return;
+        }
+        String key = outboundCorr.trim();
+        cancelDeferredHopClose(key);
+        ScheduledFuture<?> fut = hopCloseDefer.schedule(() -> {
+            deferredClose.remove(key);
+            try {
+                onStillPending.run();
+            } catch (Throwable t) {
+                LOG.warn("MAP2MAP deferred CLOSE failed outbound={}: {}", key, t.toString());
+            }
+        }, HOP_CLOSE_DEFER_MS, TimeUnit.MILLISECONDS);
+        deferredClose.put(key, fut);
+    }
+
+    public void cancelDeferredHopClose(String outboundCorr) {
+        if (outboundCorr == null || outboundCorr.isBlank()) {
+            return;
+        }
+        ScheduledFuture<?> fut = deferredClose.remove(outboundCorr.trim());
+        if (fut != null) {
+            fut.cancel(false);
+        }
+    }
 
     public String onMap2MapResponse(Map2MapRequestEvent req, String hopText) {
         String hop = hopText == null ? "" : hopText.trim();
@@ -60,6 +121,7 @@ public class Map2MapCompletionService {
         if (req == null) {
             return "map2map-complete-null";
         }
+        cancelDeferredHopClose(req.outboundCorr());
         String hop = hopText == null ? "" : hopText.trim();
         String outcome = hopOutcome == null || hopOutcome.isBlank()
                 ? (hop.isEmpty() ? Map2MapCdr.OUTCOME_EMPTY : Map2MapCdr.OUTCOME_TEXT)
@@ -71,6 +133,11 @@ public class Map2MapCompletionService {
         }
         if (!hop.isEmpty()) {
             session.setPendingText(hop);
+        }
+        if (!session.tryClaimMap2MapAsRoute()) {
+            LOG.info("MAP2MAP AS already routed corr={} hopOutcome={} hopLen={}",
+                    req.correlationId(), outcome, hop.length());
+            return "map2map-already-routed";
         }
         session.setAdaptiveBridgeArm(true);
 
@@ -166,7 +233,7 @@ public class Map2MapCompletionService {
                     "asUssd=" + asUssd,
                     hop.isEmpty() ? "hop-empty" : ("hopLen=" + hop.length()),
                     "codeKind=" + codeKind,
-                    "virtualBridgeId=" + session.virtualSessionId(),
+                    "virtualBridgeId=" + session.correlationId(),
                     afterGate ? "phase=after-gate"
                             : (rearmed ? "phase=as-rearm" : "phase=as-no-rearm"),
                     "asRouted=true");

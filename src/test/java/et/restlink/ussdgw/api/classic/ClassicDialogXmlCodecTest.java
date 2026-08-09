@@ -192,6 +192,37 @@ class ClassicDialogXmlCodecTest {
     }
 
     @Test
+    void encodePullMap2MapAmharicHopTextInStringAttr() {
+        String amharic = "ውድ ደንበኛ ፣ ውጤቱ በአጭር መልእክት ተልኳል። ኢትዮ ቴሌኮም";
+        AsRequest req = new AsRequest("vs-1", "corr-am", "r1", 0, "251911230398", "*804#",
+                amharic, 0)
+                .withOriginated("*804#", "SHORT")
+                .withMap2MapCodes("*875#", "*8775#");
+        String xml = ClassicDialogXmlCodec.encodePull(req);
+        assertThat(xml)
+                .contains("hlrResult=\"responded\"")
+                .contains("string=\"" + amharic + "\"")
+                .contains("hopUssd=\"*8775#\"")
+                .doesNotContain("hlr none");
+    }
+
+    @Test
+    void decodeResponseMultiMenuFirstRequestWins() {
+        // mapMessagesSize>1: GW applies the first Request/Response string (menu body).
+        // Successive menus use later HTTP round-trips — see map2map-as-xml.md §4d.
+        String xml = """
+                <dialog mapMessagesSize="2" localId="corr-mm">
+                  <unstructuredSSRequest_Request dataCodingScheme="15" string="Menu 1&#10;1 Next"/>
+                  <unstructuredSSRequest_Request dataCodingScheme="15" string="ignored-second"/>
+                </dialog>
+                """;
+        AsResponse r = ClassicDialogXmlCodec.decodeResponse(xml, "fb");
+        assertThat(r.action()).isEqualTo(AsAction.CONTINUE);
+        assertThat(r.text()).isEqualTo("Menu 1\n1 Next");
+        assertThat(r.correlationId()).isEqualTo("corr-mm");
+    }
+
+    @Test
     void decodeResponseReadsAsyncAndBridgeAttrs() {
         String xml = """
                 <dialog localId="c-async" sessionId="vs-x" virtualBridgeId="c-async"

@@ -48,6 +48,7 @@
         <dependency><groupId>com.fasterxml.jackson.core</groupId><artifactId>jackson-databind</artifactId></dependency>
         <dependency><groupId>com.fasterxml.jackson.dataformat</groupId><artifactId>jackson-dataformat-xml</artifactId></dependency>
         <dependency><groupId>com.microjainslee</groupId><artifactId>ra-jss7</artifactId><version>${microjainslee.version}</version></dependency>
+        <dependency><groupId>com.microjainslee</groupId><artifactId>jainslee-cluster</artifactId><version>${microjainslee.version}</version></dependency>
         <dependency><groupId>com.microjainslee</groupId><artifactId>ra-diameter</artifactId><version>${microjainslee.version}</version></dependency>
         <dependency><groupId>com.microjainslee</groupId><artifactId>ra-sip-servlet</artifactId><version>${microjainslee.version}</version></dependency>
         <dependency><groupId>com.microjainslee</groupId><artifactId>ra-http-server</artifactId><version>${microjainslee.version}</version></dependency>

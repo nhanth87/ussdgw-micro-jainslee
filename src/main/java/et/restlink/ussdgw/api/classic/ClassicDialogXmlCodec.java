@@ -455,6 +455,16 @@ public final class ClassicDialogXmlCodec {
         if (n == null || n.isNull() || n.isMissingNode()) {
             return null;
         }
+        // mapMessagesSize>1 → Jackson may expose duplicate tags as an array; first wins.
+        if (n.isArray()) {
+            if (n.isEmpty()) {
+                return null;
+            }
+            n = n.get(0);
+            if (n == null || n.isNull() || n.isMissingNode()) {
+                return null;
+            }
+        }
         if (n.isTextual()) {
             return n.asText();
         }

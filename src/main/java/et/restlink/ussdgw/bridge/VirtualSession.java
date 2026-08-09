@@ -32,6 +32,12 @@ public final class VirtualSession {
      * {@code replyAndEnd} from AS/saga must not run — hop outcome first.
      */
     private volatile boolean map2mapHopOutstanding;
+    /**
+     * MAP2MAP: first AS pull after hop (RESULT text or empty CLOSE/REJECT) won.
+     * Prevents CLOSE-after-RESULT from posting a second {@code hlr none} pull.
+     */
+    private final java.util.concurrent.atomic.AtomicBoolean map2mapAsRouted =
+            new java.util.concurrent.atomic.AtomicBoolean(false);
     private volatile String mscGt;
     /** IMSI from SRI-SM — MAP NI destReference (land_mobile). */
     private volatile String imsi;
@@ -92,6 +98,13 @@ public final class VirtualSession {
     public boolean map2mapHopOutstanding() { return map2mapHopOutstanding; }
     public void setMap2mapHopOutstanding(boolean map2mapHopOutstanding) {
         this.map2mapHopOutstanding = map2mapHopOutstanding;
+    }
+    /** @return true if this caller owns the MAP2MAP AS pull (first wins). */
+    public boolean tryClaimMap2MapAsRoute() {
+        return map2mapAsRouted.compareAndSet(false, true);
+    }
+    public boolean map2mapAsRouted() {
+        return map2mapAsRouted.get();
     }
     public String mscGt() { return mscGt; }
     public void setMscGt(String mscGt) { this.mscGt = mscGt; }

@@ -148,6 +148,12 @@
               <option value="false"{{FORM_MARK_FALSE_SEL}}>false — exact match (short)</option>
               <option value="true"{{FORM_MARK_TRUE_SEL}}>true — prefix (long + short under same rule)</option>
             </select>
+            <p class="mt-1 text-xs text-ink-mute">
+              Long MMI <code class="font-mono">*{n}*xxx#</code>: use mark=<strong>true</strong> and
+              short code <code class="font-mono">*804*</code> (not <code class="font-mono">*804#</code>).
+              MAP2MAP replaces only that prefix; leftover (incl. trailing
+              <code class="font-mono">#</code>) is kept on the hop string.
+            </p>
           </div>
           <!-- Type encodes Case 2; keep form field for HTMX submit + legacy HTTP+flag saves -->
           <input type="hidden" name="rerouteEnable" :value="ruleType === 'RE_ROUTE' ? 'true' : 'false'"/>
@@ -155,9 +161,16 @@
             <p class="text-xs uppercase tracking-wider text-ink-mute">MAP2MAP Case 2</p>
             <div>
               <label class="block text-xs uppercase tracking-wider text-ink-mute">Redirect USSD (map2map_gt)</label>
-              <input name="redirectUssd" placeholder="example *875#" value="{{FORM_REDIRECT_USSD}}"
+              <input name="redirectUssd" placeholder="example *875# or *875*" value="{{FORM_REDIRECT_USSD}}"
                      class="mt-1 w-full rounded-md border border-ink-line bg-ink-panel px-3 py-2 font-mono text-sm focus:border-signal focus:outline-none focus:ring-1 focus:ring-signal/40"/>
-              <p class="mt-1 text-xs text-ink-mute">Outbound MAP UnstructuredSS-Request text (not SCCP GT) before AS pull.</p>
+              <p class="mt-1 text-xs text-ink-mute">
+                Outbound MAP hop text (not SCCP GT). Exact short → literal
+                (e.g. <code class="font-mono">*875#</code>). Long mark → prefix shape
+                <code class="font-mono">*875*</code> so
+                <code class="font-mono">*804*1234#</code> hops as
+                <code class="font-mono">*875*1234#</code>. Chained RE_ROUTE rules re-apply
+                the same suffix law.
+              </p>
             </div>
             <div>
               <label class="block text-xs uppercase tracking-wider text-ink-mute">Hop dest GT (hop_dest_gt)</label>

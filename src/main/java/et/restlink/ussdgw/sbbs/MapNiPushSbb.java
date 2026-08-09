@@ -100,10 +100,12 @@ public final class MapNiPushSbb implements Sbb, SleeEventHandler {
             mscGt = ni.msisdn();
         }
 
+        var pin = svc().pickPeerRoute(ni.networkId(), ni.correlationId());
         MapDialogHelper.niPush(ss7, ni.correlationId(), mscGt, localGt, text, ni.networkId(),
                 ni.alphabet() == null ? et.restlink.ussdgw.api.UssdAlphabet.AUTO : ni.alphabet(),
                 ni.notifyOnly(), imsi,
-                MapDialogHelper.mscSsn(cfg), MapDialogHelper.localSsn(cfg));
+                MapDialogHelper.mscSsn(cfg), MapDialogHelper.localSsn(cfg),
+                pin.preferredAspName(), pin.remotePc());
         writeCdr(ni, CdrPhase.S2_PUSH, ni.notifyOnly() ? "NI_NOTIFY" : "NI_PUSH", text);
         keepOrCompleteSession(ni);
         writeCdr(ni, CdrPhase.COMPLETED, "BRIDGED_DONE",

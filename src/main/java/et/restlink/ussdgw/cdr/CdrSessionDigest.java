@@ -164,6 +164,9 @@ public final class CdrSessionDigest {
             if (u.equals(Map2MapCdr.HOP_ABORT)) {
                 return Answer.of("abort", r.status);
             }
+            if (u.equals(Map2MapCdr.HOP_CLOSE)) {
+                return Answer.of("close (no RESULT)", r.status);
+            }
             // USSD_SENT = outbound only — not a hop response.
             if (u.equals(Map2MapCdr.OK) || u.equals(Map2MapCdr.COMPLETE_AFTER_GATE)) {
                 String asUssd = fields.get("asUssd");

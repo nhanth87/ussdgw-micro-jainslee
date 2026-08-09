@@ -33,6 +33,7 @@ class MapUssdParentMap2MapDialogTest {
     private final ConcurrentHashMap<String, VirtualSession> sessions = new ConcurrentHashMap<>();
     private MapUssdParentSbb sbb;
     private PendingMap2MapRegistry pending;
+    private Map2MapCompletionService completion;
     private AtomicInteger asPulls;
     private AtomicReference<String> lastHop;
     private AtomicReference<String> lastOutcome;
@@ -64,7 +65,7 @@ class MapUssdParentMap2MapDialogTest {
             }
         };
 
-        Map2MapCompletionService completion = new Map2MapCompletionService() {
+        completion = new Map2MapCompletionService() {
             @Override
             public String onMap2MapResponse(Map2MapRequestEvent req, String hopText) {
                 return onMap2MapResponse(req, hopText,
@@ -74,6 +75,9 @@ class MapUssdParentMap2MapDialogTest {
 
             @Override
             public String onMap2MapResponse(Map2MapRequestEvent req, String hopText, String hopOutcome) {
+                if (req != null) {
+                    cancelDeferredHopClose(req.outboundCorr());
+                }
                 asPulls.incrementAndGet();
                 lastHop.set(hopText == null ? "" : hopText);
                 lastOutcome.set(hopOutcome);
@@ -117,6 +121,59 @@ class MapUssdParentMap2MapDialogTest {
         assertThat(lastOutcome.get()).isEqualTo(Map2MapCdr.OUTCOME_REJECT);
         assertThat(networkAborts.get()).isZero();
         assertThat(sessions.get(corr).state()).isEqualTo(VirtualSessionState.AWAITING_AS);
+    }
+
+    /** Digicom 13:28:36Z — peer ACCEPT+NOTICE+CLOSE without RESULT must not stamp TIMEOUT. */
+    @Test
+    void hopCloseWithoutResultRoutesAsPullNotTimeout() throws Exception {
+        String corr = "corr-close";
+        String out = PendingMap2MapRegistry.outboundCorr(corr);
+        sessions.put(corr, session(corr, "dlg-in"));
+        pending.putUssd(out, sample(corr, out), "251971200201", null);
+
+        sbb.onEvent(new Ss7MapEvent.Dialog(out, Ss7MapEvent.Kind.CLOSE, null), null);
+
+        assertThat(pending.peek(out)).isPresent();
+        assertThat(asPulls.get()).isZero();
+        Thread.sleep(Map2MapCompletionService.HOP_CLOSE_DEFER_MS + 80L);
+        assertThat(pending.peek(out)).isEmpty();
+        assertThat(asPulls.get()).isEqualTo(1);
+        assertThat(lastOutcome.get()).isEqualTo(Map2MapCdr.OUTCOME_CLOSE);
+        assertThat(Map2MapCdr.statusForDialogLost("CLOSE", false)).isEqualTo(Map2MapCdr.HOP_CLOSE);
+        assertThat(Map2MapCdr.statusForDialogLost("CLOSE", false))
+                .isNotEqualTo(Map2MapCdr.TIMEOUT);
+        assertThat(networkAborts.get()).isZero();
+    }
+
+    /** RESULT after soft-CLOSE must win AS pull with hop text (same-TC-END ordering). */
+    @Test
+    void hopResultAfterCloseDeferWinsAsPullWithText() {
+        String corr = "corr-result-wins";
+        String out = PendingMap2MapRegistry.outboundCorr(corr);
+        sessions.put(corr, session(corr, "dlg-in"));
+        pending.putUssd(out, sample(corr, out), "251971200201", null);
+
+        sbb.onEvent(new Ss7MapEvent.Dialog(out, Ss7MapEvent.Kind.CLOSE, null), null);
+        assertThat(asPulls.get()).isZero();
+        assertThat(pending.peek(out)).isPresent();
+
+        // Simulate RESULT taking pending before defer fires (Parent hop path).
+        var taken = pending.takeIfPhase(out, PendingMap2MapRegistry.Phase.AWAITING_USSD);
+        assertThat(taken).isPresent();
+        String amharic = "ውድ ደንበኛ ፣ ውጤቱ በአጭር መልእክት ተልኳል። ኢትዮ ቴሌኮም";
+        completion.onMap2MapResponse(taken.get().req(), amharic, Map2MapCdr.OUTCOME_TEXT);
+
+        assertThat(asPulls.get()).isEqualTo(1);
+        assertThat(lastHop.get()).isEqualTo(amharic);
+        assertThat(lastOutcome.get()).isEqualTo(Map2MapCdr.OUTCOME_TEXT);
+
+        // Deferred CLOSE must not second-route empty.
+        try {
+            Thread.sleep(Map2MapCompletionService.HOP_CLOSE_DEFER_MS + 80L);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+        assertThat(asPulls.get()).isEqualTo(1);
     }
 
     @Test

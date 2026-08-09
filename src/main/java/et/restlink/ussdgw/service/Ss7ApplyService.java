@@ -42,6 +42,7 @@ public class Ss7ApplyService {
     @Inject PendingHlrProxyRegistry pendingHlrProxy;
     @Inject PendingMap2MapRegistry pendingMap2Map;
     @Inject RuntimeConfigStore store;
+    @Inject Ss7PeerRouteService peerRoutes;
 
     @ConfigProperty(name = "ussd.map.enabled", defaultValue = "false")
     boolean mapEnabledProp;
@@ -97,6 +98,9 @@ public class Ss7ApplyService {
         } finally {
             ss7Endpoint = null;
             ss7Ra = null;
+            if (peerRoutes != null) {
+                peerRoutes.clear();
+            }
             Ss7AdminBindings.clear();
         }
     }
@@ -254,6 +258,9 @@ public class Ss7ApplyService {
         }
         ss7Ra = ra;
         ss7Endpoint = new Ss7RaEndpoint(ra);
+        if (full != null && peerRoutes != null) {
+            peerRoutes.refreshFromConfig(full);
+        }
         container.registerRa(ss7Endpoint, ss7Endpoint);
         if (!ra.isActive()) {
             ss7Endpoint = null;
