@@ -51,5 +51,21 @@ class Map2MapCdrTest {
         assertThat(Map2MapCdr.TIMEOUT_AFTER_BRIDGE).isEqualTo("MAP2MAP_TIMEOUT_AFTER_BRIDGE");
         assertThat(Map2MapCdr.TIMEOUT).isEqualTo("MAP2MAP_TIMEOUT");
         assertThat(Map2MapCdr.OK).isEqualTo("MAP2MAP_OK");
+        assertThat(Map2MapCdr.HLR_REJECT).isEqualTo("HLR_REJECT");
+        assertThat(Map2MapCdr.AS_ROUTED).isEqualTo("MAP2MAP_AS_ROUTED");
+        assertThat(Map2MapCdr.AS_EARLY).isEqualTo("MAP2MAP_AS_EARLY");
+        assertThat(Map2MapCdr.AS_USSD_HLR_PENDING).isEqualTo("hlr pending");
+    }
+
+    @Test
+    void reRouteAsUssd_rejectAndNone() {
+        assertThat(Map2MapCdr.statusForDialogLost("REJECT", false)).isEqualTo(Map2MapCdr.HLR_REJECT);
+        assertThat(Map2MapCdr.asUssdForReRouteHop("", Map2MapCdr.OUTCOME_REJECT))
+                .isEqualTo("hlr reject");
+        assertThat(Map2MapCdr.asUssdForReRouteHop("", Map2MapCdr.OUTCOME_EMPTY))
+                .isEqualTo("hlr none");
+        assertThat(Map2MapCdr.asUssdForReRouteHop("hi", Map2MapCdr.OUTCOME_TEXT)).isEqualTo("hi");
+        assertThat(Map2MapCdr.isTerminalHopOutcome(Map2MapCdr.OUTCOME_REJECT)).isTrue();
+        assertThat(Map2MapCdr.isTerminalHopOutcome(Map2MapCdr.OUTCOME_TEXT)).isFalse();
     }
 }

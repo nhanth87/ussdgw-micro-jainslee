@@ -215,6 +215,14 @@ public class ShortCodeRoutingService {
                 .orElse(candidates.getFirst()));
     }
 
+    /**
+     * Exact map lookup by short-code + optional app user (admin edit / hop preserve).
+     * Unlike {@link #find}, does not apply mark-prefix matching or enabled filter.
+     */
+    public Optional<ShortCodeRule> byKey(String shortCode, String appUsername) {
+        return Optional.ofNullable(rules.get(mapKey(shortCode, appUsername)));
+    }
+
     public Collection<ShortCodeRule> list() {
         return rules.values();
     }

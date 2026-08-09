@@ -138,6 +138,29 @@ class ClassicDialogXmlCodecTest {
     }
 
     @Test
+    void encodePullReRouteHlrRejectUsesStringAndHlrResult() {
+        AsRequest req = new AsRequest("vs-1", "corr-rej", "r1", 0, "251911000001", "*804#",
+                "hlr reject", 0)
+                .withOriginated("*804#", "SHORT");
+        String xml = ClassicDialogXmlCodec.encodePull(req);
+        assertThat(xml)
+                .contains("hlrResult=\"reject\"")
+                .contains("string=\"hlr reject\"")
+                .contains("originatedUssd=\"*804#\"");
+    }
+
+    @Test
+    void encodePullReRouteHlrPendingUsesStringAndHlrResult() {
+        AsRequest req = new AsRequest("vs-1", "corr-pend", "r1", 0, "251911000001", "*804#",
+                "hlr pending", 0)
+                .withOriginated("*804#", "SHORT");
+        String xml = ClassicDialogXmlCodec.encodePull(req);
+        assertThat(xml)
+                .contains("hlrResult=\"pending\"")
+                .contains("string=\"hlr pending\"");
+    }
+
+    @Test
     void decodeResponseReadsAsyncAndBridgeAttrs() {
         String xml = """
                 <dialog localId="c-async" sessionId="vs-x" virtualBridgeId="c-async"

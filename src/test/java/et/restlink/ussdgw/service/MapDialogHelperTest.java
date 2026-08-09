@@ -79,9 +79,27 @@ class MapDialogHelperTest {
     }
 
     @Test
+    void map2mapProcessHopSendsProcessUnstructuredSsRequest() {
+        CapturingPort port = new CapturingPort();
+        MapDialogHelper.map2mapProcessHop(port, "m2m-corr", "251971200201", "251971200490",
+                "*875#", 0, et.restlink.ussdgw.api.UssdAlphabet.AUTO, "251911230398", 6, 6);
+        assertThat(port.cmds).hasSize(1);
+        assertThat(port.cmds.get(0)).isInstanceOf(Ss7Command.MapUnstructuredSsRequest.class);
+        var c = (Ss7Command.MapUnstructuredSsRequest) port.cmds.get(0);
+        assertThat(c.dialogId()).isEqualTo("m2m-corr");
+        assertThat(c.targetAddress().globalTitle()).isEqualTo("251971200201");
+        assertThat(c.targetAddress().subSystemNumber()).isEqualTo(6);
+        assertThat(c.localAddress().subSystemNumber()).isEqualTo(6);
+        assertThat(c.text()).isEqualTo("*875#");
+        assertThat(c.msisdn()).isEqualTo("251911230398");
+        assertThat(c.processUnstructured()).isTrue();
+    }
+
+    @Test
     void nullPortIsNoOp() {
         MapDialogHelper.replyAndEnd(null, "d", 1, "x");
         MapDialogHelper.niPush(null, "c", "1", "2", "t", 0);
+        MapDialogHelper.map2mapProcessHop(null, "c", "1", "2", "t", 0, null, "3", 6, 6);
         MapDialogHelper.niContinue(null, "c", "t", null, false);
         MapDialogHelper.niClose(null, "c", true);
     }

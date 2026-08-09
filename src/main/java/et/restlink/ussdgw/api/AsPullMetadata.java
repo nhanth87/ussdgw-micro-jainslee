@@ -15,7 +15,7 @@ public final class AsPullMetadata {
     /**
      * @param req     base request (sessionId = virtualSessionId; correlationId = push-back key)
      * @param session in-flight session after {@code startAwaitingAs} (may be null)
-     * @param adaptive EWMA gate
+     * @param adaptive EWMA model (telemetry) + {@code effectiveGateMs} ceiling helper
      * @param config  async/dialog ceilings + bridge flags
      * @param bridgePlaneArmed whether HTTP or gRPC client bridge is enabled for this route
      */
@@ -36,13 +36,14 @@ public final class AsPullMetadata {
             return null;
         }
         int networkId = session != null ? session.networkId() : req.networkId();
-        long asyncGate = config == null ? 7000L : config.asyncGateTimeoutMs();
+        String msisdn = session != null ? session.msisdn() : req.msisdn();
+        long asyncGate = config == null ? 25_000L : config.asyncGateTimeoutMs();
         long dialog = config == null ? 60_000L : config.dialogTimeoutMs();
         long gateMs;
         if (session != null && session.gateMs() > 0) {
             gateMs = session.gateMs();
         } else if (adaptive != null) {
-            gateMs = adaptive.effectiveGateMs(networkId, asyncGate, dialog);
+            gateMs = adaptive.effectiveGateMs(networkId, msisdn, asyncGate, dialog);
         } else {
             gateMs = asyncGate > 0 && asyncGate < dialog ? asyncGate : dialog;
         }

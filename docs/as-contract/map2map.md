@@ -4,28 +4,39 @@ Authoritative MO enrich path (routing-driven). **One unique short-code rule** co
 exact short dials and long mark prefixes — no separate short/long rule types.
 
 **Stay-on-call** during the long hop+AS path ≡ **AdaptiveTimeout + Virtual Session Bridge**
-(armed at hop ingress). Not a separate app-user / profile column — ensure
-`ussd.bridge.enabled=true` (default) and MAP2MAP Parent always `setAdaptiveBridgeArm(true)`.
+(budget armed **after hop USSD is on the wire** — CDR `GATE_ARMED`, not UE async-wait).
+Not a separate app-user / profile column — ensure `ussd.bridge.enabled=true` (default) and
+MAP2MAP Parent always `setAdaptiveBridgeArm(true)`.
+
+**Per-MSISDN user profile** (`ussdUser` ProfileFacility table, PK = digits MSISDN) stores the
+**last MAP2MAP TX snapshot** across sessions (shortCode, redirect, hop dest/SSN, hopOutcome,
+gateMs, EWMA). Distinct from in-flight `ussdTx` (PK = correlationId). Temporary pull EWMA also
+lives in `AdaptiveTimeout` per-MSISDN.
 
 ```
 UE *804#  (or mark *101 → *101123456#)
   → MSC → GW          MAP processUnstructuredSS-Request
   → MapUssdParentSbb  rule.map2mapArmed() (reroute_enable + redirect USSD)
-                      **arm AdaptiveTimeout + startAwaitingAs** (AWAITING_AS + gate)
-                      = stay-on-call while hop+AS run
+                      persist session (`adaptiveBridgeArm`); **do not** arm gate yet
   → Map2MapSbb         Case 2 hop (NO SRI / NO FAKE→MSC):
-                        hop_dest_gt set → UnstructuredSS-Request → that GT/SSN
-                        hop_dest blank → UnstructuredSS-Request → ussd.hlr.upper-gt
+                        hop_dest_gt set → processUnstructuredSS-Request (op 59) → that GT/SSN
+                        hop_dest blank → processUnstructuredSS-Request → ussd.hlr.upper-gt
                                           (+ hop_dest_ssn or default SSN 6)
-                        USSD string = redirect (e.g. *875#)
-  → peer upper HLR    UnstructuredSS-Response (user info)
+                        Calling SSN 6; destRef + component = MSISDN; USSD = redirect (e.g. *875#)
+                      **then** `startAwaitingAs` → CDR `GATE_ARMED` (budget countdown;
+                        **not** UE async-wait). Covers remaining hop+AS wait.
+  → peer upper HLR    processUnstructuredSS-Response / REJECT / abort
+                      (legacy UnstructuredSS-Response still accepted)
   → Map2MapCompletion  sync AS pull via AsPullRouter (HTTP|gRPC|SIP per rule_type):
-                        ussdString=hop text; additive originatedUssd + shortCode + codeKind;
-                        if still AWAITING_AS → **re-arm** gate for AS;
+                        **hop text** → ussdString=hop; re-arm AdaptiveTimeout for AS budget;
+                        **hop REJECT** → ussdString=`hlr reject` + dialog `hlrResult=reject`;
+                          **no second GATE_ARMED** (hop already answered);
+                        **hop empty/timeout/abort** → ussdString=`hlr none` + `hlrResult=none`;
+                        additive originatedUssd + shortCode + codeKind;
                         if already S1_RELEASED → keep bridged (no CAS reset)
   → AS (HttpClientSbb / GrpcClientSbb / Sip MESSAGE) 200 / OK
   → GW → MSC → UE     processUnstructuredSS result  (or NI late reconcile)
-  (slow hop or AS)    BridgeGate → async-wait UE + GatedAsNotifyService encodeGatedPush XML
+  (hop+AS still open after budget) BridgeGate → CDR `BRIDGED` + UE async-wait + gated XML
 ```
 
 Case 1 HLR face **SRI** (`SriSbb` / NI push) is **unchanged** and separate from this path.
@@ -51,7 +62,7 @@ There is **no** Java/UI special-case for `*875#` or any carrier GT — those val
 
 | Param | Example value | Role |
 |-------|---------------|------|
-| Redirect USSD (`map2map_gt`) | e.g. `*875#` | Outbound UnstructuredSS-Request **string** (any code) |
+| Redirect USSD (`map2map_gt`) | e.g. `*875#` | Outbound processUnstructuredSS-Request **string** (any code) |
 | Hop dest GT (`hop_dest_gt`) | e.g. `251971200201` | SCCP **CalledParty** GT when fixed peer (optional) |
 | Hop dest SSN (`hop_dest_ssn`) | e.g. `6` | CalledParty SSN (default 6); alone with Re-route = SSN for upper-gt |
 | MO dial (lab) | e.g. `*804#` or dedicated lab code | One example rule with `reroute_enable=true` |
@@ -117,8 +128,10 @@ prefix. One mark rule can cover both short and long (e.g. `*101` matches `*101#`
 
 | `hop_dest_gt` | Routing |
 |---------------|---------|
-| blank | `UnstructuredSS-Request` → **`ussd.hlr.upper-gt`** + SSN (`hop_dest_ssn` or 6); no IMSI; **no SRI** |
-| set (e.g. `251971200201`) | Direct hop to that GT + `hop_dest_ssn` (default 6); USSD = redirect; **no IMSI**; **no SRI** |
+| blank | `processUnstructuredSS-Request` (op **59**) → **`ussd.hlr.upper-gt`** + SSN (`hop_dest_ssn` or 6); destRef+component = MSISDN; Calling SSN **6**; **no SRI** |
+| set (e.g. `251971200201`) | Same op **59** hop to that GT + `hop_dest_ssn` (default 6); USSD = redirect; **no SRI** |
+
+Ethio Brook wire (2026-08-09): hop is **not** `unstructuredSS-Request` (op 60). Op 60 is the UE menu leg after hop/AS. Digicom prove must show hop Begin **op 59**, Calling SSN **6**, destReference MSISDN.
 
 Fail-closed: unusable/blank/self-loop upper GT when hop dest blank (`MAP2MAP_UPPER_GT_FAIL`);
 blank hop GT digits when hop_dest set (`MAP2MAP_HOP_DEST_FAIL`).
@@ -142,10 +155,12 @@ MAP2MAP Case 2 does **not** increment `map2map.hopSri` / `map2map.hopFake`.
 
 ## Bridge / AdaptiveTimeout / stay-on-call
 
-Re-route **arms at hop ingress** (`MapUssdParentSbb` map2map branch):
-`adaptiveBridgeArm=true` + `startAwaitingAs` → session `AWAITING_AS` with EWMA gate
-deadline **before** outbound redirect USSD. That is stay-on-call: UE dialog is gated by
-AdaptiveTimeout / Virtual Bridge, not hard TC-END at hop start.
+Re-route (`MapUssdParentSbb` map2map branch): persist `adaptiveBridgeArm=true` at ingress
+**without** arming the gate; after hop UnstructuredSS is sent → `armGateAfterHopSent` /
+`startAwaitingAs(…, "hop")` → CDR `GATE_ARMED` with deadline = configured
+`ussd.bridge.async-gate-timeout-ms` ceiling (default **25s**), **not** EWMA×1.5.
+Stay-on-call = that budget; UE async-wait only if gate **fires** (`BRIDGED`) after the full
+ceiling elapses with hop/AS still silent. Observed EWMA is still recorded for CDR/admin.
 
 | When gate fires | UE | AS |
 |-----------------|----|----|
@@ -160,23 +175,57 @@ Hop completion (`Map2MapCompletionService`):
 TTL: `max(ussd.map2map.pending-ttl-ms, dialogTimeoutMs)`; TTL after bridge does not
 double `replyAndEnd` (`MAP2MAP_TIMEOUT_AFTER_BRIDGE`).
 
+## MO hold while hop outstanding
+
+While outbound hop UnstructuredSS is on the wire (`VirtualSession.map2mapHopOutstanding=true`
+persisted on `ussdTx`), MO must **not** `replyAndEnd` until hop terminal (Response / Abort /
+Reject / Timeout) clears the flag:
+
+| Path | Behaviour while hop outstanding |
+|------|----------------------------------|
+| `UssdSagaCoordinator` AS empty/fail | CDR `MAP2MAP_MO_HOLD` — no MO end |
+| `VirtualSessionBridge` hard gate (`!bridge`) | CDR `MAP2MAP_MO_HOLD` — no MO end |
+| `VirtualSessionBridge` AS END/ABORT | CDR `MAP2MAP_MO_HOLD` — restore `AWAITING_AS` |
+| Gate with bridge armed | **Allowed** — `BRIDGED` async-wait (stay-on-call) |
+
+Brook note: gsm_map filter may hide TC-Abort; packet order that looks like
+`returnResultLast` without hop Response is often MO hard-fail after hop Abort + AS empty —
+still two TCAP dialogs; enforce hop-terminal before MO end.
+
+## Per-MSISDN `ussdUser` profile (durable last MAP2MAP TX)
+
+| Field | Meaning |
+|-------|---------|
+| PK `msisdn` | Digits-only subscriber id |
+| `lastCorrId` / `lastShortCode` / `lastRedirectUssd` | Last dialed rule + redirect |
+| `lastHopDestGt` / `lastHopDestSsn` | Last hop CalledParty |
+| `lastHopOutcome` | `pending` \| `text` \| `reject` \| `abort` \| `empty` \| … |
+| `lastGateMs` / `lastEwmaMs` | Last AdaptiveTimeout budget + observed EWMA |
+| `map2mapTxCount` | Count of terminal hop outcomes (not `pending`) |
+| `lastUpdatedAtMs` | Wall clock of last stamp |
+
+Written at hop-arm (`pending`) and hop-complete (terminal outcome). **Not** Digicom JDBC —
+ProfileFacility in-process (same family as `ussdTx`). **JVM-local until clustering** — does not
+survive process restart or cross-node (see [lessons.md](../agents/lessons.md) · Digicom redeploy).
+
 ## Telemetry / CDR
 
 | Key / status | Meaning |
 |--------------|---------|
-| `map2map.armed` | Rule armed MAP2MAP + bridge at hop ingress |
+| `map2map.armed` | Rule queued MAP2MAP hop (`MAP2MAP_ARMED`; gate not yet armed) |
 | `map2map.hopStarted` | Live hop started (SS7 up) |
 | `map2map.hopFixedGt` / `hopUpperGt` | Explicit hop_dest vs upper-gt fallback |
 | `map2map.hopFake` / `hopSri` | Legacy (Case 2 does not increment) |
 | `map2map.hopOk` / `asRouted` | Hop complete + AS pull routed |
 | `map2map.gatedDuringHop` | Adaptive gate fired while pending MAP2MAP still open |
-| `MAP2MAP_ARMED` | Bridge + AdaptiveTimeout armed at hop ingress |
+| `MAP2MAP_ARMED` | Case 2 hop queued (redirect + path); AdaptiveTimeout not armed yet |
 | `MAP2MAP_HOP_START` | Case 2 hop started (`path=fixed` or `path=upper-gt`) |
-| `MAP2MAP_USSD_SENT` | Outbound UnstructuredSS toward hop GT |
-| `MAP2MAP_GATED_HOP` | Gate fired during hop (also classic `GATED`/`BRIDGED`) |
+| `MAP2MAP_USSD_SENT` | Outbound UnstructuredSS toward hop GT (gate armed just before/with this) |
+| `MAP2MAP_GATED_HOP` | Gate fired during hop (also classic `BRIDGED`) |
 | `MAP2MAP_OK` / `MAP2MAP_COMPLETE_AFTER_GATE` | Hop done → AS pull (re-arm vs already S1_RELEASED) |
 | `MAP2MAP_TIMEOUT` / `MAP2MAP_TIMEOUT_AFTER_BRIDGE` | Hop TTL / REJECT / abort — still AS-pulls empty hop then (if AS route fails) hard-fail UE |
-| `GATED` / `BRIDGED` / `GATE_EXPIRED` | AdaptiveTimeout / Virtual bridge / NI park |
+| `GATE_ARMED` / `BRIDGED` / `GATE_EXPIRED` | Budget armed (not fired) / UE async-wait / NI park |
+| `MAP2MAP_MO_HOLD` | MO end deferred — hop still outstanding |
 | `GATED_AS_NOTIFY` / `GATED_AS_ACK` / `GATED_AS_FAIL` | Gated XmlMAPDialog POST to AS |
 
 Detail pipe fields: `sc|redirect|dialed|hopGt|hopSsn|path|…`. Columns `gate_ms` / `observed_ewma_ms` via `CdrDbFlusher`. Admin filter: `/admin/cdr?status=MAP2MAP_*` or `GATED*`. Catalog: `CdrStatuses` + `Map2MapCdr`.

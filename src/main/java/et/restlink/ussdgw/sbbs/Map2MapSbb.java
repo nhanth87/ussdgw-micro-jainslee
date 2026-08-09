@@ -19,12 +19,13 @@ import com.microjainslee.api.annotations.InjectRa;
 /**
  * MAP-to-MAP hop for MO pull — <strong>Case 2</strong> (no SRI):
  * <ol>
- *   <li>When rule {@code hopDestGt} is set: UnstructuredSS-Request toward that GT/SSN
- *       (default SSN 6) with redirect USSD</li>
+ *   <li>When rule {@code hopDestGt} is set: processUnstructuredSS-Request (op 59) toward that
+ *       GT/SSN (default SSN 6; Calling SSN 6) with redirect USSD + MSISDN destRef/component</li>
  *   <li>When hop dest blank: same hop toward HLR Face {@code ussd.hlr.upper-gt} + SSN 6
  *       (or per-rule {@code hopDestSsn} when set alone) — <strong>not</strong> SRI/FAKE→MSC</li>
- *   <li>On UnstructuredSS-Response: {@link et.restlink.ussdgw.service.Map2MapCompletionService}
- *       sync HTTP AS pull (bridge/AdaptiveTimeout armed at ingress), then AS text on MO dialog</li>
+ *   <li>On processUnstructuredSS-Response (or legacy UnstructuredSS-Response):
+ *       {@link et.restlink.ussdgw.service.Map2MapCompletionService}
+ *       sync HTTP AS pull (bridge/AdaptiveTimeout armed after hop on wire), then AS text on MO</li>
  * </ol>
  *
  * <p>Case 1 HLR face SRI ({@link SriSbb} / NI) is untouched. Live fail-closed: blank/loop upper GT;
@@ -113,8 +114,8 @@ public final class Map2MapSbb implements Sbb, SleeEventHandler {
     }
 
     /**
-     * Fixed hop dest GT/SSN (service-provider peer, often SSN 6): UnstructuredSS-Request
-     * toward that address with redirect USSD; no IMSI destRef / no SRI.
+     * Fixed hop dest GT/SSN (service-provider peer, often SSN 6): processUnstructuredSS-Request
+     * toward that address with redirect USSD; MSISDN destRef/component; no SRI.
      */
     private String startHopViaFixedGt(Map2MapRequestEvent req, String ussdCode) {
         String destGt = req.hopDestGtDigits();
@@ -132,7 +133,7 @@ public final class Map2MapSbb implements Sbb, SleeEventHandler {
     }
 
     /**
-     * Case 2 default: UnstructuredSS-Request toward HLR Face {@code ussd.hlr.upper-gt}
+     * Case 2 default: processUnstructuredSS-Request toward HLR Face {@code ussd.hlr.upper-gt}
      * (SSN from per-rule hopDestSsn when set, else 6). Fail-closed if GT blank/self-loop.
      * Does <strong>not</strong> SRI or FAKE→MSC (Case 1 NI / SriSbb unchanged).
      */
@@ -180,7 +181,7 @@ public final class Map2MapSbb implements Sbb, SleeEventHandler {
             String msg = svc().config().asyncHardFailMessage();
             if (msg != null && !msg.isBlank()) return msg;
         } catch (Throwable ignored) { }
-        return "Service temporarily unavailable. Please try again.";
+        return "ማው ማውማው ማውማው ማውማው ማው";
     }
 
     private void writeCdr(Map2MapRequestEvent req, CdrPhase phase, String status, String detail) {

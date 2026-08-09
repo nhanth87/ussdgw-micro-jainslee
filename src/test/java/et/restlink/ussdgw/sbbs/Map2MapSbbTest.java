@@ -83,6 +83,9 @@ class Map2MapSbbTest {
         config = new UssdConfigService();
         set(config, "store", runtimeKv);
         set(config, "ussdGtProp", "251971200100");
+        set(config, "hlrSsnProp", 6);
+        set(config, "ussdSsnProp", 8);
+        set(config, "liveNetworkIdProp", 0);
         set(config, "hlrUpperGtProp", java.util.Optional.of("251971200200"));
         set(config, "hlrModeProp", "PROXY_MAP");
         set(config, "hlrFakeImsiProp", java.util.Optional.of("636010000000001"));
@@ -140,12 +143,12 @@ class Map2MapSbbTest {
         assertThat(ss7.cmds).isEmpty();
         assertThat(pending.size()).isZero();
         assertThat(routed.get()).isNotNull();
-        assertThat(routed.get().ussdString()).isEqualTo("*804#");
+        assertThat(routed.get().ussdString()).isEqualTo(Map2MapCdr.AS_USSD_HLR_NONE);
         assertThat(routed.get().originatedUssd()).isEqualTo("*804#");
         assertThat(routed.get().codeKind()).isEqualTo("SHORT");
         assertThat(routed.get().msisdn()).isEqualTo("911230398");
         assertThat(routed.get().shortCode()).isEqualTo("*804#");
-        assertThat(cdr.statuses()).contains(Map2MapCdr.SKIP_LAB, Map2MapCdr.OK);
+        assertThat(cdr.statuses()).contains(Map2MapCdr.SKIP_LAB, Map2MapCdr.AS_ROUTED);
         assertThat(cdr.details().stream().anyMatch(d -> d != null && d.contains("redirect=*8744#")))
                 .isTrue();
     }
@@ -174,10 +177,11 @@ class Map2MapSbbTest {
         assertThat(ss7.cmds).hasSize(1);
         assertThat(ss7.cmds.get(0)).isInstanceOf(Ss7Command.MapUnstructuredSsRequest.class);
         var ussd = (Ss7Command.MapUnstructuredSsRequest) ss7.cmds.get(0);
+        assertThat(ussd.processUnstructured()).isTrue();
         assertThat(ussd.dialogId()).isEqualTo("m2m-corr2");
         assertThat(ussd.targetAddress().globalTitle()).isEqualTo("251971200200");
         assertThat(ussd.targetAddress().subSystemNumber()).isEqualTo(6);
-        assertThat(ussd.imsi()).isNull();
+        assertThat(ussd.msisdn()).isEqualTo("911230398");
         assertThat(ussd.text()).isEqualTo("*8744#");
         assertThat(routed.get()).isNull();
         assertThat(cdr.statuses()).contains(Map2MapCdr.HOP_START, Map2MapCdr.USSD_SENT);
@@ -210,8 +214,9 @@ class Map2MapSbbTest {
         assertThat(ss7.cmds).hasSize(1);
         assertThat(ss7.cmds.get(0)).isInstanceOf(Ss7Command.MapUnstructuredSsRequest.class);
         var ussd = (Ss7Command.MapUnstructuredSsRequest) ss7.cmds.get(0);
+        assertThat(ussd.processUnstructured()).isTrue();
         assertThat(ussd.targetAddress().globalTitle()).isEqualTo("251971200200");
-        assertThat(ussd.imsi()).isNull();
+        assertThat(ussd.msisdn()).isEqualTo("911230398");
         assertThat(ussd.text()).isEqualTo("*8744#");
         assertThat(pending.peek("m2m-corr3")).isPresent()
                 .get().extracting(PendingMap2MapRegistry.Pending::phase)
@@ -263,8 +268,9 @@ class Map2MapSbbTest {
         sbb.onEvent(req, container.createActivityContext("t5"));
 
         var ussd = (Ss7Command.MapUnstructuredSsRequest) ss7.cmds.get(0);
+        assertThat(ussd.processUnstructured()).isTrue();
         assertThat(ussd.targetAddress().globalTitle()).isEqualTo("251971200200");
-        assertThat(ussd.imsi()).isNull();
+        assertThat(ussd.msisdn()).isEqualTo("911230398");
     }
 
     @Test
@@ -311,6 +317,7 @@ class Map2MapSbbTest {
         sbb.onEvent(req, container.createActivityContext("t-ssn"));
 
         var ussd = (Ss7Command.MapUnstructuredSsRequest) ss7.cmds.get(0);
+        assertThat(ussd.processUnstructured()).isTrue();
         assertThat(ussd.targetAddress().globalTitle()).isEqualTo("251971200200");
         assertThat(ussd.targetAddress().subSystemNumber()).isEqualTo(8);
     }
@@ -331,7 +338,7 @@ class Map2MapSbbTest {
         assertThat(session.adaptiveBridgeArm()).isTrue();
         assertThat(routed.get().originatedUssd()).isEqualTo("*101123456#");
         assertThat(routed.get().codeKind()).isEqualTo("LONG");
-        assertThat(routed.get().ussdString()).isEqualTo("*101123456#"); // empty hop → dialed
+        assertThat(routed.get().ussdString()).isEqualTo(Map2MapCdr.AS_USSD_HLR_NONE);
     }
 
 
@@ -358,11 +365,13 @@ class Map2MapSbbTest {
         assertThat(ss7.cmds).hasSize(1);
         assertThat(ss7.cmds.get(0)).isInstanceOf(Ss7Command.MapUnstructuredSsRequest.class);
         var ussd = (Ss7Command.MapUnstructuredSsRequest) ss7.cmds.get(0);
+        assertThat(ussd.processUnstructured()).isTrue();
         assertThat(ussd.dialogId()).isEqualTo("m2m-corr-sp");
         assertThat(ussd.targetAddress().globalTitle()).isEqualTo("251971200201");
         assertThat(ussd.targetAddress().subSystemNumber()).isEqualTo(6);
+        assertThat(ussd.localAddress().subSystemNumber()).isEqualTo(6);
         assertThat(ussd.text()).isEqualTo("*875#");
-        assertThat(ussd.imsi()).isNull();
+        assertThat(ussd.msisdn()).isEqualTo("251911000001");
         assertThat(pending.peek("m2m-corr-sp")).isPresent()
                 .get().extracting(PendingMap2MapRegistry.Pending::phase)
                 .isEqualTo(PendingMap2MapRegistry.Phase.AWAITING_USSD);
@@ -396,10 +405,11 @@ class Map2MapSbbTest {
         assertThat(ss7.cmds).hasSize(1);
         assertThat(ss7.cmds.get(0)).isInstanceOf(Ss7Command.MapUnstructuredSsRequest.class);
         var ussd = (Ss7Command.MapUnstructuredSsRequest) ss7.cmds.get(0);
+        assertThat(ussd.processUnstructured()).isTrue();
         assertThat(ussd.dialogId()).isEqualTo("m2m-corr7");
         assertThat(ussd.targetAddress().globalTitle()).isEqualTo("251971200201");
         assertThat(ussd.targetAddress().subSystemNumber()).isEqualTo(6);
-        assertThat(ussd.imsi()).isNull();
+        assertThat(ussd.msisdn()).isEqualTo("911230398");
         assertThat(ussd.text()).isEqualTo("*875#");
         assertThat(pending.peek("m2m-corr7")).isPresent()
                 .get().extracting(PendingMap2MapRegistry.Pending::phase)
@@ -427,8 +437,34 @@ class Map2MapSbbTest {
         sbb.onEvent(req, container.createActivityContext("t8"));
 
         var ussd = (Ss7Command.MapUnstructuredSsRequest) ss7.cmds.get(0);
+        assertThat(ussd.processUnstructured()).isTrue();
         assertThat(ussd.targetAddress().subSystemNumber()).isEqualTo(6);
         assertThat(ussd.text()).isEqualTo("*875#");
+    }
+
+    @Test
+    void labMoNetworkId1HopUsesLiveNetworkId0() {
+        set(services, "linkStatus", new LinkStatusService() {
+            @Override
+            public boolean ss7Live() {
+                return true;
+            }
+        });
+        // MO arrived on lab SCCP plane (networkId=1); hop must still use live plane 0.
+        Map2MapRequestEvent req = new Map2MapRequestEvent(
+                "corr-lab", "m2m-corr-lab", "dlg-lab", 1L, "911230398", "*804#", "*804#",
+                "*875#", "http://as/userinfo", RuleType.HTTP, 1, null, "vs-lab", "req-lab",
+                false, null, "251971200201", null);
+
+        sbb.onEvent(req, container.createActivityContext("t-lab"));
+
+        assertThat(ss7.cmds).hasSize(1);
+        var ussd = (Ss7Command.MapUnstructuredSsRequest) ss7.cmds.get(0);
+        assertThat(ussd.processUnstructured()).isTrue();
+        assertThat(ussd.networkId()).isEqualTo(0);
+        assertThat(ussd.targetAddress().globalTitle()).isEqualTo("251971200201");
+        assertThat(cdr.details().stream().anyMatch(d -> d != null && d.contains("hopNet=0")
+                && d.contains("moNet=1"))).isTrue();
     }
 
     @Test
@@ -448,6 +484,7 @@ class Map2MapSbbTest {
 
         assertThat(ss7.cmds.get(0)).isInstanceOf(Ss7Command.MapUnstructuredSsRequest.class);
         var ussd = (Ss7Command.MapUnstructuredSsRequest) ss7.cmds.get(0);
+        assertThat(ussd.processUnstructured()).isTrue();
         assertThat(ussd.targetAddress().globalTitle()).isEqualTo("251971200200");
         assertThat(ss7.cmds.stream().noneMatch(c -> c instanceof Ss7Command.MapSendRoutingInfoForSm)).isTrue();
     }

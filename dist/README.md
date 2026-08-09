@@ -1,4 +1,4 @@
-# Digicom-ET USSDGW — ship this folder
+# nhanth87 USSDGW — ship this folder
 
 Self-contained Quarkus **fast-jar** runtime for **ussdgw-jainslee** (OTA parity).
 

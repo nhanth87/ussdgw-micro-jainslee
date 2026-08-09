@@ -54,9 +54,27 @@ public class VirtualSessionBridge {
         }
     }
 
+    /** Arm AdaptiveTimeout for AS pull (default phase label {@code as}). */
     public void startAwaitingAs(VirtualSession session) {
+        startAwaitingAs(session, "as");
+    }
+
+    /**
+     * Arm AdaptiveTimeout budget and stamp {@link et.restlink.ussdgw.cdr.CdrStatuses#GATE_ARMED}
+     * (countdown started — <em>not</em> UE async-wait). Gate <em>fires</em> later as
+     * {@code BRIDGED} / {@code GATE_EXPIRED} if still waiting when the deadline elapses.
+     *
+     * <p>Budget = configured {@code ussd.bridge.async-gate-timeout-ms} ceiling (default 25s),
+     * not EWMA×1.5. EWMA is still sampled on AS response for telemetry only.
+     *
+     * <p>{@code gatePhase}: {@code hop} = RE_ROUTE after hop USSD sent; {@code as} = classic
+     * AS pull / re-arm after hop text.
+     */
+    public void startAwaitingAs(VirtualSession session, String gatePhase) {
+        // Live budget = config ceiling (never EWMA shrink). Observed EWMA stays for CDR/admin.
         long gate = adaptive.effectiveGateMs(
-                session.networkId(), config.asyncGateTimeoutMs(), config.dialogTimeoutMs());
+                session.networkId(), session.msisdn(),
+                config.asyncGateTimeoutMs(), config.dialogTimeoutMs());
         session.setGateMs(gate);
         // Wall clock only for the durable deadline (must survive a restart) and the CDR;
         // the latency sample that feeds the EWMA is taken from the monotonic clock.
@@ -65,8 +83,11 @@ public class VirtualSessionBridge {
         session.setGateDeadlineMs(session.pullStartedAtMs() + gate);
         session.setState(VirtualSessionState.AWAITING_AS);
         persist(session);
-        cdrWrite(session, CdrPhase.S1_ACTIVE, "GATED",
-                "service=VirtualSessionBridge|AdaptiveTimeout gateMs=" + gate);
+        String phase = gatePhase == null || gatePhase.isBlank() ? "as" : gatePhase.trim();
+        cdrWrite(session, CdrPhase.S1_ACTIVE, et.restlink.ussdgw.cdr.CdrStatuses.GATE_ARMED,
+                "service=VirtualSessionBridge|AdaptiveTimeout|gateMs=" + gate
+                        + "|gateRole=budget|gateBudget=ceiling|phase=" + phase
+                        + "|note=armed-not-fired");
     }
 
     /**
@@ -134,6 +155,16 @@ public class VirtualSessionBridge {
     public boolean onGateExpired(VirtualSession s) {
         if (s == null || s.state() != VirtualSessionState.AWAITING_AS) return false;
         boolean arm = config.bridgeEnabled() && s.adaptiveBridgeArm();
+        // Hard-fail path must not replyAndEnd MO while MAP2MAP hop is still outstanding
+        // (Brook: Abort/Reject is the hop terminal — hold until clearMap2mapHopOutstanding).
+        // Stay-on-call (arm=true → BRIDGED async-wait) during hop is still allowed.
+        if (!arm && s.map2mapHopOutstanding() && s.originationType() == OriginationType.MAP) {
+            LOG.warn("Gate hard-fail deferred — MAP2MAP hop outstanding corr={}",
+                    s.correlationId());
+            cdrWrite(s, CdrPhase.S1_ACTIVE, "MAP2MAP_MO_HOLD",
+                    "service=VirtualSessionBridge|hopOutstanding|gate=no-bridge");
+            return false;
+        }
         // Re-load + CAS so concurrent ticks and AS responses do not double-bridge.
         Optional<VirtualSession> cas = store.compareAndTransition(
                 s.correlationId(),
@@ -144,7 +175,7 @@ public class VirtualSessionBridge {
         boolean mapPlane = cur.originationType() == OriginationType.MAP;
         RaCommandPort port = mapPlane ? ss7() : null;
         String jsession = lookupJsession(cur.correlationId());
-        Long ewma = observedEwmaMs(cur.networkId());
+        Long ewma = observedEwmaMs(cur);
         if (!arm) {
             if (mapPlane && cur.dialogAlive()) {
                 MapDialogHelper.replyAndEnd(port, cur.dialogId(), cur.invokeId(),
@@ -250,7 +281,8 @@ public class VirtualSessionBridge {
             }
         }
         if (sample > 0) {
-            adaptive.recordLatency(s.networkId(), sample, config.dialogTimeoutMs());
+            // Keep per-user + network EWMA for telemetry / observed_ewma_ms (not live gate).
+            adaptive.recordLatency(s.networkId(), s.msisdn(), sample, config.dialogTimeoutMs());
         }
     }
 
@@ -263,6 +295,17 @@ public class VirtualSessionBridge {
         // reply on the synthetic/parked dialog (MapNiPush owns the next UnstructuredSS-Request).
         boolean httpNi = niHttpPark != null && niHttpPark.isHttpNi(s.correlationId());
         if (s.originationType() == OriginationType.MAP && !httpNi) {
+            // MAP2MAP: AS END/ABORT must wait for hop terminal (never end MO early).
+            if (s.map2mapHopOutstanding()
+                    && (action == AsAction.END || action == AsAction.ABORT)) {
+                LOG.warn("AS {} deferred — MAP2MAP hop outstanding corr={}",
+                        action, s.correlationId());
+                s.setState(VirtualSessionState.AWAITING_AS);
+                persist(s);
+                cdrWrite(s, CdrPhase.S1_ACTIVE, "MAP2MAP_MO_HOLD",
+                        "service=VirtualSessionBridge|hopOutstanding|asAction=" + action);
+                return;
+            }
             switch (action) {
                 case CONTINUE -> {
                     MapDialogHelper.replyContinue(port, s.dialogId(), s.invokeId(),
@@ -323,11 +366,14 @@ public class VirtualSessionBridge {
         cdr.write(s.correlationId(), phase, s.msisdn(), s.shortCode(), status, detail,
                 s.networkId(), s.tenantId(), s.originationType().name(),
                 s.gateMs() > 0 ? s.gateMs() : null,
-                observedEwmaMs(s.networkId()));
+                observedEwmaMs(s));
     }
 
-    private Long observedEwmaMs(int networkId) {
-        double v = adaptive == null ? 0d : adaptive.observedLatencyMs(networkId);
+    private Long observedEwmaMs(VirtualSession s) {
+        if (adaptive == null || s == null) {
+            return null;
+        }
+        double v = adaptive.observedLatencyMs(s.networkId(), s.msisdn());
         return v > 0d ? Math.round(v) : null;
     }
 

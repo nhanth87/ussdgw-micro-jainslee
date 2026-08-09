@@ -67,58 +67,58 @@
           <div>
             <label class="block text-xs uppercase tracking-wider text-ink-mute">tenantId</label>
             <input name="tenantId" required placeholder="ethio-1"
-                   class="mt-1 w-full rounded-md border border-ink-line bg-ink px-3 py-2 text-sm focus:border-signal focus:outline-none focus:ring-1 focus:ring-signal/40"/>
+                   class="mt-1 w-full rounded-md border border-ink-line bg-ink-panel px-3 py-2 text-sm focus:border-signal focus:outline-none focus:ring-1 focus:ring-signal/40"/>
           </div>
           <div>
             <label class="block text-xs uppercase tracking-wider text-ink-mute">Display name</label>
             <input name="displayName"
-                   class="mt-1 w-full rounded-md border border-ink-line bg-ink px-3 py-2 text-sm focus:border-signal focus:outline-none focus:ring-1 focus:ring-signal/40"/>
+                   class="mt-1 w-full rounded-md border border-ink-line bg-ink-panel px-3 py-2 text-sm focus:border-signal focus:outline-none focus:ring-1 focus:ring-signal/40"/>
           </div>
           <div>
             <label class="block text-xs uppercase tracking-wider text-ink-mute">networkId (logical / CDR)</label>
             <input name="networkId" type="number" min="0" value="0"
-                   class="mt-1 w-full rounded-md border border-ink-line bg-ink px-3 py-2 text-sm focus:border-signal focus:outline-none focus:ring-1 focus:ring-signal/40"/>
+                   class="mt-1 w-full rounded-md border border-ink-line bg-ink-panel px-3 py-2 text-sm focus:border-signal focus:outline-none focus:ring-1 focus:ring-signal/40"/>
           </div>
           <div>
             <label class="block text-xs uppercase tracking-wider text-ink-mute">HTTP API key (blank = generate)</label>
             <input name="httpApiKey" autocomplete="off"
-                   class="mt-1 w-full rounded-md border border-ink-line bg-ink px-3 py-2 font-mono text-sm focus:border-signal focus:outline-none focus:ring-1 focus:ring-signal/40"/>
+                   class="mt-1 w-full rounded-md border border-ink-line bg-ink-panel px-3 py-2 font-mono text-sm focus:border-signal focus:outline-none focus:ring-1 focus:ring-signal/40"/>
           </div>
           <div>
             <label class="block text-xs uppercase tracking-wider text-ink-mute">SMPP systemId</label>
             <input name="smppSystemId"
-                   class="mt-1 w-full rounded-md border border-ink-line bg-ink px-3 py-2 font-mono text-sm focus:border-signal focus:outline-none focus:ring-1 focus:ring-signal/40"/>
+                   class="mt-1 w-full rounded-md border border-ink-line bg-ink-panel px-3 py-2 font-mono text-sm focus:border-signal focus:outline-none focus:ring-1 focus:ring-signal/40"/>
           </div>
           <div>
             <label class="block text-xs uppercase tracking-wider text-ink-mute">SMPP password (write-only)</label>
             <input name="smppPassword" type="password" autocomplete="new-password"
-                   class="mt-1 w-full rounded-md border border-ink-line bg-ink px-3 py-2 text-sm focus:border-signal focus:outline-none focus:ring-1 focus:ring-signal/40"/>
+                   class="mt-1 w-full rounded-md border border-ink-line bg-ink-panel px-3 py-2 text-sm focus:border-signal focus:outline-none focus:ring-1 focus:ring-signal/40"/>
           </div>
           <div>
             <label class="block text-xs uppercase tracking-wider text-ink-mute">AS callback base</label>
             <input name="asCallbackBase" placeholder="https://as.example/ussd/cb"
-                   class="mt-1 w-full rounded-md border border-ink-line bg-ink px-3 py-2 text-sm focus:border-signal focus:outline-none focus:ring-1 focus:ring-signal/40"/>
+                   class="mt-1 w-full rounded-md border border-ink-line bg-ink-panel px-3 py-2 text-sm focus:border-signal focus:outline-none focus:ring-1 focus:ring-signal/40"/>
           </div>
           <div>
             <label class="block text-xs uppercase tracking-wider text-ink-mute">maxTps</label>
             <input name="maxTps" type="number" min="1" value="50"
-                   class="mt-1 w-full rounded-md border border-ink-line bg-ink px-3 py-2 text-sm focus:border-signal focus:outline-none focus:ring-1 focus:ring-signal/40"/>
+                   class="mt-1 w-full rounded-md border border-ink-line bg-ink-panel px-3 py-2 text-sm focus:border-signal focus:outline-none focus:ring-1 focus:ring-signal/40"/>
           </div>
           <div>
             <label class="block text-xs uppercase tracking-wider text-ink-mute">HTTP AS wire</label>
-            <select name="httpAsWireFormat" class="mt-1 w-full rounded-md border border-ink-line bg-ink px-3 py-2 text-sm focus:border-signal focus:outline-none">
+            <select name="httpAsWireFormat" class="mt-1 w-full rounded-md border border-ink-line bg-ink-panel px-3 py-2 text-sm focus:border-signal focus:outline-none">
               <option value="XML" selected>XML</option>
               <option value="JSON">JSON</option>
             </select>
           </div>
           <div>
             <label class="block text-xs uppercase tracking-wider text-ink-mute">SIP trunk</label>
-            <select name="sipTrunkId" class="mt-1 w-full rounded-md border border-ink-line bg-ink px-3 py-2 text-sm focus:border-signal focus:outline-none">{{SIP_TRUNK_OPTS}}</select>
+            <select name="sipTrunkId" class="mt-1 w-full rounded-md border border-ink-line bg-ink-panel px-3 py-2 text-sm focus:border-signal focus:outline-none">{{SIP_TRUNK_OPTS}}</select>
             <p class="mt-1 text-xs text-ink-mute">AS-facing trunk for RuleType.SIP pull / NI push ownership</p>
           </div>
           <div>
             <label class="block text-xs uppercase tracking-wider text-ink-mute">enabled</label>
-            <select name="enabled" class="mt-1 w-full rounded-md border border-ink-line bg-ink px-3 py-2 text-sm focus:border-signal focus:outline-none">
+            <select name="enabled" class="mt-1 w-full rounded-md border border-ink-line bg-ink-panel px-3 py-2 text-sm focus:border-signal focus:outline-none">
               <option value="true">true</option>
               <option value="false">false</option>
             </select>

@@ -22,6 +22,9 @@ public final class CdrRecord {
     public String originationType;
     public Long gateMs;
     public Long observedEwmaMs;
+    public String hopOutcome;
+    public String refuseReason;
+    public String asUssd;
 
     public static CdrRecord fromEntity(CdrEntity e) {
         CdrRecord r = new CdrRecord();
@@ -39,6 +42,9 @@ public final class CdrRecord {
         r.originationType = e.originationType;
         r.gateMs = e.gateMs;
         r.observedEwmaMs = e.observedEwmaMs;
+        r.hopOutcome = e.hopOutcome;
+        r.refuseReason = e.refuseReason;
+        r.asUssd = e.asUssd;
         return r;
     }
 }

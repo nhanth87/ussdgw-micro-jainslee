@@ -31,6 +31,7 @@ public final class UssdTxProfileMapper {
         p.setInvokeId(s.invokeId());
         p.setDialogAlive(s.dialogAlive());
         p.setAdaptiveBridgeArm(s.adaptiveBridgeArm());
+        p.setMap2mapHopOutstanding(s.map2mapHopOutstanding());
         p.setMscGt(s.mscGt());
         p.setImsi(s.imsi());
         p.setLocalGt(s.localGt());
@@ -90,6 +91,9 @@ public final class UssdTxProfileMapper {
         }
         if (p.getAdaptiveBridgeArm() != null) {
             s.setAdaptiveBridgeArm(p.getAdaptiveBridgeArm());
+        }
+        if (p.getMap2mapHopOutstanding() != null) {
+            s.setMap2mapHopOutstanding(p.getMap2mapHopOutstanding());
         }
         s.setMscGt(p.getMscGt());
         s.setImsi(p.getImsi());

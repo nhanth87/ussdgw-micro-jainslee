@@ -37,27 +37,41 @@ html[data-theme="light"] {
   --header-bg: rgba(238, 241, 246, 0.92);
 }
 
-/* Remap Tailwind CDN ink/signal utilities so light theme stays Digicom ops (amber accent). */
+/* Remap Tailwind CDN ink/signal utilities so light theme stays Digicom ops (amber accent).
+ * Opacity variants (bg-ink/40, bg-ink-panel/40, …) are SEPARATE classes — listing .bg-ink
+ * alone leaves nested black holes on light pages (CDR ledger, dashboard tiles). */
 html[data-theme="light"] body.bg-ink,
-html[data-theme="light"] .bg-ink { background-color: var(--color-ink) !important; color: var(--color-fg); }
+html[data-theme="light"] .bg-ink,
+html[data-theme="light"] [class*="bg-ink/"] { background-color: var(--color-ink) !important; color: var(--color-fg); }
+html[data-theme="light"] .bg-ink\/90,
+html[data-theme="light"] [class~="bg-ink/90"] { background-color: var(--header-bg) !important; }
 html[data-theme="light"] .bg-ink-panel,
-html[data-theme="light"] .bg-ink-panel\/60,
-html[data-theme="light"] .bg-ink-panel\/80,
-html[data-theme="light"] .bg-ink-panel\/90 { background-color: var(--color-ink-panel) !important; }
-html[data-theme="light"] .bg-ink\/90 { background-color: var(--header-bg) !important; }
+html[data-theme="light"] [class*="bg-ink-panel"] { background-color: var(--color-ink-panel) !important; }
 html[data-theme="light"] .border-ink-line,
-html[data-theme="light"] .border-ink-line\/80 { border-color: var(--color-ink-line) !important; }
+html[data-theme="light"] [class*="border-ink-line"] { border-color: var(--color-ink-line) !important; }
 html[data-theme="light"] .text-ink-mute { color: var(--color-ink-mute) !important; }
 html[data-theme="light"] .text-signal { color: var(--color-signal) !important; }
 html[data-theme="light"] .bg-signal { background-color: var(--color-signal) !important; }
 html[data-theme="light"] .hover\:bg-signal-dim:hover { background-color: var(--color-signal-dim) !important; }
-html[data-theme="light"] .text-ink { color: var(--color-ink) !important; }
+/* text-ink on dark = near-black on amber buttons; never remap to page plate (--color-ink flips in light). */
+html[data-theme="light"] .text-ink { color: var(--color-fg-strong) !important; }
 html[data-theme="light"] .text-slate-50,
 html[data-theme="light"] .text-slate-100 { color: var(--color-fg-strong) !important; }
 html[data-theme="light"] .text-slate-200,
 html[data-theme="light"] .text-slate-300 { color: var(--color-fg-soft) !important; }
 html[data-theme="light"] .divide-ink-line > :not([hidden]) ~ :not([hidden]) {
   border-color: var(--color-ink-line);
+}
+
+/* Form controls inside form-card: use panel surface, never nested pure-black bg-ink holes. */
+.form-card input:not([type="checkbox"]):not([type="radio"]):not([type="hidden"]),
+.form-card select,
+.form-card textarea,
+.filter-bar input:not([type="checkbox"]):not([type="radio"]):not([type="hidden"]),
+.filter-bar select,
+.filter-bar textarea {
+  background-color: var(--color-ink-panel) !important;
+  color: var(--color-fg-strong);
 }
 
 .theme-toggle {
@@ -460,11 +474,18 @@ tbody.hx-table-live.htmx-settling {
 .cdr-phase-chip.cdr-spine--s1r { color: var(--color-signal); border-color: rgba(232, 163, 23, 0.35); }
 .cdr-phase-chip.cdr-spine--s2 { color: #7eb6e8; border-color: rgba(91, 155, 213, 0.4); }
 .cdr-phase-chip.cdr-spine--ok { color: var(--color-badge-ok-fg); border-color: var(--color-badge-ok-border); background: var(--color-badge-ok-bg); }
+/* Fail / timeout chips: dark ink on soft red — readable on light theme and nested panels. */
 .cdr-phase-chip.cdr-spine--fail,
 .cdr-status-chip.cdr-status--fail {
-  color: #fca5a5;
-  border-color: rgba(248, 113, 113, 0.4);
-  background: rgba(127, 29, 29, 0.35);
+  color: #0f172a;
+  border-color: #f87171;
+  background: #fecaca;
+}
+html:not([data-theme="light"]) .cdr-phase-chip.cdr-spine--fail,
+html:not([data-theme="light"]) .cdr-status-chip.cdr-status--fail {
+  color: #0f172a;
+  border-color: #f87171;
+  background: #fca5a5;
 }
 .cdr-status-chip.cdr-status--ok {
   color: var(--color-badge-ok-fg);
@@ -493,6 +514,49 @@ tbody.hx-table-live.htmx-settling {
   background: var(--color-ink-panel);
   border-radius: 0.5rem;
   padding: 0.85rem 1rem;
+}
+.cdr-digest {
+  margin: 0 0 0.85rem;
+  padding: 0.65rem 0.75rem;
+  border: 1px solid var(--color-ink-line);
+  border-radius: 0.4rem;
+  background: color-mix(in srgb, var(--color-ink-panel) 92%, var(--color-signal) 8%);
+}
+.cdr-digest-title {
+  margin: 0 0 0.5rem;
+  font-size: 0.65rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--color-signal);
+  font-family: "DM Sans", system-ui, sans-serif;
+}
+.cdr-timeline.cdr-digest {
+  margin: 0.85rem 0 0;
+}
+.cdr-record-box.cdr-digest {
+  margin: 0 0 0.85rem;
+}
+.cdr-timeline-list {
+  margin: 0;
+  padding: 0 0 0 1.1rem;
+  list-style: disc;
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+  font-size: 0.7rem;
+  color: var(--color-fg-soft);
+}
+.cdr-timeline-list li { margin: 0.35rem 0; }
+.cdr-timeline-when {
+  color: var(--color-ink-mute);
+  font-variant-numeric: tabular-nums;
+}
+.cdr-timeline-meta { color: var(--color-signal); }
+.cdr-timeline-detail {
+  display: inline-block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  vertical-align: bottom;
+  color: var(--color-ink-mute);
 }
 .cdr-detail-grid {
   display: grid;
@@ -530,4 +594,64 @@ tbody.hx-table-live.htmx-settling {
 }
 @media (prefers-reduced-motion: reduce) {
   .cdr-ledger-row { transition: none; }
+}
+
+/*
+ * Routing Live rules — Del + Edit on one horizontal row.
+ * Works for jar-rendered flex wrapper and older sibling form+a markup (html-only rsync).
+ */
+#rule-rows > tr > td:last-child {
+  white-space: nowrap;
+  vertical-align: middle;
+}
+#rule-rows > tr > td:last-child > div {
+  display: flex;
+  flex-direction: row;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 0.25rem;
+  white-space: nowrap;
+}
+#rule-rows > tr > td:last-child form {
+  display: inline;
+  margin: 0;
+}
+#rule-rows > tr > td:last-child button[type="submit"] {
+  display: inline-flex;
+  align-items: center;
+  border: none;
+  border-radius: 0.375rem;
+  background-color: #dc2626; /* red-600 */
+  color: #fff;
+  padding: 0.25rem 0.5rem;
+  font-size: 0.65rem;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+#rule-rows > tr > td:last-child button[type="submit"]:hover {
+  background-color: #ef4444; /* red-500 */
+}
+#rule-rows > tr > td:last-child > a,
+#rule-rows > tr > td:last-child > div > a {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 0.375rem;
+  background-color: #fbbf24; /* amber-400 */
+  color: #0c1220;
+  padding: 0.25rem 0.5rem;
+  font-size: 0.65rem;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  text-decoration: none;
+}
+#rule-rows > tr > td:last-child > a:hover,
+#rule-rows > tr > td:last-child > div > a:hover {
+  background-color: #fcd34d; /* amber-300 */
+}
+html[data-theme="light"] #rule-rows > tr > td:last-child > a,
+html[data-theme="light"] #rule-rows > tr > td:last-child > div > a {
+  color: #0f172a;
 }

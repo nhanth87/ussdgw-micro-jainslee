@@ -38,10 +38,12 @@ public class CdrDbFlusher {
     static final String INSERT_SQL = """
             INSERT INTO ussd_cdr (
                 id, recorded_at, correlation_id, phase, status, msisdn, short_code, detail,
-                network_id, tenant_id, origination_type, gate_ms, observed_ewma_ms, csv_line
+                network_id, tenant_id, origination_type, gate_ms, observed_ewma_ms,
+                hop_outcome, refuse_reason, as_ussd, csv_line
             ) VALUES (
                 ?, ?, ?, ?, ?, ?, ?, ?,
-                ?, ?, ?, ?, ?, ?
+                ?, ?, ?, ?, ?,
+                ?, ?, ?, ?
             )
             """;
 
@@ -156,7 +158,10 @@ public class CdrDbFlusher {
         setNullableString(ps, 11, row.originationType);
         setNullableLong(ps, 12, row.gateMs);
         setNullableLong(ps, 13, row.observedEwmaMs);
-        ps.setString(14, row.csvLine);
+        setNullableString(ps, 14, row.hopOutcome);
+        setNullableString(ps, 15, row.refuseReason);
+        setNullableString(ps, 16, row.asUssd);
+        ps.setString(17, row.csvLine);
     }
 
     private static void setNullableString(PreparedStatement ps, int idx, String v) throws SQLException {

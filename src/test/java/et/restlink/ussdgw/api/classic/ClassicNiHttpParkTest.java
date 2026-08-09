@@ -115,7 +115,7 @@ class ClassicNiHttpParkTest {
 
         assertThat(rec.appliedGateMs()).isGreaterThanOrEqualTo(AdaptiveTimeout.FLOOR_MS);
         assertThat(cdr.gateMs).isEqualTo(rec.appliedGateMs());
-        assertThat(cdr.status).isEqualTo("GATED");
+        assertThat(cdr.status).isEqualTo(et.restlink.ussdgw.cdr.CdrStatuses.GATE_ARMED);
         assertThat(cdr.phase.name()).isEqualTo("S1_ACTIVE");
         assertThat(cdr.detail).contains("AdaptiveTimeout");
     }

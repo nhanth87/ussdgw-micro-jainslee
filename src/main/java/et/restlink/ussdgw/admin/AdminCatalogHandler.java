@@ -36,9 +36,20 @@ import java.util.Optional;
 @ApplicationScoped
 public class AdminCatalogHandler {
     private static final String TD = " class=\"px-3 py-2\"";
+    /** Muted outline — tenants/users Del (single action). */
     private static final String DEL_BTN =
             "rounded-md border border-ink-line px-2 py-1 text-[0.65rem] uppercase tracking-wider "
                     + "text-ink-mute hover:border-signal hover:text-signal";
+    /** Live rules Del — red fill, keep beside Edit on one row. */
+    private static final String RULE_DEL_BTN =
+            "inline-flex items-center rounded-md bg-red-600 px-2 py-1 text-[0.65rem] font-semibold "
+                    + "uppercase tracking-wider text-white hover:bg-red-500";
+    /** Live rules Edit — amber/yellow fill (signal-adjacent). */
+    private static final String RULE_EDIT_BTN =
+            "inline-flex items-center rounded-md bg-amber-400 px-2 py-1 text-[0.65rem] font-semibold "
+                    + "uppercase tracking-wider text-ink hover:bg-amber-300";
+    private static final String RULE_ACTIONS =
+            "flex flex-row flex-nowrap items-center gap-1 whitespace-nowrap";
     /** Digicom host SoT tenant id (live NI push brand); prefer over inventing digicom-et. */
     static final String PREFERRED_TENANT_ID = "digicom-push";
     /** Alias brand id — select if present; never invent a second tenant. */
@@ -46,7 +57,7 @@ public class AdminCatalogHandler {
     /** Digicom seeded NI app user under digicom-push. */
     static final String PREFERRED_APP_USERNAME = "ni-push";
     private static final String SELECT_CLS =
-            "mt-1 w-full rounded-md border border-ink-line bg-ink px-3 py-2 text-sm "
+            "mt-1 w-full rounded-md border border-ink-line bg-ink-panel px-3 py-2 text-sm "
                     + "focus:border-signal focus:outline-none";
 
     @Inject ShortCodeRoutingService routing;
@@ -90,9 +101,34 @@ public class AdminCatalogHandler {
     }
 
     public Map<String, String> routingPageVars(AdminAuthService.Principal who) {
+        return routingPageVars(who, null);
+    }
+
+    /**
+     * Routing shell seeds. Optional {@code edit} + {@code app} query load an existing rule into
+     * the create/update form (hop_dest_gt / hop_dest_ssn included). ADMIN/OPS edit hop fields;
+     * TENANT sees hop read-only (save preserves existing hop).
+     */
+    public Map<String, String> routingPageVars(AdminAuthService.Principal who,
+                                               Map<String, String> query) {
         Map<String, String> m = new LinkedHashMap<>();
         m.put("{{ROWS}}", routingRowsHtml(who));
-        String defaultTenant = resolveDefaultTenantId(who);
+        String editCode = query == null ? "" : nullToEmpty(query.get("edit")).trim();
+        String editApp = query == null ? "" : nullToEmpty(query.get("app")).trim();
+        Optional<ShortCodeRule> seed = Optional.empty();
+        if (!editCode.isEmpty()) {
+            seed = routing.byKey(editCode, editApp.isEmpty() ? null : editApp);
+            if (seed.isEmpty() && who != null && who.isTenantScoped()) {
+                seed = routing.listForTenant(who.tenantId()).stream()
+                        .filter(r -> editCode.equals(r.shortCode()))
+                        .filter(r -> editApp.isEmpty()
+                                || editApp.equals(nullToEmpty(r.appUsername())))
+                        .findFirst();
+            }
+        }
+        String defaultTenant = seed.map(ShortCodeRule::tenantId)
+                .filter(t -> t != null && !t.isBlank())
+                .orElseGet(() -> resolveDefaultTenantId(who));
         if (who != null && who.isTenantScoped()) {
             m.put("{{TENANT_FIELD}}",
                     "<input type=\"hidden\" name=\"tenantId\" value=\"" + esc(who.tenantId()) + "\"/>"
@@ -102,13 +138,78 @@ public class AdminCatalogHandler {
         } else {
             m.put("{{TENANT_FIELD}}", tenantSelectHtml(defaultTenant));
         }
-        m.put("{{APP_USER_FIELD}}", appUserSelectHtml(who, defaultTenant));
+        m.put("{{APP_USER_FIELD}}", appUserSelectHtml(who, defaultTenant,
+                seed.map(r -> r.appUsername() == null ? "" : r.appUsername()).orElse(null)));
         String upperGt = resolvedUpperHlrGtSeed();
         m.put("{{UPPER_HLR_GT}}", esc(upperGt));
         m.put("{{UPPER_HLR_GT_PLACEHOLDER}}", esc(upperGt.isEmpty()
-                ? "HLR number (ussd.hlr.upper-gt)"
-                : upperGt));
+                ? "blank = HLR Face upper-gt (ussd.hlr.upper-gt)"
+                : "blank → " + upperGt + " (HLR Face)"));
+        seedRoutingFormVars(m, seed.orElse(null), who);
         return m;
+    }
+
+    /** Empty create form or Edit-seeded values for {@code routing.html}. */
+    void seedRoutingFormVars(Map<String, String> m, ShortCodeRule r,
+                             AdminAuthService.Principal who) {
+        boolean hopEditable = who == null || who.isAdminOrOps();
+        String ruleType = "HTTP";
+        String asPull = "HTTP";
+        if (r != null && r.map2mapArmed()) {
+            ruleType = "RE_ROUTE";
+            asPull = r.asPullType().name();
+        } else if (r != null && r.ruleType() != null) {
+            ruleType = r.ruleType().impliesReroute() ? "RE_ROUTE" : r.ruleType().name();
+            asPull = r.asPullType().name();
+        }
+        m.put("{{FORM_RULE_TYPE}}", esc(ruleType));
+        m.put("{{FORM_AS_PULL_TYPE}}", esc(asPull));
+        m.put("{{FORM_SHORT_CODE}}", r == null ? "" : esc(nullToEmpty(r.shortCode())));
+        m.put("{{FORM_AS_URL}}", r == null ? "" : esc(nullToEmpty(r.asUrl())));
+        m.put("{{FORM_NETWORK_ID}}", r == null ? "0" : Integer.toString(r.networkId()));
+        m.put("{{FORM_REDIRECT_USSD}}", r == null ? "" : esc(nullToEmpty(r.redirectUssdString())));
+        m.put("{{FORM_HOP_DEST_GT}}", r == null ? "" : esc(nullToEmpty(r.hopDestGt())));
+        m.put("{{FORM_HOP_DEST_SSN}}",
+                r == null || r.hopDestSsn() == null ? "" : Integer.toString(r.hopDestSsn()));
+        m.put("{{FORM_MARK_FALSE_SEL}}", r == null || !r.mark() ? " selected" : "");
+        m.put("{{FORM_MARK_TRUE_SEL}}", r != null && r.mark() ? " selected" : "");
+        m.put("{{FORM_ENABLED_TRUE_SEL}}", r == null || r.enabled() ? " selected" : "");
+        m.put("{{FORM_ENABLED_FALSE_SEL}}", r != null && !r.enabled() ? " selected" : "");
+        String hlr = r == null || r.hlrMode() == null || r.hlrMode().isBlank()
+                ? "INHERIT" : r.hlrMode().toUpperCase();
+        m.put("{{FORM_HLR_INHERIT_SEL}}", "INHERIT".equals(hlr) ? " selected" : "");
+        m.put("{{FORM_HLR_FAKE_SEL}}", "FAKE".equals(hlr) ? " selected" : "");
+        m.put("{{FORM_HLR_PROXY_SEL}}", "PROXY_MAP".equals(hlr) ? " selected" : "");
+        if (r != null) {
+            m.put("{{FORM_EDIT_BANNER}}",
+                    "<p class=\"mb-3 rounded-md border border-signal/40 bg-signal/10 px-3 py-2 text-sm text-slate-200\">"
+                            + "Editing <code class=\"font-mono text-signal\">"
+                            + esc(r.shortCode()) + "</code>"
+                            + (r.appUsername() == null || r.appUsername().isBlank()
+                            ? "" : " · app <code class=\"font-mono text-signal\">"
+                            + esc(r.appUsername()) + "</code>")
+                            + " — save updates live map. "
+                            + "<a class=\"text-signal underline\" href=\"/admin/routing\">Clear form</a></p>");
+        } else {
+            m.put("{{FORM_EDIT_BANNER}}", "");
+        }
+        if (hopEditable) {
+            m.put("{{HOP_INPUT_ATTRS}}", "");
+            m.put("{{HOP_CLEAR_FIELD}}",
+                    "<label class=\"mt-2 flex items-center gap-2 text-xs text-ink-mute\">"
+                            + "<input type=\"checkbox\" name=\"hopDestClear\" value=\"true\" "
+                            + "class=\"rounded border-ink-line\"/>"
+                            + "Clear hop dest (blank → HLR Face upper-gt)</label>");
+            m.put("{{HOP_ROLE_HINT}}", "ADMIN/OPS can set or clear. Blank + no clear keeps existing hop on update.");
+        } else {
+            m.put("{{HOP_INPUT_ATTRS}}", " readonly");
+            m.put("{{HOP_CLEAR_FIELD}}", "");
+            m.put("{{HOP_ROLE_HINT}}", "TENANT: hop dest read-only; save keeps existing hop_dest_*.");
+        }
+        // asPullType <option selected>
+        m.put("{{AS_PULL_HTTP_SEL}}", "HTTP".equals(asPull) ? " selected" : "");
+        m.put("{{AS_PULL_GRPC_SEL}}", "GRPC".equals(asPull) ? " selected" : "");
+        m.put("{{AS_PULL_SIP_SEL}}", "SIP".equals(asPull) ? " selected" : "");
     }
 
     /** HLR Face upper-gt for Hop HLR placeholder (admin overlay → props). */
@@ -253,29 +354,53 @@ public class AdminCatalogHandler {
                 return routingRowsErr(who,
                         "redirectUssd required when type=re-route (or Re-route=true)");
             }
+            Optional<ShortCodeRule> existing = routing.byKey(code,
+                    appUsername.isEmpty() ? null : appUsername);
+            boolean hopEditable = who == null || who.isAdminOrOps();
+            boolean clearHop = "true".equalsIgnoreCase(f.getOrDefault("hopDestClear", "false"));
             Integer hopDestSsn = null;
-            if (!hopDestSsnRaw.isEmpty()) {
-                try {
-                    int ssn = Integer.parseInt(hopDestSsnRaw);
-                    if (ssn < 1 || ssn > 255) {
-                        return routingRowsErr(who,
-                                "hopDestSsn must be 1..255 (HLR face peer often 6)");
+            if (!hopEditable) {
+                // TENANT: hop_dest_* ADMIN/OPS only — never wipe Digicom fixed hop on tenant save.
+                if (existing.isPresent()) {
+                    hopDestGt = nullToEmpty(existing.get().hopDestGt());
+                    hopDestSsn = existing.get().hopDestSsn();
+                } else {
+                    hopDestGt = "";
+                    hopDestSsn = null;
+                }
+            } else if (clearHop) {
+                hopDestGt = "";
+                hopDestSsn = null;
+            } else {
+                if (!hopDestSsnRaw.isEmpty()) {
+                    try {
+                        int ssn = Integer.parseInt(hopDestSsnRaw);
+                        if (ssn < 1 || ssn > 255) {
+                            return routingRowsErr(who,
+                                    "hopDestSsn must be 1..255 (HLR face peer often 6)");
+                        }
+                        hopDestSsn = ssn;
+                    } catch (NumberFormatException nfe) {
+                        return routingRowsErr(who, "hopDestSsn must be an integer");
                     }
-                    hopDestSsn = ssn;
-                } catch (NumberFormatException nfe) {
-                    return routingRowsErr(who, "hopDestSsn must be an integer");
                 }
-            }
-            if (!hopDestGt.isEmpty()) {
-                String digits = ShortCodeRule.map2mapCalledGtDigits(hopDestGt);
-                if (digits.isEmpty()) {
+                if (!hopDestGt.isEmpty()) {
+                    String digits = ShortCodeRule.map2mapCalledGtDigits(hopDestGt);
+                    if (digits.isEmpty()) {
+                        return routingRowsErr(who,
+                                "hopDestGt must contain digits (SCCP CalledParty GT)");
+                    }
+                    hopDestGt = digits;
+                } else if (existing.isPresent()) {
+                    // Blank hop on update → keep prior hop_dest_* (unrelated field edits).
+                    hopDestGt = nullToEmpty(existing.get().hopDestGt());
+                    if (hopDestSsn == null) {
+                        hopDestSsn = existing.get().hopDestSsn();
+                    }
+                } else if (hopDestSsn != null && !rerouteEnable) {
                     return routingRowsErr(who,
-                            "hopDestGt must contain digits (SCCP CalledParty GT)");
+                            "hopDestSsn requires hopDestGt (or type=re-route for Case 2 upper-gt + SSN)");
                 }
-                hopDestGt = digits;
-            } else if (hopDestSsn != null && hopDestGt.isEmpty() && !rerouteEnable) {
-                return routingRowsErr(who,
-                        "hopDestSsn requires hopDestGt (or type=re-route for Case 2 upper-gt + SSN)");
             }
             if (!hlrMode.isEmpty()) {
                 String n = hlrMode.toUpperCase().replace('-', '_');
@@ -443,11 +568,20 @@ public class AdminCatalogHandler {
                     .append(TD).append(">").append(r.hopDestSsn() == null ? "" : r.hopDestSsn()).append("</td><td")
                     .append(TD).append(">").append(esc(r.hlrMode() == null ? "INHERIT" : r.hlrMode())).append("</td><td")
                     .append(TD).append(">").append(r.enabled()).append("</td><td").append(TD).append(">");
-            sb.append("<form hx-post=\"/admin/routing\" hx-target=\"#rule-rows\" hx-swap=\"innerHTML\" class=\"inline\">")
+            sb.append("<div class=\"").append(RULE_ACTIONS).append("\">")
+                    .append("<form hx-post=\"/admin/routing\" hx-target=\"#rule-rows\" hx-swap=\"innerHTML\" class=\"m-0 inline\">")
                     .append("<input type=\"hidden\" name=\"action\" value=\"delete\"/>")
                     .append("<input type=\"hidden\" name=\"shortCode\" value=\"").append(esc(r.shortCode())).append("\"/>")
                     .append("<input type=\"hidden\" name=\"appUsername\" value=\"").append(esc(r.appUsername())).append("\"/>")
-                    .append("<button type=\"submit\" class=\"").append(DEL_BTN).append("\">Del</button></form></td></tr>");
+                    .append("<button type=\"submit\" class=\"").append(RULE_DEL_BTN).append("\">Del</button></form>")
+                    .append("<a class=\"").append(RULE_EDIT_BTN).append("\" href=\"/admin/routing?edit=")
+                    .append(esc(java.net.URLEncoder.encode(nullToEmpty(r.shortCode()),
+                            java.nio.charset.StandardCharsets.UTF_8)));
+            if (r.appUsername() != null && !r.appUsername().isBlank()) {
+                sb.append("&amp;app=").append(esc(java.net.URLEncoder.encode(r.appUsername(),
+                        java.nio.charset.StandardCharsets.UTF_8)));
+            }
+            sb.append("\">Edit</a></div></td></tr>");
         }
         return sb.toString();
     }
@@ -525,9 +659,16 @@ public class AdminCatalogHandler {
     }
 
     private String appUserSelectHtml(AdminAuthService.Principal who, String defaultTenantId) {
+        return appUserSelectHtml(who, defaultTenantId, null);
+    }
+
+    private String appUserSelectHtml(AdminAuthService.Principal who, String defaultTenantId,
+                                     String preferredUsername) {
         String scope = who != null && who.isTenantScoped() ? who.tenantId() : null;
         List<AppUserEntity> list = safeAppUserList(scope);
-        String preferred = resolveDefaultAppUsername(list, defaultTenantId);
+        String preferred = preferredUsername != null && !preferredUsername.isBlank()
+                ? preferredUsername.trim()
+                : resolveDefaultAppUsername(list, defaultTenantId);
         StringBuilder sb = new StringBuilder();
         sb.append("<div><label class=\"block text-xs uppercase tracking-wider text-ink-mute\">")
                 .append("appUsername (App users)</label>")

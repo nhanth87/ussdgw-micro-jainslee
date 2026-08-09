@@ -235,7 +235,7 @@ public class BridgeGateScheduler {
             String msg = config == null ? null : config.asyncHardFailMessage();
             if (msg != null && !msg.isBlank()) return msg;
         } catch (Throwable ignored) { }
-        return "Service temporarily unavailable. Please try again.";
+        return "ማው ማውማው ማውማው ማውማው ማው";
     }
 
     /** Quarkus scheduler invocations of {@link #tickGates} since boot (proof the gate is alive). */

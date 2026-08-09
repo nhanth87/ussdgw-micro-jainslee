@@ -1,5 +1,5 @@
 [Unit]
-Description=nhanth87 USSDGW (micro-jainslee / Quarkus)
+Description=Digicom-ET USSDGW (micro-jainslee / Quarkus)
 After=network-online.target postgresql.service
 Wants=network-online.target
 
@@ -9,17 +9,22 @@ User=app
 Group=app
 WorkingDirectory=/home/app/ota-push-services/ussdgw-micro-jainslee
 Environment=HOME=/home/app
-Environment=PATH=/home/app/.local/bin:/home/app/.local/share/mise/installs/java/zulu-25.36.15.0/bin:/usr/bin:/bin
-Environment=JAVA_HOME=/home/app/.local/share/mise/installs/java/zulu-25.36.15.0
-Environment=USSD_XMS=2g
-Environment=USSD_XMX=4g
+Environment=PATH=/home/app/.local/bin:/home/app/.local/share/mise/installs/java/zulu-25/bin:/usr/bin:/bin
+Environment=JAVA_HOME=/home/app/.local/share/mise/installs/java/zulu-25
+# Digicom capacity: 6g heap (was 2g/4g). Lab hosts override via env or keep run-dist defaults.
+Environment=USSD_XMS=6g
+Environment=USSD_XMX=6g
 # Prefer mise "java" if present; unit pins zulu-25 above as fallback.
 ExecStartPre=/bin/bash -lc 'test -x "$JAVA_HOME/bin/java"'
-ExecStart=/usr/bin/flock -n /tmp/ussdgw.lock /home/app/ota-push-services/ussdgw-micro-jainslee/run.sh
+# Single-instance lock: wait up to 45s (never flock -n) so restart does not false-fail while
+# the prior cgroup is still releasing /tmp/ussdgw.lock. KillMode=control-group tears down
+# flock + java together so the lock holder cannot outlive stop.
+ExecStart=/usr/bin/flock --timeout 45 /tmp/ussdgw.lock /home/app/ota-push-services/ussdgw-micro-jainslee/run.sh
 Restart=on-failure
 RestartSec=5
-TimeoutStopSec=60
-KillMode=mixed
+TimeoutStopSec=90
+KillMode=control-group
+SendSIGKILL=yes
 StandardOutput=append:/tmp/ussdgw.service.log
 StandardError=append:/tmp/ussdgw.service.log
 

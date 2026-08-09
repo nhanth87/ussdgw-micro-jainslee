@@ -8,6 +8,7 @@ import et.restlink.ussdgw.bridge.VirtualSessionBridge;
 import et.restlink.ussdgw.bridge.VirtualSessionStore;
 import et.restlink.ussdgw.cdr.CdrRecord;
 import et.restlink.ussdgw.cdr.CdrService;
+import et.restlink.ussdgw.cdr.CdrSessionDigest;
 import et.restlink.ussdgw.cdr.CdrStatuses;
 import et.restlink.ussdgw.config.SmppConfigSupport;
 import et.restlink.ussdgw.config.Ss7ConfigSupport;
@@ -21,11 +22,13 @@ import et.restlink.ussdgw.service.HttpApplyService;
 import et.restlink.ussdgw.service.PendingMap2MapRegistry;
 import et.restlink.ussdgw.service.SmppApplyService;
 import et.restlink.ussdgw.service.Ss7ApplyService;
+import et.restlink.ussdgw.telemetry.AppTelemetry;
 import et.restlink.ussdgw.telemetry.Map2MapTelemetry;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.microjainslee.admin.RaAdminHttpResponse;
 import com.microjainslee.monitor.MonitorHandler;
+import com.microjainslee.telemetry.TelemetryPort;
 import com.microjainslee.ra.httpserver.admin.HttpServerAdminBindings;
 import com.microjainslee.ra.jss7.admin.Ss7AdminBindings;
 
@@ -36,7 +39,9 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 
@@ -53,6 +58,8 @@ import org.eclipse.microprofile.config.inject.ConfigProperty;
 public class AdminHttpHandler {
     private static final Logger LOG = LogManager.getLogger(AdminHttpHandler.class);
     private static final ObjectMapper JSON = new ObjectMapper();
+    /** Per-correlation timeline rows in CDR expand (newest-first query, then reversed). */
+    private static final int CDR_TIMELINE_LIMIT = 16;
 
     @Inject UssdConfigService config;
     @Inject LinkStatusService linkStatus;
@@ -84,6 +91,7 @@ public class AdminHttpHandler {
     @Inject Map2MapTelemetry map2MapTelemetry;
     @Inject PendingMap2MapRegistry pendingMap2Map;
     @Inject GatedAsNotifyService gatedAsNotify;
+    @Inject AppTelemetry appTelemetry;
 
     /**
      * {@code Secure} on the admin session cookie. Defaults to on; the plain-HTTP Digicom lab
@@ -198,8 +206,10 @@ public class AdminHttpHandler {
                     return r;
                 });
         HttpServerAdminBindings.bindAppPanels(httpAsModes::hubGet, httpAsModes::hubPost);
-        this.monitorHub = new MonitorHandler(null);
-        LOG.info("[admin] RA admin hub wired (jainslee-monitor + local smpp-ra + HTTP AS panels)");
+        TelemetryPort tp = appTelemetry != null ? appTelemetry.port() : null;
+        this.monitorHub = new MonitorHandler(tp);
+        LOG.info("[admin] RA admin hub wired (jainslee-monitor + telemetry={} + smpp/ss7/http panels)",
+                tp != null ? "on" : "off");
     }
 
     public void clearRaAdminHub() {
@@ -215,7 +225,8 @@ public class AdminHttpHandler {
             synchronized (this) {
                 h = monitorHub;
                 if (h == null) {
-                    h = new MonitorHandler(null);
+                    TelemetryPort tp = appTelemetry != null ? appTelemetry.port() : null;
+                    h = new MonitorHandler(tp);
                     monitorHub = h;
                 }
             }
@@ -497,7 +508,7 @@ public class AdminHttpHandler {
                                                Map<String, String> query) {
         return switch (name) {
             case "cdr.html" -> cdrPageVars(query, who);
-            case "routing.html" -> catalog.routingPageVars(who);
+            case "routing.html" -> catalog.routingPageVars(who, query);
             case "tenants.html" -> catalog.tenantsPageVars();
             case "users.html" -> catalog.usersPageVars();
             case "bridge.html" -> planes.bridgePageVars();
@@ -545,7 +556,7 @@ public class AdminHttpHandler {
     }
 
     private static String monitorCell(String k, Object v) {
-        return "<div class=\"rounded-md border border-ink-line bg-ink/40 p-3\">"
+        return "<div class=\"rounded-md border border-ink-line bg-ink-panel/60 p-3\">"
                 + "<div class=\"text-ink-mute\">" + esc(k) + "</div>"
                 + "<div class=\"mt-1 break-all text-slate-100\">" + esc(String.valueOf(v)) + "</div></div>";
     }
@@ -887,6 +898,7 @@ public class AdminHttpHandler {
         m.put("bridge.asyncGateMs", config.asyncGateTimeoutMs());
         m.put("adaptive.ewma", adaptive.snapshot());
         m.put("adaptive.floorMs", AdaptiveTimeout.FLOOR_MS);
+        m.put("adaptive.msisdnProfiles", adaptive.msisdnProfileSize());
         if (bridgeGate != null) {
             m.put("scheduler.gateTicks", bridgeGate.gateTicks());
             m.put("scheduler.gateExpired", bridgeGate.gateExpired());
@@ -958,6 +970,7 @@ public class AdminHttpHandler {
                     .append("</td></tr>");
             return sb.toString();
         }
+        Map<String, List<CdrRecord>> timelineByCorr = new HashMap<>();
         int i = 0;
         for (CdrRecord r : rows) {
             String spine = cdrSpineClass(r.phase);
@@ -984,33 +997,139 @@ public class AdminHttpHandler {
                     .append(esc(nullToDash(r.originationType))).append("</td>");
             sb.append("</tr>");
 
-            // Expand: greenfield fields + honest stubs for classic-only columns.
+            // Cap timeline fetch (per unique corr, cached). Digicom measure: ≤100 ledger rows
+            // ≈80ms wall — keep query small so grow of ussd_cdr does not N×40 blow up.
+            List<CdrRecord> timeline = timelineByCorr.computeIfAbsent(
+                    r.correlationId == null ? "" : r.correlationId,
+                    corrKey -> corrKey.isBlank()
+                            ? List.of(r)
+                            : cdr.listRecords(CDR_TIMELINE_LIMIT, scope, null, corrKey, null));
+            CdrSessionDigest.Digest dig = CdrSessionDigest.from(r, timeline);
+
+            // Expand: gate/HLR/AS digest + this row + corr timeline. Stay open across HTMX polls
+            // via client sessionStorage (cdr.html) — server always emits class "hidden".
             sb.append("<tr class=\"cdr-detail hidden\" data-cdr-detail=\"").append(esc(rowId)).append("\">")
                     .append("<td colspan=\"7\" class=\"px-3 py-3\">")
                     .append("<div class=\"cdr-detail-panel ink-panel\">");
+            appendCdrGatedDigest(sb, dig);
+            sb.append("<div class=\"cdr-digest cdr-record-box\" aria-label=\"This CDR record\">");
+            sb.append("<p class=\"cdr-digest-title\">This record</p>");
             sb.append("<dl class=\"cdr-detail-grid\">");
             cdrDetailItem(sb, "Correlation", r.correlationId);
             cdrDetailItem(sb, "Phase (bridge)", r.phase);
             cdrDetailItem(sb, "Status / result", r.status);
             cdrDetailItem(sb, "MSISDN", r.msisdn);
-            cdrDetailItem(sb, "Short code", r.shortCode);
+            cdrDetailItem(sb, "Short code", dig.shortCode() != null ? dig.shortCode() : r.shortCode);
+            cdrDetailItem(sb, "Long / redirect", dig.longOrRedirect());
+            cdrDetailItem(sb, "Dialed USSD", dig.dialed());
             cdrDetailItem(sb, "Origination", r.originationType);
             cdrDetailItem(sb, "Network id", r.networkId == null ? null : Integer.toString(r.networkId));
             cdrDetailItem(sb, "Tenant", r.tenantId);
-            cdrDetailItem(sb, "Gate ms", r.gateMs == null ? null : Long.toString(r.gateMs));
-            cdrDetailItem(sb, "Observed EWMA ms", r.observedEwmaMs == null ? null : Long.toString(r.observedEwmaMs));
-            cdrDetailItem(sb, "Detail", r.detail);
+            cdrDetailItem(sb, "Gate ms", dig.gateMs() == null ? null : Long.toString(dig.gateMs()));
+            cdrDetailItem(sb, "Observed EWMA ms",
+                    dig.observedEwmaMs() == null ? null : Long.toString(dig.observedEwmaMs()));
+            cdrDetailItem(sb, "Detail (raw)", r.detail);
             cdrDetailItem(sb, "Recorded at", r.createdAt == null ? null : r.createdAt.toString());
-            sb.append("</dl>");
+            sb.append("</dl></div>");
+            appendCdrTimeline(sb, dig.timelineOldestFirst());
             // TODO(cdr-parity): classic CdrLineFormatter also emitted local/remote SCCP
             // (PC/SSN/RI/GTI/GT), orig/dest AddressString, dialog ids, duration, USSD string,
             // eri IMSI/VLR — not persisted on ussd_cdr yet.
             sb.append("<p class=\"cdr-gap-note\">Classic fields not in store: dialog ids · duration · ")
-                    .append("USSD string · SCCP GT · IMSI/VLR · RecordStatus enum</p>");
+                    .append("USSD string · SCCP GT · IMSI/VLR · RecordStatus enum. ")
+                    .append("Digest answers are derived from this corr's CDR rows + detail k=v only.")
+                    .append("</p>");
             sb.append("</div></td></tr>");
             i++;
         }
         return sb.toString();
+    }
+
+    private static void appendCdrGatedDigest(StringBuilder sb, CdrSessionDigest.Digest dig) {
+        sb.append("<div class=\"cdr-digest\" aria-label=\"Gated / hop digest\">");
+        sb.append("<p class=\"cdr-digest-title\">AdaptiveTimeout · Hop · AS</p>");
+        sb.append("<dl class=\"cdr-detail-grid cdr-digest-grid\">");
+        cdrDetailItem(sb, "Gate budget (AdaptiveTimeout)",
+                dig.gateMs() == null ? null : dig.gateMs() + " ms (not hop RTT)");
+        cdrDetailItem(sb, "Observed EWMA",
+                dig.observedEwmaMs() == null ? null : dig.observedEwmaMs() + " ms");
+        cdrDetailItem(sb, "Short code", dig.shortCode());
+        cdrDetailItem(sb, "Long / redirect", dig.longOrRedirect());
+        cdrAnswerItem(sb, "Upper HLR / hop sent?", dig.upperHlrSent());
+        cdrAnswerItem(sb, "HLR / hop response?", dig.hlrResponse());
+        cdrAnswerItem(sb, "Sent to AS?", dig.asNotifySent());
+        cdrAnswerItem(sb, "AS response?", dig.asResponse());
+        String hopOutcome = dig.detailFields().get("hopOutcome");
+        if (hopOutcome != null) {
+            cdrDetailItem(sb, "Hop outcome", hopOutcome);
+        }
+        String asUssd = dig.detailFields().get("asUssd");
+        if (asUssd != null) {
+            cdrDetailItem(sb, "AS ussdString", asUssd);
+        }
+        String refuse = dig.detailFields().get("refuseReason");
+        if (refuse != null) {
+            cdrDetailItem(sb, "Refuse reason", refuse);
+        }
+        String asUrl = dig.detailFields().get("asUrl");
+        if (asUrl != null) {
+            cdrDetailItem(sb, "AS URL", asUrl);
+        }
+        String hlrMode = dig.detailFields().get("hlrMode");
+        if (hlrMode != null) {
+            cdrDetailItem(sb, "HLR mode", hlrMode);
+        }
+        String hopGt = dig.detailFields().get("hopGt");
+        if (hopGt != null) {
+            cdrDetailItem(sb, "Hop GT", hopGt
+                    + (dig.detailFields().get("hopSsn") != null
+                    ? " ssn=" + dig.detailFields().get("hopSsn") : ""));
+        }
+        sb.append("</dl></div>");
+    }
+
+    private static void appendCdrTimeline(StringBuilder sb, List<CdrRecord> oldestFirst) {
+        if (oldestFirst == null || oldestFirst.isEmpty()) {
+            return;
+        }
+        // Same panel chrome as Gated · HLR · AS (cdr-digest) — not a bare list in the open.
+        sb.append("<div class=\"cdr-digest cdr-timeline\" aria-label=\"Correlation timeline\">");
+        sb.append("<p class=\"cdr-digest-title\">Session timeline (same corr)</p>");
+        sb.append("<ol class=\"cdr-timeline-list\">");
+        for (CdrRecord t : oldestFirst) {
+            if (t == null) {
+                continue;
+            }
+            sb.append("<li><span class=\"cdr-timeline-when\">")
+                    .append(esc(formatCdrWhen(t.createdAt))).append("</span> ")
+                    .append("<span class=\"cdr-status-chip ")
+                    .append(cdrStatusChipClass(t.phase, t.status)).append("\">")
+                    .append(esc(nullToDash(t.status))).append("</span>");
+            if (t.gateMs != null && t.gateMs > 0) {
+                sb.append(" <span class=\"cdr-timeline-meta\">gate=")
+                        .append(esc(Long.toString(t.gateMs))).append("ms</span>");
+            }
+            if (t.detail != null && !t.detail.isBlank()) {
+                sb.append(" <code class=\"cdr-timeline-detail\" title=\"")
+                        .append(esc(t.detail)).append("\">")
+                        .append(esc(clip(t.detail, 72)))
+                        .append("</code>");
+            }
+            sb.append("</li>");
+        }
+        sb.append("</ol></div>");
+    }
+
+    private static void cdrAnswerItem(StringBuilder sb, String label, CdrSessionDigest.Answer a) {
+        if (a == null) {
+            cdrDetailItem(sb, label, null);
+            return;
+        }
+        String v = a.value();
+        if (a.evidence() != null && !a.evidence().isBlank()) {
+            v = v + " · " + a.evidence();
+        }
+        cdrDetailItem(sb, label, v);
     }
 
     private static String cdrStatusOptionsHtml(String selected) {
@@ -1054,6 +1173,12 @@ public class AdminHttpHandler {
         return corr.substring(0, 8) + "…" + corr.substring(corr.length() - 4);
     }
 
+    private static String clip(String s, int max) {
+        if (s == null) return "";
+        if (s.length() <= max) return s;
+        return s.substring(0, Math.max(0, max - 1)) + "…";
+    }
+
     private static String nullToDash(String s) {
         return s == null || s.isBlank() ? "—" : s;
     }
@@ -1071,14 +1196,27 @@ public class AdminHttpHandler {
     }
 
     private static String cdrStatusChipClass(String phase, String status) {
-        if ("FAILED".equals(phase) || (status != null && status.toUpperCase().contains("FAIL"))) {
+        String u = status == null ? "" : status.trim().toUpperCase();
+        // Fail / timeout / empty-AS — red chip with dark ink text (readable on light + dark).
+        if ("FAILED".equals(phase)
+                || u.contains("FAIL")
+                || u.contains("TIMEOUT")
+                || u.contains("REJECT")
+                || u.equals(CdrStatuses.AS_EMPTY_BODY)
+                || u.equals("SRI_NO_MSC")
+                || u.equals("NI_NO_MSC")
+                || u.equals("HLR_REJECT")) {
             return "cdr-status--fail";
         }
         if ("COMPLETED".equals(phase) || "SUCCESS".equalsIgnoreCase(status)
-                || (status != null && (status.equals("MAP2MAP_OK")
-                || status.equals("MAP2MAP_COMPLETE_AFTER_GATE")
-                || status.equals("BRIDGED_DONE")))) {
+                || u.equals("MAP2MAP_OK")
+                || u.equals("MAP2MAP_COMPLETE_AFTER_GATE")
+                || u.equals("BRIDGED_DONE")) {
             return "cdr-status--ok";
+        }
+        // AS pull after hop-empty / reject — not a green "HLR OK".
+        if (u.equals("MAP2MAP_AS_ROUTED")) {
+            return "cdr-status--map2map";
         }
         if (CdrStatuses.isMap2MapFamily(status)) {
             return "cdr-status--map2map";

@@ -58,8 +58,11 @@
           <h2 class="mt-1 text-xl font-semibold text-slate-50">Call detail records</h2>
           <p class="mt-1 max-w-2xl text-sm text-ink-mute">
             Find a subscriber leg by MSISDN, bridge correlation, or status
-            (gated / MAP2MAP re-route). Open the row for gate/EWMA and detail.
-            Spine color tracks bridge phase (S1 → S2 → complete/fail).
+            (gated / MAP2MAP / HLR_REJECT). RE_ROUTE: GATED#1 early
+            <code class="font-mono text-slate-300">hlr pending</code> AS pull
+            (parallel hop); hop done →
+            <code class="font-mono text-slate-300">hlr reject</code> /
+            <code class="font-mono text-slate-300">hlr none</code> (no 2nd GATED).
           </p>
         </div>
         <div class="flex flex-wrap items-center gap-2 text-xs font-mono text-ink-mute">
@@ -88,24 +91,24 @@
           <div class="min-w-[10rem] flex-1">
             <label class="block text-xs uppercase tracking-wider text-ink-mute" for="cdr-msisdn">MSISDN</label>
             <input id="cdr-msisdn" name="msisdn" value="{{MSISDN}}" placeholder="2519…" autocomplete="off"
-                   class="mt-1 w-full rounded-md border border-ink-line bg-ink px-3 py-2 font-mono text-sm text-slate-100 focus:border-signal focus:outline-none focus:ring-1 focus:ring-signal/40"/>
+                   class="mt-1 w-full rounded-md border border-ink-line bg-ink-panel px-3 py-2 font-mono text-sm text-slate-100 focus:border-signal focus:outline-none focus:ring-1 focus:ring-signal/40"/>
           </div>
           <div class="min-w-[12rem] flex-[1.4]">
             <label class="block text-xs uppercase tracking-wider text-ink-mute" for="cdr-corr">Correlation</label>
             <input id="cdr-corr" name="corr" value="{{CORR}}" placeholder="bridge / session id" autocomplete="off"
-                   class="mt-1 w-full rounded-md border border-ink-line bg-ink px-3 py-2 font-mono text-sm text-slate-100 focus:border-signal focus:outline-none focus:ring-1 focus:ring-signal/40"/>
+                   class="mt-1 w-full rounded-md border border-ink-line bg-ink-panel px-3 py-2 font-mono text-sm text-slate-100 focus:border-signal focus:outline-none focus:ring-1 focus:ring-signal/40"/>
           </div>
           <div class="min-w-[11rem]">
             <label class="block text-xs uppercase tracking-wider text-ink-mute" for="cdr-status">Status</label>
             <select id="cdr-status" name="status"
-                    class="mt-1 w-full rounded-md border border-ink-line bg-ink px-3 py-2 font-mono text-sm text-slate-100 focus:border-signal focus:outline-none focus:ring-1 focus:ring-signal/40">
+                    class="mt-1 w-full rounded-md border border-ink-line bg-ink-panel px-3 py-2 font-mono text-sm text-slate-100 focus:border-signal focus:outline-none focus:ring-1 focus:ring-signal/40">
               {{STATUS_OPTIONS}}
             </select>
           </div>
           <div>
             <label class="block text-xs uppercase tracking-wider text-ink-mute" for="cdr-limit">Limit</label>
             <input id="cdr-limit" name="limit" value="{{LIMIT}}" type="number" min="1" max="100"
-                   class="mt-1 w-24 rounded-md border border-ink-line bg-ink px-3 py-2 font-mono text-sm text-slate-100 focus:border-signal focus:outline-none focus:ring-1 focus:ring-signal/40"/>
+                   class="mt-1 w-24 rounded-md border border-ink-line bg-ink-panel px-3 py-2 font-mono text-sm text-slate-100 focus:border-signal focus:outline-none focus:ring-1 focus:ring-signal/40"/>
           </div>
           <button type="submit"
                   class="rounded-md bg-signal px-4 py-2 text-sm font-semibold text-ink hover:bg-signal-dim">
@@ -152,6 +155,44 @@
     (function () {
       var body = document.getElementById('cdr-rows');
       if (!body) return;
+      var OPEN_KEY = 'ussd-cdr-open-ids';
+      function loadOpen() {
+        try {
+          var raw = sessionStorage.getItem(OPEN_KEY);
+          if (!raw) return {};
+          var arr = JSON.parse(raw);
+          var m = {};
+          if (Array.isArray(arr)) arr.forEach(function (id) { if (id) m[id] = true; });
+          return m;
+        } catch (e) { return {}; }
+      }
+      function saveOpen(map) {
+        try {
+          sessionStorage.setItem(OPEN_KEY, JSON.stringify(Object.keys(map)));
+        } catch (e) { /* ignore */ }
+      }
+      var openIds = loadOpen();
+      function setOpen(id, open) {
+        if (!id) return;
+        if (open) openIds[id] = true; else delete openIds[id];
+        saveOpen(openIds);
+      }
+      function applyOpenState(id) {
+        var detail = body.querySelector('[data-cdr-detail="' + id + '"]');
+        var btn = body.querySelector('[data-cdr-open="' + id + '"]');
+        if (!detail) return false;
+        var want = !!openIds[id];
+        detail.classList.toggle('hidden', !want);
+        if (btn) {
+          btn.setAttribute('aria-expanded', want ? 'true' : 'false');
+          var row = btn.closest('tr');
+          if (row) row.classList.toggle('cdr-ledger-row--open', want);
+        }
+        return want;
+      }
+      function restoreAllOpen() {
+        Object.keys(openIds).forEach(function (id) { applyOpenState(id); });
+      }
       function refreshCount() {
         var n = body.querySelectorAll('.cdr-ledger-row').length;
         var badge = document.querySelector('.cdr-count-badge');
@@ -167,10 +208,24 @@
         btn.setAttribute('aria-expanded', open ? 'true' : 'false');
         var row = btn.closest('tr');
         if (row) row.classList.toggle('cdr-ledger-row--open', open);
+        setOpen(id, open);
       });
       document.body.addEventListener('htmx:afterSwap', function (e) {
-        if (e.detail && e.detail.target === body) refreshCount();
+        var t = e.detail && e.detail.target;
+        // Prefer id match — strict === can fail if HTMX retargets / node identity drifts.
+        if (t && (t === body || t.id === 'cdr-rows')) {
+          refreshCount();
+          restoreAllOpen();
+        }
       });
+      // Also catch settle (some HTMX builds fire usefully only here for self-target polls).
+      document.body.addEventListener('htmx:afterSettle', function (e) {
+        var t = e.detail && e.detail.target;
+        if (t && (t === body || t.id === 'cdr-rows')) {
+          restoreAllOpen();
+        }
+      });
+      restoreAllOpen();
     })();
   </script>
 </body>

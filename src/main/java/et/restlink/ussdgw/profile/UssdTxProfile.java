@@ -165,6 +165,17 @@ public final class UssdTxProfile extends ProfileAbstractCmp {
         set(s("adaptiveBridgeArm", Boolean.class), v);
     }
 
+    /**
+     * MAP2MAP Case 2: outbound hop still open — MO must not {@code replyAndEnd} until cleared.
+     */
+    public Boolean getMap2mapHopOutstanding() {
+        return (Boolean) ProfileAccessorInvoker.getValue(this, g("map2mapHopOutstanding"));
+    }
+
+    public void setMap2mapHopOutstanding(Boolean v) {
+        set(s("map2mapHopOutstanding", Boolean.class), v);
+    }
+
     public String getMscGt() {
         return str(g("mscGt"));
     }

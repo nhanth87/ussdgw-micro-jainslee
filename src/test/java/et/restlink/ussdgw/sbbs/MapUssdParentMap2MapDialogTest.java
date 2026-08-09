@@ -7,6 +7,7 @@ import et.restlink.ussdgw.bridge.VirtualSessionState;
 import et.restlink.ussdgw.bridge.VirtualSessionStore;
 import et.restlink.ussdgw.events.Map2MapRequestEvent;
 import et.restlink.ussdgw.routing.RuleType;
+import et.restlink.ussdgw.cdr.Map2MapCdr;
 import et.restlink.ussdgw.service.Map2MapCompletionService;
 import et.restlink.ussdgw.service.PendingMap2MapRegistry;
 import et.restlink.ussdgw.service.SbbServices;
@@ -34,6 +35,7 @@ class MapUssdParentMap2MapDialogTest {
     private PendingMap2MapRegistry pending;
     private AtomicInteger asPulls;
     private AtomicReference<String> lastHop;
+    private AtomicReference<String> lastOutcome;
     private AtomicInteger networkAborts;
 
     @BeforeEach
@@ -42,6 +44,7 @@ class MapUssdParentMap2MapDialogTest {
         pending = new PendingMap2MapRegistry();
         asPulls = new AtomicInteger();
         lastHop = new AtomicReference<>();
+        lastOutcome = new AtomicReference<>();
         networkAborts = new AtomicInteger();
 
         VirtualSessionStore store = new VirtualSessionStore() {
@@ -64,8 +67,16 @@ class MapUssdParentMap2MapDialogTest {
         Map2MapCompletionService completion = new Map2MapCompletionService() {
             @Override
             public String onMap2MapResponse(Map2MapRequestEvent req, String hopText) {
+                return onMap2MapResponse(req, hopText,
+                        hopText == null || hopText.isBlank()
+                                ? Map2MapCdr.OUTCOME_EMPTY : Map2MapCdr.OUTCOME_TEXT);
+            }
+
+            @Override
+            public String onMap2MapResponse(Map2MapRequestEvent req, String hopText, String hopOutcome) {
                 asPulls.incrementAndGet();
                 lastHop.set(hopText == null ? "" : hopText);
+                lastOutcome.set(hopOutcome);
                 return "map2map-ok routed-test";
             }
         };
@@ -103,6 +114,7 @@ class MapUssdParentMap2MapDialogTest {
         assertThat(pending.peek(out)).isEmpty();
         assertThat(asPulls.get()).isEqualTo(1);
         assertThat(lastHop.get()).isEmpty();
+        assertThat(lastOutcome.get()).isEqualTo(Map2MapCdr.OUTCOME_REJECT);
         assertThat(networkAborts.get()).isZero();
         assertThat(sessions.get(corr).state()).isEqualTo(VirtualSessionState.AWAITING_AS);
     }

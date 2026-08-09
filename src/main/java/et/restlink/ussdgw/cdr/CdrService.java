@@ -81,6 +81,11 @@ public class CdrService {
         row.originationType = originationType == null ? "MAP" : originationType;
         row.gateMs = gateMs;
         row.observedEwmaMs = observedEwmaMs;
+        // Mirror RE_ROUTE detail keys into queryable columns (Flyway V12).
+        var kv = CdrSessionDigest.parseDetail(d);
+        row.hopOutcome = clip(kv.get("hopOutcome"), 32);
+        row.refuseReason = clip(kv.get("refuseReason"), 128);
+        row.asUssd = clip(kv.get("asUssd"), 256);
         row.csvLine = csv.length() > 4000 ? csv.substring(0, 4000) : csv;
 
         try {
@@ -92,6 +97,14 @@ public class CdrService {
         } catch (RuntimeException e) {
             LOG.warn("CDR persist failed corr={}: {}", correlationId, e.toString());
         }
+    }
+
+    private static String clip(String v, int max) {
+        if (v == null || v.isBlank()) {
+            return null;
+        }
+        String t = v.trim();
+        return t.length() <= max ? t : t.substring(0, max);
     }
 
     /** Admin list — newest first. */
