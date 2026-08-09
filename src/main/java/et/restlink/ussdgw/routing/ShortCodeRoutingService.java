@@ -9,6 +9,7 @@ import jakarta.transaction.Transactional;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Comparator;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
@@ -241,6 +242,71 @@ public class ShortCodeRoutingService {
         int hash = s.indexOf('#');
         if (hash >= 0) return s.substring(0, hash + 1);
         return s;
+    }
+
+    /** Cap RE_ROUTE hop-string chain folds (loop / deep nesting guard). */
+    public static final int MAP2MAP_HOP_CHAIN_MAX = 8;
+
+    /**
+     * MAP2MAP hop USSD: apply {@link ShortCodeRule#resolveHopUssd(String)} for {@code firstRule},
+     * then keep rewriting while the current hop string matches another armed RE_ROUTE rule
+     * (chain always). Example: {@code *804*1234#} → {@code *875*1234#} → {@code *8775*1234#}.
+     *
+     * @param dialedUssd UE / current USSD string being hopped
+     * @param firstRule  rule already matched for this hop arm (must be {@link ShortCodeRule#map2mapArmed()})
+     * @return resolved hop USSD, or empty when redirect cannot be formed
+     */
+    public String resolveMap2MapHopUssd(String dialedUssd, ShortCodeRule firstRule) {
+        if (firstRule == null || !firstRule.map2mapArmed()) {
+            return "";
+        }
+        String hop = firstRule.resolveHopUssd(dialedUssd);
+        if (hop.isEmpty()) {
+            return "";
+        }
+        HashSet<String> seen = new HashSet<>();
+        seen.add(mapKey(firstRule.shortCode(), firstRule.appUsername()));
+        String current = hop;
+        for (int i = 0; i < MAP2MAP_HOP_CHAIN_MAX; i++) {
+            Optional<ShortCodeRule> next = find(extractShortCode(current));
+            if (next.isEmpty() || !next.get().map2mapArmed()) {
+                break;
+            }
+            ShortCodeRule r = next.get();
+            String key = mapKey(r.shortCode(), r.appUsername());
+            if (!seen.add(key)) {
+                break;
+            }
+            String nextHop = r.resolveHopUssd(current);
+            if (nextHop.isEmpty() || nextHop.equals(current)) {
+                break;
+            }
+            current = nextHop;
+        }
+        return current;
+    }
+
+    /**
+     * Resolve hop USSD from fields already on a MAP2MAP request (then chain via live rules).
+     */
+    public String resolveMap2MapHopUssd(String dialedUssd, boolean mark, String markKey,
+                                        String redirectUssd) {
+        ShortCodeRule seed = ShortCodeRule.ofReroute(
+                markKey == null ? "" : markKey,
+                RuleType.HTTP,
+                "http://127.0.0.1/",
+                true,
+                null,
+                0,
+                mark,
+                null,
+                true,
+                redirectUssd,
+                null);
+        if (!seed.map2mapArmed()) {
+            return "";
+        }
+        return resolveMap2MapHopUssd(dialedUssd, seed);
     }
 
     private ShortCodeEntity findEntity(String shortCode, String appUsername) {

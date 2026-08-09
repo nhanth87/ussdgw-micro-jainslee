@@ -67,6 +67,7 @@ public class SbbServices {
     @Inject WireFormatResolver wireFormatResolver;
     @Inject ClassicNiHttpPark niHttpPark;
     @Inject Map2MapTelemetry map2MapTelemetry;
+    @Inject Ss7PeerRouteService peerRoutes;
 
     @PostConstruct
     void install() { INSTANCE = this; }
@@ -109,4 +110,24 @@ public class SbbServices {
     public WireFormatResolver wireFormatResolver() { return wireFormatResolver; }
     public ClassicNiHttpPark niHttpPark() { return niHttpPark; }
     public Map2MapTelemetry map2MapTelemetry() { return map2MapTelemetry; }
+    public Ss7PeerRouteService peerRoutes() { return peerRoutes; }
+
+    /**
+     * N–N LB pick for new outbound (NI / MAP2MAP) when no ingress ASP.
+     * @return preferredAsp + remotePc, or nulls when LB inactive / single candidate unused
+     */
+    public record RoutePin(String preferredAspName, int remotePc) {
+        public static final RoutePin NONE = new RoutePin(null, -1);
+    }
+
+    public RoutePin pickPeerRoute(int networkId, String affinityKey) {
+        if (peerRoutes == null) {
+            return RoutePin.NONE;
+        }
+        var r = peerRoutes.pickForNewSession(networkId, affinityKey);
+        if (r == null) {
+            return RoutePin.NONE;
+        }
+        return new RoutePin(r.aspName(), r.peerPc());
+    }
 }

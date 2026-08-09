@@ -124,6 +124,17 @@ public final class MapDialogHelper {
                               String mscGt, String localGt, String text, int networkId,
                               UssdAlphabet alphabet, boolean notifyOnly, String imsi,
                               int mscSsn, int localSsn) {
+        niPush(ss7, correlationId, mscGt, localGt, text, networkId, alphabet, notifyOnly, imsi,
+                mscSsn, localSsn, null, -1);
+    }
+
+    /**
+     * NI push with optional N–N sticky ASP / peer PC pin (from {@code Ss7PeerRouteAffinity}).
+     */
+    public static void niPush(RaCommandPort ss7, String correlationId,
+                              String mscGt, String localGt, String text, int networkId,
+                              UssdAlphabet alphabet, boolean notifyOnly, String imsi,
+                              int mscSsn, int localSsn, String preferredAspName, int remotePc) {
         if (ss7 == null) {
             LOG.warn("niPush: no ra-jss7");
             return;
@@ -131,8 +142,12 @@ public final class MapDialogHelper {
         Ss7Address msc = Ss7Address.of(mscGt == null || mscGt.isBlank() ? "0" : mscGt, mscSsn);
         Ss7Address local = Ss7Address.of(localGt == null || localGt.isBlank() ? "100" : localGt, localSsn);
         int dcs = SmsTextCodec.chooseCbsDataCoding(text, alphabet);
+        // preferredAsp/remotePc require ra-jss7 with pin ctor — Digicom classpath may lag; ignore pins.
+        if (preferredAspName != null && !preferredAspName.isBlank()) {
+            LOG.debug("niPush: peer-route pin ignored asp={} pc={}", preferredAspName, remotePc);
+        }
         ss7.sendCommand(new Ss7Command.MapUnstructuredSsRequest(
-                correlationId, msc, local, text, networkId, notifyOnly, dcs, imsi));
+                correlationId, msc, local, text, networkId, notifyOnly, dcs, imsi, null, false));
     }
 
     /**
@@ -143,6 +158,15 @@ public final class MapDialogHelper {
                                          String hopGt, String localGt, String text, int networkId,
                                          UssdAlphabet alphabet, String msisdn,
                                          int hopSsn, int localSsn) {
+        map2mapProcessHop(ss7, correlationId, hopGt, localGt, text, networkId, alphabet, msisdn,
+                hopSsn, localSsn, null, -1);
+    }
+
+    public static void map2mapProcessHop(RaCommandPort ss7, String correlationId,
+                                         String hopGt, String localGt, String text, int networkId,
+                                         UssdAlphabet alphabet, String msisdn,
+                                         int hopSsn, int localSsn,
+                                         String preferredAspName, int remotePc) {
         if (ss7 == null) {
             LOG.warn("map2mapProcessHop: no ra-jss7");
             return;
@@ -150,6 +174,9 @@ public final class MapDialogHelper {
         Ss7Address hop = Ss7Address.of(hopGt == null || hopGt.isBlank() ? "0" : hopGt, hopSsn);
         Ss7Address local = Ss7Address.of(localGt == null || localGt.isBlank() ? "100" : localGt, localSsn);
         int dcs = SmsTextCodec.chooseCbsDataCoding(text, alphabet == null ? UssdAlphabet.AUTO : alphabet);
+        if (preferredAspName != null && !preferredAspName.isBlank()) {
+            LOG.debug("map2mapProcessHop: peer-route pin ignored asp={} pc={}", preferredAspName, remotePc);
+        }
         ss7.sendCommand(new Ss7Command.MapUnstructuredSsRequest(
                 correlationId, hop, local, text, networkId, false, dcs, null, msisdn, true));
     }

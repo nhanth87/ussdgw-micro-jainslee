@@ -71,7 +71,7 @@ public final class Map2MapSbb implements Sbb, SleeEventHandler {
             failInbound(req, "MAP2MAP_NO_GT");
             return "map2map-no-gt";
         }
-        String ussdCode = ShortCodeRule.map2mapUssdString(req.redirectUssd());
+        String ussdCode = MapUssdParentSbb.resolveHopUssdForReq(svc(), req);
         if (ussdCode.isEmpty()) {
             failInbound(req, "MAP2MAP_NO_GT");
             return "map2map-no-gt";
@@ -85,7 +85,7 @@ public final class Map2MapSbb implements Sbb, SleeEventHandler {
             // Lab: no peer — continue AS with empty hop text (bypass-like enrich).
             svc().map2MapCompletion().onMap2MapResponse(req, "");
             writeCdr(req, CdrPhase.S1_ACTIVE, Map2MapCdr.SKIP_LAB,
-                    Map2MapCdr.detail(req, "code=" + ussdCode, "path=lab"));
+                    Map2MapCdr.detail(req, "code=" + ussdCode, "hopUssd=" + ussdCode, "path=lab"));
             try {
                 svc().map2MapTelemetry().labSkipped();
             } catch (Throwable ignored) { }

@@ -52,6 +52,17 @@ Dedicated **`/admin/hlr`** (not SS7 JSON): mode, fake IMSI/MSC, upper GT, Diamet
 Outbound SRI-SM (NI `SriSbb` + PROXY_MAP face) CalledParty = resolved `ussd.hlr.upper-gt`
 (admin overlay when non-blank, else `application.properties`). Empty admin field → props default.
 
+## N–N sticky ASP / NI peer LB
+
+**Topology:** 1 AS × **N ASPs** (N–N). Digicom L1-1404 + L2-1403 is an N=2 example — not A-A/A-P-only.
+
+| Layer | Behaviour |
+|-------|-----------|
+| Mid-dialog | Ingress ASP → `Dialog.preferredAspName` → `AsImpl.write` return-on-X (bypass SLS). Preferred down → SLS among remaining ACTIVE of N (default); fail-closed: `-Dorg.restcomm.protocols.ss7.m3ua.preferredAsp.failClosed=true`. |
+| New NI/GTT | `Ss7PeerRouteAffinity` (ISPN) LB across **N** candidate PC/ASP pairs, then pin on dialog. USSDGW: `ClusterBootstrap` + `Ss7PeerRouteService` + `pickPeerRoute` on NI / MAP2MAP (`ussd.ss7.peer-route-lb.enabled`, default true). |
+
+Detail: jSS7 `docs/sticky-asp-nn.md`. Lab `networkId=1` unchanged; Digicom live typically `networkId=0`.
+
 ## Operator Digicom / live carrier (dual push — Digicom kept, not on nhanth87)
 
 **SCTP buffers (5k headroom):** host sysctl drop-in [`build/systemd/99-ussdgw-sctp-buffers.conf`](../../build/systemd/99-ussdgw-sctp-buffers.conf) — not carrier SS7 JSON. Skills § Digicom OS/SCTP buffers. Restart `ussdgw` after apply; **not** a measured 5k claim.

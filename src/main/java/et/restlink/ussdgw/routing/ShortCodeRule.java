@@ -9,9 +9,11 @@ package et.restlink.ussdgw.routing;
  * One rule model covers short and long dials — no separate short/long rule types.
  *
  * <p>MAP2MAP re-route: when {@link #rerouteEnable()} and {@link #redirectUssdString()} are set,
- * {@code Map2MapSbb} hops MAP UnstructuredSS-Request with that USSD string (not SCCP GT)
- * before the HTTP/gRPC/SIP AS pull. Default {@code rerouteEnable=false} = classic direct
- * to {@code asUrl}. {@link #bypass()} is derived as {@code !rerouteEnable} (transition only).
+ * {@code Map2MapSbb} hops MAP UnstructuredSS-Request with the resolved hop USSD (not SCCP GT)
+ * before the HTTP/gRPC/SIP AS pull. {@code mark=true} long dials preserve the suffix after the
+ * mark prefix ({@code *804*1234#}+redirect {@code *875*} → hop {@code *875*1234#}); exact short
+ * stays literal redirect. Default {@code rerouteEnable=false} = classic direct to {@code asUrl}.
+ * {@link #bypass()} is derived as {@code !rerouteEnable} (transition only).
  *
  * <p>{@link #hlrMode()} optional override for NI / HLR face (Case 1): {@code null}/{@code INHERIT}
  * → HLR Face global; {@code FAKE} / {@code PROXY_MAP} / …. <strong>Ignored</strong> for MAP2MAP
@@ -221,5 +223,53 @@ public record ShortCodeRule(
         }
         String digits = map2mapCalledGtDigits(s);
         return digits.isEmpty() ? s : "*" + digits + "#";
+    }
+
+    /**
+     * Resolve outbound MAP2MAP hop USSD for one rule.
+     *
+     * <ul>
+     *   <li>{@code mark=false} (exact short) → literal {@link #map2mapUssdString(String)} of redirect</li>
+     *   <li>{@code mark=true} + short dial ({@code prefix} or {@code prefix#}) → same literal redirect</li>
+     *   <li>{@code mark=true} + long dial → replace mark prefix only; keep leftover (incl. trailing
+     *       {@code #}). Example: dial {@code *804*1234#}, mark {@code *804*}, redirect {@code *875*}
+     *       → {@code *875*1234#}</li>
+     * </ul>
+     *
+     * <p>When redirect ends with {@code #} and leftover is non-empty, the trailing {@code #} on
+     * redirect is dropped before concat so leftover can supply the terminator
+     * ({@code *875#}+{@code 1234#} → {@code *8751234#}). Prefer redirect shaped as a prefix
+     * ({@code *875*}) for {@code *{n}*xxx#} MMI.
+     */
+    public static String resolveHopUssd(String dialedUssd, boolean mark, String markKey,
+                                        String redirectUssd) {
+        String redirect = map2mapUssdString(redirectUssd);
+        if (redirect.isEmpty()) {
+            return "";
+        }
+        if (!mark) {
+            return redirect;
+        }
+        String dial = dialedUssd == null ? "" : dialedUssd.trim();
+        String prefix = markKey == null ? "" : markKey.trim();
+        if (prefix.isEmpty() || !dial.startsWith(prefix)) {
+            return redirect;
+        }
+        if (dial.equals(prefix) || dial.equals(prefix + "#")) {
+            return redirect;
+        }
+        String leftover = dial.substring(prefix.length());
+        if (leftover.isEmpty()) {
+            return redirect;
+        }
+        String base = redirect.endsWith("#")
+                ? redirect.substring(0, redirect.length() - 1)
+                : redirect;
+        return base + leftover;
+    }
+
+    /** Instance form: this rule's mark / shortCode / redirect against {@code dialedUssd}. */
+    public String resolveHopUssd(String dialedUssd) {
+        return resolveHopUssd(dialedUssd, mark, shortCode, map2mapGt);
     }
 }

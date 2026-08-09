@@ -1205,7 +1205,8 @@ public class AdminHttpHandler {
                 || u.equals(CdrStatuses.AS_EMPTY_BODY)
                 || u.equals("SRI_NO_MSC")
                 || u.equals("NI_NO_MSC")
-                || u.equals("HLR_REJECT")) {
+                || u.equals("HLR_REJECT")
+                || u.equals("MAP2MAP_HOP_ABORT")) {
             return "cdr-status--fail";
         }
         if ("COMPLETED".equals(phase) || "SUCCESS".equalsIgnoreCase(status)
@@ -1213,6 +1214,10 @@ public class AdminHttpHandler {
                 || u.equals("MAP2MAP_COMPLETE_AFTER_GATE")
                 || u.equals("BRIDGED_DONE")) {
             return "cdr-status--ok";
+        }
+        // Hop CLOSE-without-RESULT — warning amber like GATE_ARMED (not hard fail red).
+        if (u.equals("MAP2MAP_HOP_CLOSE")) {
+            return "cdr-status--gated";
         }
         // AS pull after hop-empty / reject — not a green "HLR OK".
         if (u.equals("MAP2MAP_AS_ROUTED")) {

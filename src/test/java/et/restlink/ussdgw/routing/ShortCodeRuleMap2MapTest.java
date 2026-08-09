@@ -94,4 +94,31 @@ class ShortCodeRuleMap2MapTest {
         assertThat(r.fixedHopArmed()).isTrue();
     }
 
+    @Test
+    void resolveHopUssdExactShortLiteral() {
+        assertThat(ShortCodeRule.resolveHopUssd("*804#", false, "*804#", "*875#"))
+                .isEqualTo("*875#");
+        assertThat(ShortCodeRule.resolveHopUssd("*804#", true, "*804", "*875#"))
+                .isEqualTo("*875#");
+        assertThat(ShortCodeRule.resolveHopUssd("*804#", true, "*804#", "*875#"))
+                .isEqualTo("*875#");
+    }
+
+    @Test
+    void resolveHopUssdLongPreservesSuffix() {
+        assertThat(ShortCodeRule.resolveHopUssd("*804*1234#", true, "*804*", "*875*"))
+                .isEqualTo("*875*1234#");
+        assertThat(ShortCodeRule.resolveHopUssd("*804*1234#", true, "*804*", "*875#"))
+                .isEqualTo("*8751234#");
+        ShortCodeRule r = ShortCodeRule.ofReroute("*804*", RuleType.HTTP, "http://as/", true,
+                null, 0, true, null, true, "*875*", null);
+        assertThat(r.resolveHopUssd("*804*99#")).isEqualTo("*875*99#");
+    }
+
+    @Test
+    void resolveHopUssdMarkWithoutMatchFallsBackToLiteral() {
+        assertThat(ShortCodeRule.resolveHopUssd("*999*1#", true, "*804*", "*875*"))
+                .isEqualTo("*875*");
+    }
+
 }

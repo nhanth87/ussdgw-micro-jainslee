@@ -379,6 +379,71 @@ class Map2MapSbbTest {
     }
 
     @Test
+    void fixedHopLongMarkPreservesSuffixOnWire() {
+        set(services, "linkStatus", new LinkStatusService() {
+            @Override
+            public boolean ss7Live() {
+                return true;
+            }
+        });
+        et.restlink.ussdgw.routing.ShortCodeRoutingService routing =
+                new et.restlink.ussdgw.routing.ShortCodeRoutingService();
+        routing.put(ShortCodeRule.ofReroute("*804*", RuleType.HTTP, "http://as/", true,
+                null, 0, true, null, true, "*875*", null, "251971200201", 6));
+        set(services, "routing", routing);
+
+        VirtualSession session = new VirtualSession("vs-long", "corr-long", "req-long", "251911000001", 0,
+                "dlg-long", "*804*");
+        store.put(session);
+
+        Map2MapRequestEvent req = new Map2MapRequestEvent(
+                "corr-long", "m2m-corr-long", "dlg-long", 9L, "251911000001", "*804*",
+                "*804*1234#", "*875*", "http://127.0.0.1:8090/ussd/pull", RuleType.HTTP, 0, null,
+                "vs-long", "req-long", true, null, "251971200201", 6);
+
+        sbb.onEvent(req, container.createActivityContext("t-long"));
+
+        assertThat(ss7.cmds).hasSize(1);
+        var ussd = (Ss7Command.MapUnstructuredSsRequest) ss7.cmds.get(0);
+        assertThat(ussd.processUnstructured()).isTrue();
+        assertThat(ussd.text()).isEqualTo("*875*1234#");
+        assertThat(cdr.statuses()).contains(Map2MapCdr.USSD_SENT);
+        assertThat(cdr.details().stream().anyMatch(d -> d != null && d.contains("hopUssd=*875*1234#")))
+                .isTrue();
+    }
+
+    @Test
+    void fixedHopLongMarkChainsSecondReroute() {
+        set(services, "linkStatus", new LinkStatusService() {
+            @Override
+            public boolean ss7Live() {
+                return true;
+            }
+        });
+        et.restlink.ussdgw.routing.ShortCodeRoutingService routing =
+                new et.restlink.ussdgw.routing.ShortCodeRoutingService();
+        routing.put(ShortCodeRule.ofReroute("*804*", RuleType.HTTP, "http://as/", true,
+                null, 0, true, null, true, "*875*", null, "251971200201", 6));
+        routing.put(ShortCodeRule.ofReroute("*875*", RuleType.HTTP, "http://as/", true,
+                null, 0, true, null, true, "*8775*", null));
+        set(services, "routing", routing);
+
+        VirtualSession session = new VirtualSession("vs-ch", "corr-ch", "req-ch", "251911000001", 0,
+                "dlg-ch", "*804*");
+        store.put(session);
+
+        Map2MapRequestEvent req = new Map2MapRequestEvent(
+                "corr-ch", "m2m-corr-ch", "dlg-ch", 9L, "251911000001", "*804*",
+                "*804*1234#", "*875*", "http://127.0.0.1:8090/ussd/pull", RuleType.HTTP, 0, null,
+                "vs-ch", "req-ch", true, null, "251971200201", 6);
+
+        sbb.onEvent(req, container.createActivityContext("t-ch"));
+
+        var ussd = (Ss7Command.MapUnstructuredSsRequest) ss7.cmds.get(0);
+        assertThat(ussd.text()).isEqualTo("*8775*1234#");
+    }
+
+    @Test
     void fixedHopDestSkipsSriAndFakeSendsToConfiguredGtSsn() {
         set(services, "linkStatus", new LinkStatusService() {
             @Override
