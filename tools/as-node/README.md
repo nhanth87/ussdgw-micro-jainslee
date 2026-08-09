@@ -17,8 +17,9 @@ Default `ACTION=CONTINUE` runs a **3–4 menu catalog** with multi-turn digits `
 | `help` | Digicom support lab — FAQ / Agent / Status / End |
 
 **Menu pick** (`MENU_PICK`, default **`hash`**): stable `hash(msisdn) % 4` so the same
-subscriber always gets the same menu. Alternatives: `random`, `rotate`, or force
-`main` / `lang` / `promo` / `help`.
+subscriber always gets the same menu. Alternatives: `random`, `rotate`, force
+`main` / `lang` / `promo` / `help`, or **`multimenu`** (scripted prove:
+`abc` → digit `2` → `2-dce` → END `(xyz)`).
 
 Leaf replies are labeled `[menu/digit] …` for log grepping. Session key = `correlationId`
 (XML `localId`). Set `INTERACTIVE=false` to restore flat `MENU_TEXT` one-shot CONTINUE.
@@ -38,6 +39,8 @@ npm install
 | `npm run pull:bridge` | `DELAY_MS=8000` SYNC — late body → VirtualSessionBridge |
 | `npm run pull:map2map` | MAP2MAP Test AS — enrich assert + hop echo + gated notify ACK |
 | `npm run pull:map2map:bridge` | Same + `DELAY_MS=8000` (prove AdaptiveTimeout / gate) |
+| `npm run pull:multimenu` | Scripted N-step prove: `abc` → `2-dce` → `(xyz)` |
+| `npm run pull:multimenu:map2map` | Same multimenu + MAP2MAP enrich assert (no hop-echo overlay) |
 | `npm run pull:async` | `MODE=async_ack` + `WIRE=json` — ACK then `/as/callback` |
 | `npm run push:ni` | Classic NI interactive menu → GW `/ussd` + `JSESSIONID` multi-turn |
 | `npm run push:ni:static` | NI one-shot (`INTERACTIVE=false`) |

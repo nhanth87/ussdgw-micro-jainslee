@@ -6,7 +6,7 @@ import java.time.Instant;
 import java.util.UUID;
 
 /**
- * Admin/UI view of a CDR row (maps from {@link CdrEntity}).
+ * Admin/UI view of a session CDR row (maps from {@link CdrEntity}).
  */
 public final class CdrRecord {
     public UUID id;
@@ -25,12 +25,18 @@ public final class CdrRecord {
     public String hopOutcome;
     public String refuseReason;
     public String asUssd;
+    public Instant startedAt;
+    public Instant updatedAt;
+    public Integer eventCount;
+    public String eventsJson;
+    /** True when row was synthesized from legacy {@code ussd_cdr} (pre-session ledger). */
+    public boolean legacyEventTape;
 
     public static CdrRecord fromEntity(CdrEntity e) {
         CdrRecord r = new CdrRecord();
         if (e == null) return r;
         r.id = e.id;
-        r.createdAt = e.recordedAt;
+        r.createdAt = e.updatedAt != null ? e.updatedAt : e.recordedAt;
         r.correlationId = e.correlationId;
         r.phase = e.phase;
         r.msisdn = e.msisdn;
@@ -45,6 +51,10 @@ public final class CdrRecord {
         r.hopOutcome = e.hopOutcome;
         r.refuseReason = e.refuseReason;
         r.asUssd = e.asUssd;
+        r.startedAt = e.startedAt;
+        r.updatedAt = e.updatedAt;
+        r.eventCount = e.eventCount;
+        r.eventsJson = e.eventsJson;
         return r;
     }
 }

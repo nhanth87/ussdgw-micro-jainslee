@@ -366,6 +366,11 @@ public final class MapUssdParentSbb implements Sbb, SleeEventHandler {
         session.setTenantId(r.tenantId());
         session.setOriginationType(OriginationType.MAP);
         session.setLocalGt(MapDialogHelper.localGt(svc().config()));
+        // Persist dialed for digit continues — AS pull ussdString=digit, originatedUssd stays MO dial.
+        session.setOriginatedUssd(ussd);
+        if (r.map2mapArmed()) {
+            session.setRedirectUssd(r.redirectUssdString());
+        }
 
         if (r.map2mapArmed()) {
             // RE_ROUTE order: hop to upper HLR first; arm AdaptiveTimeout only after hop
@@ -458,9 +463,13 @@ public final class MapUssdParentSbb implements Sbb, SleeEventHandler {
                 || session.state().terminal());
         String outcome = Map2MapCdr.hopOutcomeForDialogLost(kind);
         String status = Map2MapCdr.statusForDialogLost(kind, alreadyBridged);
+        // Hop USSD text → HOP_CLOSE + S1_ACTIVE (amber). No text / reject / abort / timer → FAILED.
+        et.restlink.ussdgw.cdr.CdrPhase lostPhase = Map2MapCdr.HOP_CLOSE.equals(status)
+                ? et.restlink.ussdgw.cdr.CdrPhase.S1_ACTIVE
+                : et.restlink.ussdgw.cdr.CdrPhase.FAILED;
         try {
             svc().cdr().write(req.correlationId(),
-                    et.restlink.ussdgw.cdr.CdrPhase.FAILED, req.msisdn(), req.shortCode(),
+                    lostPhase, req.msisdn(), req.shortCode(),
                     status,
                     Map2MapCdr.detail(req, "kind=" + kind,
                             "hopOutcome=" + outcome,
@@ -588,11 +597,32 @@ public final class MapUssdParentSbb implements Sbb, SleeEventHandler {
         s.nextGeneration();
         s.setAdaptiveBridgeArm(adaptiveBridgeArmFor(r.ruleType()));
         svc().bridge().startAwaitingAs(s);
+        // Digit in ussdString only — never overwrite originatedUssd with the digit alone.
+        String originated = blankToFallback(s.originatedUssd(), s.shortCode());
         AsRequest asReq = new AsRequest(
                 s.virtualSessionId(), s.correlationId(), s.requestId(), s.generation(),
                 s.msisdn(), s.shortCode(), ussd, s.networkId())
-                .withOriginated(ussd, r.codeKindForDial(ussd));
+                .withOriginated(originated, r.codeKindForDial(originated));
+        if (notBlank(s.redirectUssd()) || notBlank(s.hopUssd())) {
+            asReq = asReq.withMap2MapCodes(
+                    blankToNull(s.redirectUssd()), blankToNull(s.hopUssd()));
+        }
         return svc().asPullRouter().route(r, asReq, s.correlationId()) + " continue gen=" + s.generation();
+    }
+
+    private static String blankToFallback(String value, String fallback) {
+        if (value != null && !value.isBlank()) {
+            return value.trim();
+        }
+        return fallback == null || fallback.isBlank() ? null : fallback.trim();
+    }
+
+    private static String blankToNull(String value) {
+        return value == null || value.isBlank() ? null : value.trim();
+    }
+
+    private static boolean notBlank(String value) {
+        return value != null && !value.isBlank();
     }
 
     /**

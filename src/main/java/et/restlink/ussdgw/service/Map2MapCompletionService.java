@@ -8,6 +8,7 @@ import et.restlink.ussdgw.bridge.VirtualSessionState;
 import et.restlink.ussdgw.bridge.VirtualSessionStore;
 import et.restlink.ussdgw.cdr.CdrPhase;
 import et.restlink.ussdgw.cdr.CdrService;
+import et.restlink.ussdgw.cdr.CdrUssdSnippet;
 import et.restlink.ussdgw.cdr.Map2MapCdr;
 import et.restlink.ussdgw.events.Map2MapRequestEvent;
 import et.restlink.ussdgw.profile.UssdUserProfileStore;
@@ -143,6 +144,18 @@ public class Map2MapCompletionService {
         }
         session.setAdaptiveBridgeArm(true);
 
+        String dialed = req.dialedUssd() == null ? "" : req.dialedUssd();
+        String asUssd = Map2MapCdr.asUssdForReRouteHop(hop, outcome);
+        String codeKind = ShortCodeRule.codeKind(dialed, req.mark(), req.shortCode());
+        String redirect = blankToNull(req.redirectUssd());
+        String hopCode = resolveHopCode(req);
+        // Persist for digit continues: ussdString=digit, originatedUssd stays dialed (hop-once).
+        if (!dialed.isEmpty()) {
+            session.setOriginatedUssd(dialed);
+        }
+        session.setRedirectUssd(redirect);
+        session.setHopUssd(hopCode);
+
         VirtualSessionState st = session.state();
         if (st != null && st.terminal()) {
             LOG.warn("MAP2MAP complete on terminal session corr={} state={}",
@@ -174,11 +187,6 @@ public class Map2MapCompletionService {
             rearmed = true;
         }
 
-        String dialed = req.dialedUssd() == null ? "" : req.dialedUssd();
-        String asUssd = Map2MapCdr.asUssdForReRouteHop(hop, outcome);
-        String codeKind = ShortCodeRule.codeKind(dialed, req.mark(), req.shortCode());
-        String redirect = blankToNull(req.redirectUssd());
-        String hopCode = resolveHopCode(req);
         AsRequest asReq = new AsRequest(
                 session.virtualSessionId(), req.correlationId(), req.requestId(),
                 session.generation(), req.msisdn(), req.shortCode(), asUssd, req.networkId())
@@ -208,7 +216,7 @@ public class Map2MapCompletionService {
                         req.shortCode(), Map2MapCdr.AS_ROUTE_FAIL,
                         Map2MapCdr.detail(req, "err=" + ex.getMessage(),
                                 "hopOutcome=" + outcome,
-                                "asUssd=" + asUssd,
+                                CdrUssdSnippet.asUssdDetail(asUssd),
                                 afterGate ? "phase=after-gate" : "phase=as"),
                         req.networkId(), req.tenantId(), "MAP",
                         Map2MapCdr.gateMs(session), null);
@@ -228,11 +236,12 @@ public class Map2MapCompletionService {
             } else if (terminalHop) {
                 status = Map2MapCdr.AS_ROUTED;
             } else {
-                status = Map2MapCdr.OK;
+                // Hop returned USSD text — amber HOP_CLOSE (locked call flow), not green OK alone.
+                status = Map2MapCdr.HOP_CLOSE;
             }
             String d = Map2MapCdr.detail(req,
                     "hopOutcome=" + outcome,
-                    "asUssd=" + asUssd,
+                    CdrUssdSnippet.asUssdDetail(asUssd),
                     hop.isEmpty() ? "hop-empty" : ("hopLen=" + hop.length()),
                     "codeKind=" + codeKind,
                     "virtualBridgeId=" + session.correlationId(),

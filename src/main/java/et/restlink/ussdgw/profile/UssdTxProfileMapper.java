@@ -37,6 +37,9 @@ public final class UssdTxProfileMapper {
         p.setLocalGt(s.localGt());
         p.setTenantId(s.tenantId());
         p.setOriginationType(s.originationType().name());
+        p.setOriginatedUssd(s.originatedUssd());
+        p.setRedirectUssd(s.redirectUssd());
+        p.setHopUssd(s.hopUssd());
         p.setExpiresAtMs(expiresAtMs);
     }
 
@@ -102,6 +105,9 @@ public final class UssdTxProfileMapper {
         }
         s.setTenantId(p.getTenantId());
         s.setOriginationType(OriginationType.parse(p.getOriginationType()));
+        s.setOriginatedUssd(p.getOriginatedUssd());
+        s.setRedirectUssd(p.getRedirectUssd());
+        s.setHopUssd(p.getHopUssd());
         return s;
     }
 

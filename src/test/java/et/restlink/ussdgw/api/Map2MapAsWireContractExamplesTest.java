@@ -394,6 +394,93 @@ class Map2MapAsWireContractExamplesTest {
     @DisplayName("§4d Multi-menu successive round-trips")
     class MultiMenu {
         @Test
+        void nStepXmlJsonParity_abc_digit2_end() {
+            // Turn 1 AS→GW CONTINUE "abc"
+            AsResponse menu1Xml = facade.decodePullResponse("""
+                    <dialog mapMessagesSize="1" localId="corr-mo-1"
+                            sessionId="vs-mo-1" virtualBridgeId="corr-mo-1">
+                      <unstructuredSSRequest_Request dataCodingScheme="15" string="abc"/>
+                    </dialog>
+                    """, AsHttpWireFormat.XML, MO_CORR);
+            AsResponse menu1Json = facade.decodePullResponse("""
+                    {"correlationId":"corr-mo-1","requestId":"corr-mo-1","generation":1,
+                     "text":"abc","action":"CONTINUE","async":false,"alphabet":"AUTO",
+                     "sessionId":"vs-mo-1","virtualBridgeId":"corr-mo-1"}
+                    """, AsHttpWireFormat.JSON, MO_CORR);
+            assertThat(menu1Xml.action()).isEqualTo(menu1Json.action()).isEqualTo(AsAction.CONTINUE);
+            assertThat(menu1Xml.text()).isEqualTo(menu1Json.text()).isEqualTo("abc");
+            assertThat(menu1Xml.correlationId()).isEqualTo(menu1Json.correlationId()).isEqualTo(MO_CORR);
+
+            // Digit continue pull gen>0, ussdString=digit, originated stays dialed
+            AsRequest digitPull = new AsRequest(MO_VS, MO_CORR, MO_CORR, 1, "251911000001", "*100#",
+                    "2", 0, MO_CORR, 7000L, "BRIDGE").withOriginated("*100#", "SHORT");
+            String digitXml = facade.encodePullRequest(digitPull, AsHttpWireFormat.XML);
+            String digitJson = facade.encodePullRequest(digitPull, AsHttpWireFormat.JSON);
+            assertThat(digitXml)
+                    .contains("localId=\"" + MO_CORR + "\"")
+                    .contains("unstructuredSSRequest_Request")
+                    .contains("string=\"2\"")
+                    .contains("originatedUssd=\"*100#\"")
+                    .doesNotContain("processUnstructuredSSRequest_Request");
+            AsRequest digitBack = AsWireCodec.decodeRequest(
+                    digitJson.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            assertThat(digitBack.correlationId()).isEqualTo(MO_CORR);
+            assertThat(digitBack.generation()).isEqualTo(1);
+            assertThat(digitBack.ussdString()).isEqualTo("2");
+            assertThat(digitBack.originatedUssd()).isEqualTo("*100#");
+
+            // Turn 2 AS→GW CONTINUE "2-dce"
+            AsResponse menu2Xml = facade.decodePullResponse("""
+                    <dialog mapMessagesSize="1" localId="corr-mo-1">
+                      <unstructuredSSRequest_Request dataCodingScheme="15" string="2-dce"/>
+                    </dialog>
+                    """, AsHttpWireFormat.XML, MO_CORR);
+            AsResponse menu2Json = facade.decodePullResponse("""
+                    {"correlationId":"corr-mo-1","text":"2-dce","action":"CONTINUE","async":false}
+                    """, AsHttpWireFormat.JSON, MO_CORR);
+            assertThat(menu2Xml.action()).isEqualTo(menu2Json.action()).isEqualTo(AsAction.CONTINUE);
+            assertThat(menu2Xml.text()).isEqualTo(menu2Json.text()).isEqualTo("2-dce");
+            assertThat(menu2Xml.correlationId()).isEqualTo(MO_CORR);
+
+            // Final END "(xyz)"
+            AsResponse endXml = facade.decodePullResponse("""
+                    <dialog mapMessagesSize="1" localId="corr-mo-1">
+                      <processUnstructuredSSRequest_Response dataCodingScheme="15" string="(xyz)"/>
+                    </dialog>
+                    """, AsHttpWireFormat.XML, MO_CORR);
+            AsResponse endJson = facade.decodePullResponse("""
+                    {"correlationId":"corr-mo-1","text":"(xyz)","action":"END","async":false}
+                    """, AsHttpWireFormat.JSON, MO_CORR);
+            assertThat(endXml.action()).isEqualTo(endJson.action()).isEqualTo(AsAction.END);
+            assertThat(endXml.text()).isEqualTo(endJson.text()).isEqualTo("(xyz)");
+            assertThat(endXml.correlationId()).isEqualTo(endJson.correlationId()).isEqualTo(MO_CORR);
+        }
+
+        @Test
+        void digitContinuePullShape_genBump() {
+            AsRequest begin = new AsRequest(MO_VS, MO_CORR, MO_CORR, 0, "251911000001", "*100#",
+                    "*100#", 0, MO_CORR, 7000L, "BRIDGE").withOriginated("*100#", "SHORT");
+            assertThat(facade.encodePullRequest(begin, AsHttpWireFormat.XML))
+                    .contains("processUnstructuredSSRequest_Request")
+                    .doesNotContain("unstructuredSSRequest_Request");
+
+            AsRequest digit = new AsRequest(MO_VS, MO_CORR, MO_CORR, 2, "251911000001", "*100#",
+                    "2", 0, MO_CORR, 7000L, "BRIDGE").withOriginated("*100#", "SHORT");
+            String digitXml = facade.encodePullRequest(digit, AsHttpWireFormat.XML);
+            assertThat(digitXml)
+                    .contains("unstructuredSSRequest_Request")
+                    .contains("string=\"2\"")
+                    .doesNotContain("processUnstructuredSSRequest_Request");
+            // Must not look like a fresh BEGIN after digit
+            AsRequest digitJson = AsWireCodec.decodeRequest(
+                    facade.encodePullRequest(digit, AsHttpWireFormat.JSON)
+                            .getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            assertThat(digitJson.generation()).isGreaterThan(0);
+            assertThat(digitJson.ussdString()).isEqualTo("2");
+            assertThat(digitJson.originatedUssd()).isEqualTo("*100#");
+        }
+
+        @Test
         void turn1XmlAndJsonFirstMenu() {
             String xml = """
                     <dialog mapMessagesSize="1"
@@ -555,6 +642,46 @@ class Map2MapAsWireContractExamplesTest {
     }
 
     @Nested
+    @DisplayName("MAP2MAP hop then multimenu digit (same corr, no hop overwrite)")
+    class Map2MapThenMultimenu {
+        @Test
+        void hopRespondedThenDigitSameCorr() {
+            AsRequest hop = new AsRequest(M2M_VS, M2M_CORR, M2M_CORR, 0, "251911230398", "*804#",
+                    HOP_AMHARIC, 0, M2M_CORR, 25000L, "BRIDGE")
+                    .withOriginated("*804#", "SHORT")
+                    .withMap2MapCodes("*875#", "*8775#");
+            String hopXml = facade.encodePullRequest(hop, AsHttpWireFormat.XML);
+            assertThat(hopXml)
+                    .contains("localId=\"" + M2M_CORR + "\"")
+                    .contains("hlrResult=\"responded\"")
+                    .contains("originatedUssd=\"*804#\"")
+                    .contains("string=\"" + HOP_AMHARIC + "\"");
+
+            // Digit continue: same corr; ussdString=digit — must NOT overwrite with hop text
+            AsRequest digit = new AsRequest(M2M_VS, M2M_CORR, M2M_CORR, 1, "251911230398", "*804#",
+                    "2", 0, M2M_CORR, 25000L, "BRIDGE")
+                    .withOriginated("*804#", "SHORT")
+                    .withMap2MapCodes("*875#", "*8775#");
+            String digitXml = facade.encodePullRequest(digit, AsHttpWireFormat.XML);
+            String digitJson = facade.encodePullRequest(digit, AsHttpWireFormat.JSON);
+            assertThat(digitXml)
+                    .contains("localId=\"" + M2M_CORR + "\"")
+                    .contains("string=\"2\"")
+                    .contains("originatedUssd=\"*804#\"")
+                    .contains("redirectUssd=\"*875#\"")
+                    .doesNotContain("string=\"" + HOP_AMHARIC + "\"");
+            AsRequest back = AsWireCodec.decodeRequest(
+                    digitJson.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            assertThat(back.correlationId()).isEqualTo(M2M_CORR);
+            assertThat(back.ussdString()).isEqualTo("2");
+            assertThat(back.originatedUssd()).isEqualTo("*804#");
+            assertThat(back.ussdString()).isNotEqualTo(HOP_AMHARIC);
+            assertThat(back.redirectUssd()).isEqualTo("*875#");
+            assertThat(back.hopUssd()).isEqualTo("*8775#");
+        }
+    }
+
+    @Nested
     @DisplayName("Begin → Continue multimenu → End wire flow")
     class BeginContinueEndFlow {
         @Test
@@ -613,6 +740,18 @@ class Map2MapAsWireContractExamplesTest {
                     """, AsHttpWireFormat.JSON, MO_CORR);
             assertThat(endXml.action()).isEqualTo(endJson.action()).isEqualTo(AsAction.END);
             assertThat(endXml.text()).isEqualTo(endJson.text()).isEqualTo("Thank you.");
+
+            // Intermediate CONTINUE after first digit (N-step fixture)
+            AsResponse midXml = facade.decodePullResponse("""
+                    <dialog mapMessagesSize="1" localId="corr-mo-1">
+                      <unstructuredSSRequest_Request dataCodingScheme="15" string="2-dce"/>
+                    </dialog>
+                    """, AsHttpWireFormat.XML, MO_CORR);
+            AsResponse midJson = facade.decodePullResponse("""
+                    {"correlationId":"corr-mo-1","text":"2-dce","action":"CONTINUE","async":false}
+                    """, AsHttpWireFormat.JSON, MO_CORR);
+            assertThat(midXml.action()).isEqualTo(midJson.action()).isEqualTo(AsAction.CONTINUE);
+            assertThat(midXml.text()).isEqualTo(midJson.text()).isEqualTo("2-dce");
         }
 
         @Test

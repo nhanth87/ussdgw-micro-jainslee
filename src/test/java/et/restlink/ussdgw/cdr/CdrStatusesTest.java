@@ -30,6 +30,25 @@ class CdrStatusesTest {
     }
 
     @Test
+    void hopCloseChipIsAmberEvenWhenPhaseFailed() {
+        // Historical Digicom rows: FAILED + MAP2MAP_HOP_CLOSE must stay amber.
+        assertThat(CdrStatuses.ledgerChipClass("FAILED", Map2MapCdr.HOP_CLOSE))
+                .isEqualTo("cdr-status--gated");
+        assertThat(CdrStatuses.ledgerChipClass("S1_ACTIVE", Map2MapCdr.HOP_CLOSE))
+                .isEqualTo("cdr-status--gated");
+        assertThat(CdrStatuses.ledgerChipClass("S1_ACTIVE", CdrStatuses.GATE_ARMED))
+                .isEqualTo("cdr-status--gated");
+        assertThat(CdrStatuses.ledgerChipClass("FAILED", Map2MapCdr.HOP_FAIL))
+                .isEqualTo("cdr-status--fail");
+        assertThat(CdrStatuses.ledgerChipClass("FAILED", Map2MapCdr.HOP_ABORT))
+                .isEqualTo("cdr-status--fail");
+        assertThat(CdrStatuses.ledgerSpineClass("FAILED", Map2MapCdr.HOP_CLOSE))
+                .isEqualTo("cdr-spine--s1");
+        assertThat(CdrStatuses.ledgerSpineClass("FAILED", Map2MapCdr.HOP_FAIL))
+                .isEqualTo("cdr-spine--fail");
+    }
+
+    @Test
     void adminPresetsIncludeMap2MapAndGated() {
         assertThat(CdrStatuses.ADMIN_PRESETS.stream().map(CdrStatuses.StatusPreset::value))
                 .contains("", "GATED*", "MAP2MAP_*", "GATED_AS*", "GATE_*", "BRIDGED*", "AS_*");

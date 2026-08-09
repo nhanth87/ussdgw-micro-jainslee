@@ -6,6 +6,7 @@
  *   MENU_PICK=random — Math.random per new session
  *   MENU_PICK=rotate — atomic counter
  *   MENU_PICK=main|lang|promo|help — force one catalog entry
+ *   MENU_PICK=multimenu — scripted prove path: abc → digit 2 → 2-dce → (xyz) END
  *
  * Labels are intentional so GW / as-node logs show which menu/branch fired.
  */
@@ -53,9 +54,16 @@ const CATALOG = [
   },
 ];
 
-/** @type {Map<string, { menuId: string, screen: 'root'|'leaf' }>} */
+/** @type {Map<string, { menuId: string, screen: 'root'|'leaf'|'mm1'|'mm2' }>} */
 const sessions = new Map();
 let rotateIdx = 0;
+
+/** Scripted multimenu prove leaves (greppable in as-node / CDR). */
+export const MULTIMENU = {
+  menu1: 'abc',
+  menu2: '2-dce',
+  end: '(xyz)',
+};
 
 export function listMenus() {
   return CATALOG.map((m) => ({
@@ -121,6 +129,53 @@ function normalizeDigit(ussd) {
 }
 
 /**
+ * Scripted N-step path for Digicom C prove / unit smoke:
+ * abc → digit 2 → 2-dce → (any further digit) → (xyz) END. Keyed by correlationId.
+ */
+function nextMultimenuResponse(parsed, key, digit, isInitial) {
+  let state = sessions.get(key);
+  if (!state || isInitial) {
+    state = { menuId: 'multimenu', screen: 'mm1' };
+    sessions.set(key, state);
+    return {
+      text: MULTIMENU.menu1,
+      action: 'CONTINUE',
+      menuId: 'multimenu',
+      screen: 'mm1',
+      sessionKey: key,
+    };
+  }
+  if (state.screen === 'mm1') {
+    if (digit === '2') {
+      state.screen = 'mm2';
+      sessions.set(key, state);
+      return {
+        text: MULTIMENU.menu2,
+        action: 'CONTINUE',
+        menuId: 'multimenu',
+        screen: 'mm2',
+        sessionKey: key,
+      };
+    }
+    return {
+      text: `[multimenu] pick 2 for ${MULTIMENU.menu2}\n${MULTIMENU.menu1}`,
+      action: 'CONTINUE',
+      menuId: 'multimenu',
+      screen: 'mm1',
+      sessionKey: key,
+    };
+  }
+  sessions.delete(key);
+  return {
+    text: MULTIMENU.end,
+    action: 'END',
+    menuId: 'multimenu',
+    screen: 'end',
+    sessionKey: key,
+  };
+}
+
+/**
  * Advance (or start) an interactive session from a GW→AS pull / NI digit.
  * @returns {{ text: string, action: 'CONTINUE'|'END'|'ABORT', menuId: string, screen: string }}
  */
@@ -133,6 +188,10 @@ export function nextMenuResponse(parsed, opts = {}) {
     (!digit && !sessions.has(key)) ||
     (String(parsed.ussdString || '').includes('*') &&
       String(parsed.ussdString || '').includes('#'));
+
+  if (String(pickMode).toLowerCase() === 'multimenu') {
+    return nextMultimenuResponse(parsed, key, digit, isInitial);
+  }
 
   let state = sessions.get(key);
   if (!state || isInitial) {

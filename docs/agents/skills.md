@@ -64,6 +64,8 @@ Peer: OTA [`docs/agents/packaging.md`](../../../../ota-service/ota-sim-push/docs
 
 Host shorthand: **`digicom-nb`**, APP_HOME **`/home/app/ota-push-services/ussdgw-micro-jainslee/`**. Do **not** invent Digicom secrets; host `configs/` is operator SoT.
 
+**Agent Shell:** always run `./build/package-dist.sh`, `mvn package|test`, and `./build/prove-as-wire-lab.sh` with **`required_permissions: ["all"]`** on the **first** call (worktree `.m2-agent-repo` / Maven local repo + deps) — never sandbox-fail then retry. → [lessons.md](lessons.md)
+
 #### AS wire / AdaptiveTimeout ship gate (A∧B before rsync; C Digicom sim)
 
 | Before rsync | After restart on Digicom |
@@ -72,7 +74,7 @@ Host shorthand: **`digicom-nb`**, APP_HOME **`/home/app/ota-push-services/ussdgw
 
 - Live Brook / **`networkId=0`** stays up for **manual** prove — **not** part of automated C1–C6 (never dial live `*804` in that checklist).
 - C fail ⇒ **not shipped**; rollback jars/`lib`/`quarkus` only — **never** Digicom `configs/`.
-- Contract + checklist: [`map2map-as-xml.md` § Prove / ship gate](../as-contract/map2map-as-xml.md) · script [`build/prove-as-wire-lab.sh`](../../build/prove-as-wire-lab.sh).
+- Contract + checklist: [`map2map-as-xml.md` § Prove / ship gate](../as-contract/map2map-as-xml.md) · §4d N-step multimenu (hop-once, digit continue, CDR `asUssd`) · script [`build/prove-as-wire-lab.sh`](../../build/prove-as-wire-lab.sh) · as-node `MENU_PICK=multimenu` (`abc`→`2-dce`→`(xyz)`).
 
 #### Digicom OS/SCTP buffers (5k headroom — not a measured 5k claim)
 
@@ -173,7 +175,7 @@ Footguns for this path: [lessons.md](lessons.md) (Digicom package / rsync / Prof
 - **Dashboard Planes:** status-first `form-card` rows (`bg-ink-panel`); Open → `/admin/ss7|hlr|smpp|http|grpc|diameter|sip|lab-mo`; secondary Monitor Hub link.
 - **USSD pages only:** routing, bridge, campaigns, CDR, tenants, users, lab-mo, http sync/async/callback, grpc, diameter, sip, hlr, ss7/smpp/http — **no** fleet/CAP/sendota.
 - Always seed `{{NAV_LINKS}}`, `{{NOTICE}}`, banners; never leave raw mustache. → [lessons.md](lessons.md)
-- **CDR ledger** (`/admin/cdr`): Routing-shell page; filter MSISDN + **correlation** + **status** (exact or `*` prefix: `MAP2MAP_*` / `GATED*` / `GATED_AS*`) + limit → HTMX `#cdr-rows` (`/admin/cdr/partial`, auto every 5s). Seed `{{ROWS}}`, `{{MSISDN}}`, `{{CORR}}`, `{{STATUS}}`, `{{STATUS_OPTIONS}}`, `{{LIMIT}}`, `{{ROW_COUNT}}`. Signature = phase **spine** (not `hx-live-badge`). Status chips: gated (`GATE_ARMED` / `MAP2MAP_HOP_CLOSE` → amber `cdr-status--gated`) / map2map / **fail** (`TIMEOUT` / `AS_EMPTY_BODY` / `*FAIL*` / `MAP2MAP_HOP_ABORT` → `cdr-status--fail` with **dark ink on soft red**). **Expand must survive the 5s poll** — `sessionStorage` + restore after `htmx:afterSwap`. Expand = three `cdr-digest` panels (Gated·HLR·AS / This record / Session timeline) via `CdrSessionDigest`. Perf: timeline query capped (`CDR_TIMELINE_LIMIT=16`) + cached per corr on the page — Digicom ~0.25s for limit=100 with ~170 rows is fine; if ledger grows huge, batch or lazy-load expand. Classic SCCP gaps stay in note. TENANT scoped. Catalog: `CdrStatuses` + `Map2MapCdr`.
+- **CDR ledger** (`/admin/cdr`): **1 correlationId → 1 row** (`ussd_cdr_session` UPSERT; optional `events=N` badge). File `USSD_CDR` = append-only event tape. Filter MSISDN + **correlation** + **status** (exact or `*` prefix: `MAP2MAP_*` / `GATED*` / `GATED_AS*`) on **rolled-up** status + limit → HTMX `#cdr-rows` (`/admin/cdr/partial`, auto every 5s). Seed `{{ROWS}}`, `{{MSISDN}}`, `{{CORR}}`, `{{STATUS}}`, `{{STATUS_OPTIONS}}`, `{{LIMIT}}`, `{{ROW_COUNT}}`. Signature = phase **spine** (not `hx-live-badge`). Status chips: gated (`GATE_ARMED` / `MAP2MAP_HOP_CLOSE` → amber `cdr-status--gated` — **HOP_CLOSE never red even if phase=FAILED**) / map2map / **fail** (`TIMEOUT` / `AS_EMPTY_BODY` / `*FAIL*` / `MAP2MAP_HOP_FAIL` / `MAP2MAP_HOP_ABORT` → `cdr-status--fail` with **dark ink on soft red**). MAP2MAP law: hop text → `HOP_CLOSE` amber + AS text; no text → fail + `hlrResult=none`; AS silent → Bridge wait text. → [map2map.md](../as-contract/map2map.md) § Call flow. **Expand must survive the 5s poll** — `sessionStorage` + restore after `htmx:afterSwap`. Expand = three `cdr-digest` panels (Gated·HLR·AS / This session / Session timeline) from **`events_json`** (no N+1 same-corr fetch); legacy `ussd_cdr` tape dual-read until operator coalesce. Classic SCCP gaps stay in note. TENANT scoped. Catalog: `CdrStatuses` + `Map2MapCdr` · rollup `CdrSessionRollup`.
 - Keep `htmx.min.js` for AJAX; **remove** all visible `hx-live-badge` / “HTMX” badges.
 
 ## Compress — remember these
@@ -206,6 +208,6 @@ Footguns for this path: [lessons.md](lessons.md) (Digicom package / rsync / Prof
   `adaptive.ewma` only. Samples clamped to `[FLOOR_MS, dialogTimeoutMs]`, decayed while idle,
   dropped when stale, resettable after AS redeploy. Durations use `System.nanoTime()`; wall
   clock is only for the durable gate deadline and CDR timestamps.
-- **Bridge CDR:** `gate_ms` + `observed_ewma_ms` are real `ussd_cdr` columns (Flyway **V5**, registered in `UssdSchemaInitializer.MIGRATIONS`) — not free-text `detail`. Never edit V1–V4 (checksum break).
+- **Bridge CDR:** `gate_ms` + `observed_ewma_ms` are real session columns (Flyway **V5** legacy tape + **V13** `ussd_cdr_session`) — not free-text `detail`. Never edit V1–V12 (checksum break).
 - **Logging:** Log4j2 → `ussd.log.dir` / `dist/logs/`; SLEE boundary = `SleeEventTrace` only.
 - **Commits:** nhanth87 / Tran Nhan only — no AI co-author trailers.

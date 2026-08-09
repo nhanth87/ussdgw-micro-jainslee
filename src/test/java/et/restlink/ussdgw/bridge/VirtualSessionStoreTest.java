@@ -41,6 +41,9 @@ class VirtualSessionStoreTest {
         s.setTenantId("ethio-bank");
         s.setPendingAlphabet(et.restlink.ussdgw.api.UssdAlphabet.UNICODE);
         s.setPendingText("ሰላም");
+        s.setOriginatedUssd("*804#");
+        s.setRedirectUssd("*875#");
+        s.setHopUssd("*8775#");
         store.put(s);
 
         OptionalSessionAssert present = new OptionalSessionAssert(store.get("corr-rt"));
@@ -50,6 +53,9 @@ class VirtualSessionStoreTest {
         assertThat(present.get().pendingAlphabet())
                 .isEqualTo(et.restlink.ussdgw.api.UssdAlphabet.UNICODE);
         assertThat(present.get().pendingText()).isEqualTo("ሰላም");
+        assertThat(present.get().originatedUssd()).isEqualTo("*804#");
+        assertThat(present.get().redirectUssd()).isEqualTo("*875#");
+        assertThat(present.get().hopUssd()).isEqualTo("*8775#");
         assertThat(store.byDialogId("dlg-rt")).isPresent();
         assertThat(store.byRequestId("req-rt")).isPresent();
     }

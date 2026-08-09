@@ -62,6 +62,20 @@ class CdrSessionDigestTest {
         assertThat(dig.asResponse().value()).isEqualTo("unknown");
     }
 
+    @Test
+    void digest_endMeansAsToUeNotHopClose() {
+        CdrRecord hop = row(Map2MapCdr.AS_ROUTED,
+                "hopOutcome=close|asUssd-empty|phase=as-no-rearm|asRouted=true", 7000L);
+        CdrRecord end = row("END",
+                "service=VirtualSessionBridge|sync|asAction=END|asUssd=Thank you.|asLen=10|note=AS→UE",
+                7000L);
+        end.phase = "COMPLETED";
+        var dig = CdrSessionDigest.from(end, List.of(end, hop));
+        assertThat(dig.asResponse().value()).isEqualTo("yes / AS→UE");
+        assertThat(dig.asResponse().evidence()).contains("asUssd=Thank you.");
+        assertThat(dig.detailFields().get("asUssd")).isEqualTo("Thank you.");
+    }
+
     private static CdrRecord row(String status, String detail, Long gateMs) {
         CdrRecord r = new CdrRecord();
         r.correlationId = "corr-1";

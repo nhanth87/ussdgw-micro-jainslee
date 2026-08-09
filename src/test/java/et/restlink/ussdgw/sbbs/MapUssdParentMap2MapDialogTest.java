@@ -139,9 +139,10 @@ class MapUssdParentMap2MapDialogTest {
         assertThat(pending.peek(out)).isEmpty();
         assertThat(asPulls.get()).isEqualTo(1);
         assertThat(lastOutcome.get()).isEqualTo(Map2MapCdr.OUTCOME_CLOSE);
-        assertThat(Map2MapCdr.statusForDialogLost("CLOSE", false)).isEqualTo(Map2MapCdr.HOP_CLOSE);
+        assertThat(Map2MapCdr.statusForDialogLost("CLOSE", false)).isEqualTo(Map2MapCdr.HOP_FAIL);
         assertThat(Map2MapCdr.statusForDialogLost("CLOSE", false))
-                .isNotEqualTo(Map2MapCdr.TIMEOUT);
+                .isNotEqualTo(Map2MapCdr.TIMEOUT)
+                .isNotEqualTo(Map2MapCdr.HOP_CLOSE);
         assertThat(networkAborts.get()).isZero();
     }
 

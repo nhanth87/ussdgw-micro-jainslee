@@ -46,6 +46,15 @@ public final class VirtualSession {
     private volatile String localGt = "100";
     private volatile String tenantId;
     private volatile OriginationType originationType = OriginationType.MAP;
+    /**
+     * Full UE dialed string from MO ingress (e.g. {@code *100#} / {@code *804#}).
+     * Survives digit continues — AS pull {@code ussdString} is the digit; originated stays dialed.
+     */
+    private volatile String originatedUssd;
+    /** MAP2MAP rule redirect code (e.g. {@code *875#}); optional on continue pulls. */
+    private volatile String redirectUssd;
+    /** MAP2MAP resolved hop USSD sent to upper HLR; optional on continue pulls. */
+    private volatile String hopUssd;
 
     public VirtualSession(String virtualSessionId, String correlationId, String requestId,
                           String msisdn, int networkId, String dialogId, String shortCode) {
@@ -124,4 +133,10 @@ public final class VirtualSession {
     public void setOriginationType(OriginationType originationType) {
         this.originationType = originationType == null ? OriginationType.MAP : originationType;
     }
+    public String originatedUssd() { return originatedUssd; }
+    public void setOriginatedUssd(String originatedUssd) { this.originatedUssd = originatedUssd; }
+    public String redirectUssd() { return redirectUssd; }
+    public void setRedirectUssd(String redirectUssd) { this.redirectUssd = redirectUssd; }
+    public String hopUssd() { return hopUssd; }
+    public void setHopUssd(String hopUssd) { this.hopUssd = hopUssd; }
 }

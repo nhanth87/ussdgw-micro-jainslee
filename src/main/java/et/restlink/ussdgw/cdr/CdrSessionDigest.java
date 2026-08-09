@@ -127,7 +127,8 @@ public final class CdrSessionDigest {
                     || u.equals(Map2MapCdr.HOP_START)) {
                 return Answer.of("yes", r.status);
             }
-            if (u.equals(Map2MapCdr.OK) || u.equals(Map2MapCdr.COMPLETE_AFTER_GATE)) {
+            if (u.equals(Map2MapCdr.OK) || u.equals(Map2MapCdr.COMPLETE_AFTER_GATE)
+                    || u.equals(Map2MapCdr.HOP_CLOSE)) {
                 return Answer.of("yes", r.status);
             }
         }
@@ -165,10 +166,14 @@ public final class CdrSessionDigest {
                 return Answer.of("abort", r.status);
             }
             if (u.equals(Map2MapCdr.HOP_CLOSE)) {
-                return Answer.of("close (no RESULT)", r.status);
+                return Answer.of("close (text)", r.status);
+            }
+            if (u.equals(Map2MapCdr.HOP_FAIL)) {
+                return Answer.of("none / empty", r.status);
             }
             // USSD_SENT = outbound only — not a hop response.
-            if (u.equals(Map2MapCdr.OK) || u.equals(Map2MapCdr.COMPLETE_AFTER_GATE)) {
+            if (u.equals(Map2MapCdr.OK) || u.equals(Map2MapCdr.COMPLETE_AFTER_GATE)
+                    || u.equals(Map2MapCdr.HOP_CLOSE)) {
                 String asUssd = fields.get("asUssd");
                 if (Map2MapCdr.AS_USSD_HLR_REJECT.equals(asUssd)
                         || Map2MapCdr.AS_USSD_HLR_NONE.equals(asUssd)) {
@@ -218,7 +223,8 @@ public final class CdrSessionDigest {
             }
             String u = r.status.toUpperCase(Locale.ROOT);
             if (u.equals(Map2MapCdr.AS_ROUTED) || u.equals(Map2MapCdr.OK)
-                    || u.equals(Map2MapCdr.COMPLETE_AFTER_GATE)) {
+                    || u.equals(Map2MapCdr.COMPLETE_AFTER_GATE)
+                    || u.equals(Map2MapCdr.HOP_CLOSE)) {
                 return Answer.of("yes (AS path)", r.status);
             }
         }
@@ -235,11 +241,18 @@ public final class CdrSessionDigest {
 
     private static Answer asResponse(List<CdrRecord> oldestFirst, Map<String, String> fields) {
         // Prefer definitive AS body outcomes over earlier MAP2MAP_AS_ROUTED / OK rows.
+        // END/CONTINUE = VirtualSessionBridge applied AS→UE (not hop-close).
         for (CdrRecord r : oldestFirst) {
             if (r == null || r.status == null) {
                 continue;
             }
             String u = r.status.toUpperCase(Locale.ROOT);
+            if (u.equals("END") || u.equals("CONTINUE")) {
+                String snip = fields.get("asUssd");
+                String ev = snip != null && !snip.isBlank()
+                        ? (r.status + "|asUssd=" + snip) : r.status;
+                return Answer.of("yes / AS→UE", ev);
+            }
             if (u.equals(CdrStatuses.GATED_AS_ACK) || u.equals(CdrStatuses.BRIDGED_DONE)) {
                 return Answer.of("yes / ack", r.status);
             }
@@ -255,7 +268,8 @@ public final class CdrSessionDigest {
             String u = r.status.toUpperCase(Locale.ROOT);
             // MAP2MAP_OK / AS_ROUTED = AS pull queued, not AS body ack.
             if (u.equals(Map2MapCdr.AS_ROUTED) || u.equals(Map2MapCdr.OK)
-                    || u.equals(Map2MapCdr.COMPLETE_AFTER_GATE)) {
+                    || u.equals(Map2MapCdr.COMPLETE_AFTER_GATE)
+                    || u.equals(Map2MapCdr.HOP_CLOSE)) {
                 return Answer.of("AS pull routed", r.status);
             }
         }

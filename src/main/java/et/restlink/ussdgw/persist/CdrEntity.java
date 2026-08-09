@@ -9,10 +9,11 @@ import java.time.Instant;
 import java.util.UUID;
 
 /**
- * USSD CDR row — OTA-shaped (UUID PK, async JDBC flusher, PostgreSQL-ready).
+ * USSD session CDR row — one {@code correlation_id} per ledger row ({@code ussd_cdr_session}).
+ * Hot-path milestones coalesce in {@code CdrDbFlusher}; file logger {@code USSD_CDR} stays append-only.
  */
 @Entity
-@Table(name = "ussd_cdr")
+@Table(name = "ussd_cdr_session")
 public class CdrEntity {
     @Id
     public UUID id;
@@ -47,11 +48,11 @@ public class CdrEntity {
     @Column(name = "origination_type", length = 32)
     public String originationType;
 
-    /** Adaptive gate applied to this leg (ms), when the row belongs to a gated phase. */
+    /** Adaptive gate applied to this session (ms), when known. */
     @Column(name = "gate_ms")
     public Long gateMs;
 
-    /** EWMA of AS latency for {@link #networkId} at the time of the row (ms). */
+    /** EWMA of AS latency for {@link #networkId} at last stamp (ms). */
     @Column(name = "observed_ewma_ms")
     public Long observedEwmaMs;
 
@@ -66,10 +67,26 @@ public class CdrEntity {
     @Column(name = "refuse_reason", length = 128)
     public String refuseReason;
 
-    /** USSD string posted (or to be posted) to AS for this completion leg. */
+    /** Latest USSD string posted (or to be posted) to AS for this session. */
     @Column(name = "as_ussd", length = 256)
     public String asUssd;
 
     @Column(name = "csv_line", nullable = false, length = 4000)
     public String csvLine;
+
+    /** First milestone time (immutable after insert). */
+    @Column(name = "started_at", nullable = false)
+    public Instant startedAt;
+
+    /** Last upsert time (admin list ORDER BY). */
+    @Column(name = "updated_at", nullable = false)
+    public Instant updatedAt;
+
+    /** How many hot-path milestones folded into this row. */
+    @Column(name = "event_count", nullable = false)
+    public Integer eventCount;
+
+    /** Capped JSON array of {@code {t,phase,status,detail?}} for expand timeline. */
+    @Column(name = "events_json", length = 8192)
+    public String eventsJson;
 }

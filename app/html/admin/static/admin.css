@@ -442,6 +442,18 @@ tbody.hx-table-live.htmx-settling {
   font-variant-numeric: tabular-nums;
   color: var(--color-fg-soft);
 }
+.cdr-events-badge {
+  display: inline-block;
+  margin-left: 0.35rem;
+  padding: 0.05rem 0.35rem;
+  font-size: 0.65rem;
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+  letter-spacing: 0.02em;
+  color: var(--ink-mute, #94a3b8);
+  border: 1px solid var(--ink-line, #334155);
+  border-radius: 0.25rem;
+  vertical-align: middle;
+}
 .cdr-corr {
   font-size: 0.7rem;
   color: var(--color-signal);
