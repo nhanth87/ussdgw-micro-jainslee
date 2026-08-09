@@ -57,12 +57,10 @@
         <div>
           <h2 class="mt-1 text-xl font-semibold text-slate-50">Call detail records</h2>
           <p class="mt-1 max-w-2xl text-sm text-ink-mute">
-            Find a subscriber leg by MSISDN, bridge correlation, or status
-            (gated / MAP2MAP / HLR_REJECT). RE_ROUTE: GATED#1 early
-            <code class="font-mono text-slate-300">hlr pending</code> AS pull
-            (parallel hop); hop done →
-            <code class="font-mono text-slate-300">hlr reject</code> /
-            <code class="font-mono text-slate-300">hlr none</code> (no 2nd GATED).
+            One row per correlation. Primary signal = AS USSD (~50 chars) + outcome
+            (END / CONTINUE / fail) — not GATE_ARMED bridge internals. Expand shows
+            status of all services (MAP MO · HLR/hop · Bridge/Adaptive · AS HTTP · MAP UE).
+            Filter by MSISDN, correlation, or status (MAP2MAP_* / GATED* / GATE_*).
           </p>
         </div>
         <div class="flex flex-wrap items-center gap-2 text-xs font-mono text-ink-mute">
