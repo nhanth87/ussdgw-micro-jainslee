@@ -328,11 +328,27 @@ public final class CdrSessionRollup {
             Instant t = parseInstant(jsonField(obj, "t"));
             String phase = jsonField(obj, "phase");
             String status = jsonField(obj, "status");
-            String detail = jsonField(obj, "detail");
+            String detail = normalizeEventDetail(jsonField(obj, "detail"));
             out.add(new Event(t, phase, status, detail));
             i = objEnd + 1;
         }
         return out;
+    }
+
+    /**
+     * Repair pre-fix events_json that JSON-escaped pipe detail by replacing {@code |} with
+     * {@code /}. Restores {@code key=} separators so {@code asUssd=} stays parseable.
+     */
+    static String normalizeEventDetail(String detail) {
+        if (detail == null || detail.isBlank() || detail.indexOf('|') >= 0) {
+            return detail;
+        }
+        if (detail.indexOf("asUssd=") < 0 && detail.indexOf("asAction=") < 0
+                && detail.indexOf("gateMs=") < 0 && detail.indexOf("hopOutcome=") < 0) {
+            return detail;
+        }
+        // "…/asUssd=hi/asLen=2" → "…|asUssd=hi|asLen=2" (values may still contain '/').
+        return detail.replaceAll("/(?=[A-Za-z_][A-Za-z0-9_]*=)", "|");
     }
 
     public static String serializeEvents(List<Event> events) {
@@ -509,11 +525,12 @@ public final class CdrSessionRollup {
         if (s == null) {
             return "";
         }
+        // Keep pipe '|' — CDR detail is pipe k=v; replacing it with '/' broke asUssd parse
+        // on expand timeline (events_json). Escape only JSON string metacharacters.
         return s.replace("\\", "\\\\")
                 .replace("\"", "\\\"")
                 .replace("\n", " ")
-                .replace("\r", " ")
-                .replace("|", "/");
+                .replace("\r", " ");
     }
 
     private static String nullToEmpty(String s) {

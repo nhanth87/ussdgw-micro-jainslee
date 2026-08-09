@@ -76,6 +76,35 @@ class CdrSessionDigestTest {
         assertThat(dig.detailFields().get("asUssd")).isEqualTo("Thank you.");
     }
 
+    @Test
+    void digest_asUssdFromSessionColumnWhenDetailLacksKey() {
+        CdrRecord end = row("END", "service=VirtualSessionBridge|sync|asAction=END|note=AS→UE", 7000L);
+        end.phase = "COMPLETED";
+        end.asUssd = "Balance is 12.50 ETB. Thank you for using Digicom.";
+        var dig = CdrSessionDigest.from(end, List.of(end));
+        assertThat(dig.detailFields().get("asUssd"))
+                .isEqualTo("Balance is 12.50 ETB. Thank you for using Digicom.");
+        assertThat(CdrUssdSnippet.resolveForDisplay(end.asUssd, dig.detailFields().get("asUssd")))
+                .startsWith("Balance is 12.50 ETB.")
+                .hasSizeLessThanOrEqualTo(CdrUssdSnippet.MAX_CHARS + 1);
+    }
+
+    @Test
+    void digest_recoversAsUssdFromMangledSlashDetailInTimeline() {
+        // Pre-fix events_json replaced '|' with '/' — column still has the text.
+        CdrRecord focus = row("END", "service=VirtualSessionBridge|note=rolled", 25000L);
+        focus.asUssd = "(xyz)";
+        CdrRecord mangled = row("END",
+                "service=VirtualSessionBridge/sync/asAction=END/asUssd=(xyz)/asLen=5/note=AS→UE",
+                25000L);
+        mangled.asUssd = "(xyz)";
+        String restored = CdrSessionRollup.normalizeEventDetail(mangled.detail);
+        mangled.detail = restored;
+        var dig = CdrSessionDigest.from(focus, List.of(mangled, focus));
+        assertThat(dig.detailFields().get("asUssd")).isEqualTo("(xyz)");
+        assertThat(restored).contains("|asUssd=(xyz)|");
+    }
+
     private static CdrRecord row(String status, String detail, Long gateMs) {
         CdrRecord r = new CdrRecord();
         r.correlationId = "corr-1";

@@ -40,4 +40,15 @@ public final class CdrUssdSnippet {
         String raw = text.trim();
         return "asUssd=" + of(raw) + "|asLen=" + raw.length();
     }
+
+    /**
+     * Prefer the persisted {@code as_ussd} column, then digest detail fields.
+     * Returns a ledger-safe snippet (≤ {@link #MAX_CHARS}) or empty when absent.
+     */
+    public static String resolveForDisplay(String columnAsUssd, String detailAsUssd) {
+        String raw = columnAsUssd != null && !columnAsUssd.isBlank()
+                ? columnAsUssd
+                : (detailAsUssd != null && !detailAsUssd.isBlank() ? detailAsUssd : null);
+        return of(raw);
+    }
 }

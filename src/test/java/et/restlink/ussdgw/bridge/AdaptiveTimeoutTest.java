@@ -2,9 +2,31 @@ package et.restlink.ussdgw.bridge;
 
 import org.junit.jupiter.api.Test;
 
+import java.util.LinkedHashMap;
+import java.util.Map;
+
 import static org.assertj.core.api.Assertions.assertThat;
 
 class AdaptiveTimeoutTest {
+
+    @Test
+    void formatSnapshotForDisplay_neverRawMapToString() {
+        assertThat(AdaptiveTimeout.formatSnapshotForDisplay(Map.of())).isEqualTo("—");
+        assertThat(AdaptiveTimeout.formatSnapshotForDisplay(null)).isEqualTo("—");
+
+        Map<Integer, Double> one = Map.of(1, 1000.0);
+        String single = AdaptiveTimeout.formatSnapshotForDisplay(one);
+        assertThat(single).isEqualTo("1000 ms");
+        assertThat(single).doesNotContain("{").doesNotContain("=");
+
+        Map<Integer, Double> multi = new LinkedHashMap<>();
+        multi.put(0, 900.0);
+        multi.put(1, 12_500.0);
+        String many = AdaptiveTimeout.formatSnapshotForDisplay(multi);
+        assertThat(many).contains("n0:900ms").contains("n1:12.5k");
+        assertThat(many).doesNotContain("{1=");
+    }
+
 
     @Test
     void unseededReturnsConfiguredGate() {

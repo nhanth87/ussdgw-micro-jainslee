@@ -454,6 +454,48 @@ tbody.hx-table-live.htmx-settling {
   border-radius: 0.25rem;
   vertical-align: middle;
 }
+/* Flat ledger AS USSD snippet (~50 chars) — never blow adjacent columns. */
+.cdr-as-ussd {
+  max-width: 14rem;
+  min-width: 0;
+}
+.cdr-as-ussd-snip {
+  display: block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.68rem;
+  color: var(--color-fg-soft);
+  letter-spacing: 0.01em;
+}
+.cdr-as-ussd-empty {
+  color: var(--color-ink-mute);
+}
+
+/* Dashboard KPI cards — long Adaptive EWMA (and any future metric) must not overflow. */
+.metric-card {
+  min-width: 0;
+  overflow: hidden;
+}
+.metric-card-value {
+  margin: 0.5rem 0 0;
+  font-size: 1.875rem;
+  line-height: 1.15;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.metric-card-value--long {
+  font-size: 1.05rem;
+  letter-spacing: -0.01em;
+}
+.metric-card-detail {
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
 .cdr-corr {
   font-size: 0.7rem;
   color: var(--color-signal);

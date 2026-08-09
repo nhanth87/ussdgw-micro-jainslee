@@ -10,6 +10,7 @@ import et.restlink.ussdgw.cdr.CdrRecord;
 import et.restlink.ussdgw.cdr.CdrService;
 import et.restlink.ussdgw.cdr.CdrSessionDigest;
 import et.restlink.ussdgw.cdr.CdrStatuses;
+import et.restlink.ussdgw.cdr.CdrUssdSnippet;
 import et.restlink.ussdgw.config.SmppConfigSupport;
 import et.restlink.ussdgw.config.Ss7ConfigSupport;
 import et.restlink.ussdgw.config.UssdConfigService;
@@ -797,7 +798,8 @@ public class AdminHttpHandler {
         long asRejects = asPull != null ? asPull.openRejects() : 0L;
         long niFail = saga != null ? saga.niFailCount() : 0L;
         long pullFail = saga != null ? saga.pullFailCount() : 0L;
-        Object ewma = adaptive.snapshot();
+        Map<Integer, Double> ewmaSnap = adaptive.snapshot();
+        String ewmaDisplay = AdaptiveTimeout.formatSnapshotForDisplay(ewmaSnap);
 
         StringBuilder cards = new StringBuilder();
         cards.append(metricCard("Sessions", String.valueOf(sessions), "active virtual sessions"));
@@ -810,7 +812,7 @@ public class AdminHttpHandler {
                         + config.asyncGateTimeoutMs() + "ms"));
         cards.append(metricCard("AS / Saga", String.valueOf(asRejects),
                 "circuit rejects · NI fail " + niFail + " · pull fail " + pullFail));
-        cards.append(metricCard("Adaptive", String.valueOf(ewma),
+        cards.append(metricCard("Adaptive", ewmaDisplay,
                 "EWMA · floor " + AdaptiveTimeout.FLOOR_MS + "ms · dialog "
                         + config.dialogTimeoutMs() + "ms"));
         long m2mArmed = map2MapTelemetry != null ? map2MapTelemetry.armedCount() : 0L;
@@ -862,7 +864,7 @@ public class AdminHttpHandler {
                     : "bridge.count".equals(k) ? bridgeCount
                     : "bridge.enabled".equals(k) ? config.bridgeEnabled()
                     : "scheduler.gateTicks".equals(k) ? (bridgeGate != null ? bridgeGate.gateTicks() : 0L)
-                    : "adaptive.ewma".equals(k) ? ewma
+                    : "adaptive.ewma".equals(k) ? ewmaSnap
                     : "map2map.armed".equals(k) ? m2mArmed
                     : "map2map.pending".equals(k) ? m2mPending
                     : "map2map.gatedDuringHop".equals(k) ? m2mGated
@@ -879,12 +881,17 @@ public class AdminHttpHandler {
     }
 
     private static String metricCard(String title, String value, String detail) {
-        return "<div class=\"rounded-lg border border-ink-line bg-ink-panel/90 p-4\">"
+        String v = value == null ? "—" : value;
+        boolean longValue = v.length() > 10;
+        return "<div class=\"metric-card min-w-0 overflow-hidden rounded-lg border border-ink-line bg-ink-panel/90 p-4\">"
                 + "<h3 class=\"text-[0.7rem] font-medium uppercase tracking-[0.18em] text-ink-mute\">"
                 + esc(title) + "</h3>"
-                + "<p class=\"mt-2 font-mono text-3xl font-medium tabular-nums text-signal\">"
-                + esc(value) + "</p>"
-                + "<p class=\"mt-1 font-mono text-xs text-ink-mute\">" + esc(detail) + "</p>"
+                + "<p class=\"metric-card-value mt-2 font-mono font-medium tabular-nums text-signal"
+                + (longValue ? " metric-card-value--long" : "")
+                + "\" title=\"" + esc(v) + "\">"
+                + esc(v) + "</p>"
+                + "<p class=\"metric-card-detail mt-1 font-mono text-xs text-ink-mute\">"
+                + esc(detail) + "</p>"
                 + "</div>";
     }
 
@@ -964,7 +971,7 @@ public class AdminHttpHandler {
         StringBuilder sb = new StringBuilder();
         var rows = cdr.listRecords(limit, scope, msisdn, corr, status);
         if (rows.isEmpty()) {
-            sb.append("<tr class=\"cdr-empty\"><td colspan=\"7\" class=\"px-3 py-6 text-ink-mute\">")
+            sb.append("<tr class=\"cdr-empty\"><td colspan=\"8\" class=\"px-3 py-6 text-ink-mute\">")
                     .append("No CDR rows for this filter. Try MSISDN, correlation, status ")
                     .append("(e.g. MAP2MAP_* / GATED*), or raise limit.")
                     .append("</td></tr>");
@@ -976,6 +983,15 @@ public class AdminHttpHandler {
             String spine = CdrStatuses.ledgerSpineClass(r.phase, r.status);
             String statusChip = CdrStatuses.ledgerChipClass(r.phase, r.status);
             String rowId = "cdr-" + (r.id != null ? r.id : i);
+            // Timeline from events_json (session ledger) — no N+1 same-corr list fetch.
+            // Legacy multi-row tape still dual-reads ussd_cdr once per corr (cached).
+            List<CdrRecord> timeline = timelineByCorr.computeIfAbsent(
+                    r.correlationId == null ? "" : r.correlationId,
+                    corrKey -> cdr.timelineFor(r, scope, CDR_TIMELINE_LIMIT));
+            CdrSessionDigest.Digest dig = CdrSessionDigest.from(r, timeline);
+            String asUssdSnip = CdrUssdSnippet.resolveForDisplay(
+                    r.asUssd, dig.detailFields().get("asUssd"));
+
             sb.append("<tr class=\"cdr-ledger-row\" data-cdr-row=\"")
                     .append(esc(rowId)).append("\">");
             sb.append("<td class=\"cdr-when px-3 py-2.5\">")
@@ -998,23 +1014,25 @@ public class AdminHttpHandler {
             sb.append("<td class=\"px-3 py-2.5\">").append(esc(nullToDash(r.shortCode))).append("</td>");
             sb.append("<td class=\"px-3 py-2.5\"><span class=\"cdr-status-chip ").append(statusChip).append("\">")
                     .append(esc(nullToDash(r.status))).append("</span></td>");
+            sb.append("<td class=\"px-3 py-2.5 cdr-as-ussd\">");
+            if (asUssdSnip.isEmpty()) {
+                sb.append("<span class=\"cdr-as-ussd-empty\" title=\"No AS USSD text on this session\">—</span>");
+            } else {
+                sb.append("<code class=\"cdr-as-ussd-snip\" title=\"")
+                        .append(esc(asUssdSnip)).append("\">")
+                        .append(esc(asUssdSnip)).append("</code>");
+            }
+            sb.append("</td>");
             sb.append("<td class=\"px-3 py-2.5 cdr-origin\">")
                     .append(esc(nullToDash(r.originationType))).append("</td>");
             sb.append("</tr>");
 
-            // Timeline from events_json (session ledger) — no N+1 same-corr list fetch.
-            // Legacy multi-row tape still dual-reads ussd_cdr once per corr (cached).
-            List<CdrRecord> timeline = timelineByCorr.computeIfAbsent(
-                    r.correlationId == null ? "" : r.correlationId,
-                    corrKey -> cdr.timelineFor(r, scope, CDR_TIMELINE_LIMIT));
-            CdrSessionDigest.Digest dig = CdrSessionDigest.from(r, timeline);
-
             // Expand: gate/HLR/AS digest + this row + corr timeline. Stay open across HTMX polls
             // via client sessionStorage (cdr.html) — server always emits class "hidden".
             sb.append("<tr class=\"cdr-detail hidden\" data-cdr-detail=\"").append(esc(rowId)).append("\">")
-                    .append("<td colspan=\"7\" class=\"px-3 py-3\">")
+                    .append("<td colspan=\"8\" class=\"px-3 py-3\">")
                     .append("<div class=\"cdr-detail-panel ink-panel\">");
-            appendCdrGatedDigest(sb, dig);
+            appendCdrGatedDigest(sb, dig, asUssdSnip);
             sb.append("<div class=\"cdr-digest cdr-record-box\" aria-label=\"This CDR record\">");
             sb.append("<p class=\"cdr-digest-title\">This session</p>");
             sb.append("<dl class=\"cdr-detail-grid\">");
@@ -1025,6 +1043,7 @@ public class AdminHttpHandler {
             cdrDetailItem(sb, "Short code", dig.shortCode() != null ? dig.shortCode() : r.shortCode);
             cdrDetailItem(sb, "Long / redirect", dig.longOrRedirect());
             cdrDetailItem(sb, "Dialed USSD", dig.dialed());
+            cdrDetailItem(sb, "AS ussdString", asUssdSnip.isEmpty() ? null : asUssdSnip);
             cdrDetailItem(sb, "Origination", r.originationType);
             cdrDetailItem(sb, "Network id", r.networkId == null ? null : Integer.toString(r.networkId));
             cdrDetailItem(sb, "Tenant", r.tenantId);
@@ -1041,11 +1060,12 @@ public class AdminHttpHandler {
             sb.append("</dl></div>");
             appendCdrTimeline(sb, dig.timelineOldestFirst());
             // TODO(cdr-parity): classic CdrLineFormatter also emitted local/remote SCCP
-            // (PC/SSN/RI/GTI/GT), orig/dest AddressString, dialog ids, duration, USSD string,
-            // eri IMSI/VLR — not persisted on ussd_cdr_session yet.
+            // (PC/SSN/RI/GTI/GT), orig/dest AddressString, dialog ids, duration,
+            // eri IMSI/VLR — not all persisted on ussd_cdr_session yet.
             sb.append("<p class=\"cdr-gap-note\">Classic fields not in store: dialog ids · duration · ")
-                    .append("USSD string · SCCP GT · IMSI/VLR · RecordStatus enum. ")
-                    .append("Ledger = 1 row/corr; timeline from events_json (or legacy ussd_cdr tape).")
+                    .append("SCCP GT · IMSI/VLR · RecordStatus enum. ")
+                    .append("AS USSD (~50 char) = as_ussd column + detail asUssd=; ")
+                    .append("ledger = 1 row/corr; timeline from events_json (or legacy ussd_cdr tape).")
                     .append("</p>");
             sb.append("</div></td></tr>");
             i++;
@@ -1053,7 +1073,8 @@ public class AdminHttpHandler {
         return sb.toString();
     }
 
-    private static void appendCdrGatedDigest(StringBuilder sb, CdrSessionDigest.Digest dig) {
+    private static void appendCdrGatedDigest(StringBuilder sb, CdrSessionDigest.Digest dig,
+                                             String asUssdSnip) {
         sb.append("<div class=\"cdr-digest\" aria-label=\"Gated / hop digest\">");
         sb.append("<p class=\"cdr-digest-title\">AdaptiveTimeout · Hop · AS</p>");
         sb.append("<dl class=\"cdr-detail-grid cdr-digest-grid\">");
@@ -1071,10 +1092,8 @@ public class AdminHttpHandler {
         if (hopOutcome != null) {
             cdrDetailItem(sb, "Hop outcome", hopOutcome);
         }
-        String asUssd = dig.detailFields().get("asUssd");
-        if (asUssd != null) {
-            cdrDetailItem(sb, "AS ussdString", asUssd);
-        }
+        // Always surface AS text when known (column and/or detail) — never hide behind expand-only parse.
+        cdrDetailItem(sb, "AS ussdString", asUssdSnip == null || asUssdSnip.isEmpty() ? null : asUssdSnip);
         String refuse = dig.detailFields().get("refuseReason");
         if (refuse != null) {
             cdrDetailItem(sb, "Refuse reason", refuse);

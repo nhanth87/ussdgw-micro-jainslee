@@ -47,6 +47,30 @@ class CdrSessionRollupTest {
     }
 
     @Test
+    void eventsJsonKeepsPipeSeparatorsForAsUssd() {
+        Instant t0 = Instant.parse("2026-08-09T12:00:00Z");
+        String detail = "service=VirtualSessionBridge|sync|asAction=END|asUssd="
+                + "A".repeat(50) + "|asLen=50|note=AS→UE";
+        CdrEntity session = CdrSessionRollup.merge(null,
+                delta("pipe", "END", "COMPLETED", t0, detail));
+        assertThat(session.eventsJson).contains("|asUssd=");
+        assertThat(session.eventsJson).doesNotContain("/asUssd=");
+        List<CdrSessionRollup.Event> events = CdrSessionRollup.parseEvents(session.eventsJson);
+        assertThat(events).hasSize(1);
+        assertThat(events.getFirst().detail()).contains("|asUssd=");
+        assertThat(CdrSessionDigest.parseDetail(events.getFirst().detail()).get("asUssd"))
+                .isEqualTo("A".repeat(50));
+    }
+
+    @Test
+    void normalizeEventDetail_restoresMangledSlashPipes() {
+        String mangled = "service=VirtualSessionBridge/sync/asAction=END/asUssd=(xyz)/asLen=5/note=AS→UE";
+        String restored = CdrSessionRollup.normalizeEventDetail(mangled);
+        assertThat(restored).contains("|asUssd=(xyz)|").contains("|asLen=5|");
+        assertThat(CdrSessionDigest.parseDetail(restored).get("asUssd")).isEqualTo("(xyz)");
+    }
+
+    @Test
     void continueUpdatesSameSessionAndLatestAsUssd() {
         Instant t0 = Instant.parse("2026-08-09T12:00:00Z");
         CdrEntity session = CdrSessionRollup.merge(null,

@@ -72,6 +72,18 @@ public final class CdrSessionDigest {
                 fields.putAll(parseDetail(r.detail));
             }
         }
+        // Session column as_ussd is authoritative when detail/events lost pipe k=v.
+        if (focus != null && focus.asUssd != null && !focus.asUssd.isBlank()) {
+            fields.putIfAbsent("asUssd", focus.asUssd.trim());
+        }
+        if (!fields.containsKey("asUssd")) {
+            for (CdrRecord r : oldestFirst) {
+                if (r != null && r.asUssd != null && !r.asUssd.isBlank()) {
+                    fields.put("asUssd", r.asUssd.trim());
+                    break;
+                }
+            }
+        }
 
         Long gateMs = focus != null ? focus.gateMs : null;
         Long ewma = focus != null ? focus.observedEwmaMs : null;
