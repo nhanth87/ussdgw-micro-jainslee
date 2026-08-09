@@ -1038,10 +1038,12 @@ public class AdminHttpHandler {
                     .append(esc(nullToDash(r.originationType))).append("</td>");
             sb.append("</tr>");
 
-            // Expand: AS hero + fixed 6-hop spine (fold of services/timeline) → Advanced raw.
-            // Stay open across HTMX polls via client sessionStorage — server emits "hidden".
-            sb.append("<tr class=\"cdr-detail hidden\" data-cdr-detail=\"").append(esc(rowId)).append("\">")
-                    .append("<td colspan=\"8\" class=\"px-3 py-3\">")
+            // Expand: full-width card — AS hero + 6-hop spine + session keys always visible.
+            // Advanced = raw pipe/timeline only (never the primary ops surface).
+            // Stay open across HTMX polls via client sessionStorage — server emits hidden.
+            sb.append("<tr class=\"cdr-detail hidden\" hidden data-cdr-detail=\"")
+                    .append(esc(rowId)).append("\">")
+                    .append("<td colspan=\"8\" class=\"cdr-detail-cell\">")
                     .append("<div class=\"cdr-detail-panel ink-panel\">");
             appendCdrPrimaryHero(sb, asUssdSnip, primary);
             appendCdrSixHopSpine(sb, dig, r);
@@ -1113,7 +1115,7 @@ public class AdminHttpHandler {
                                              String displayHuman, String displayStatus) {
         sb.append("<div class=\"cdr-digest cdr-record-box\" aria-label=\"This CDR record\">");
         sb.append("<p class=\"cdr-digest-title\">This session</p>");
-        sb.append("<dl class=\"cdr-detail-grid\">");
+        sb.append("<dl class=\"cdr-detail-grid cdr-session-grid\">");
         cdrDetailItem(sb, "Correlation", r.correlationId);
         cdrDetailItem(sb, "Phase (bridge)", r.phase);
         cdrDetailItem(sb, "Outcome", displayHuman + " (" + displayStatus + ")");
@@ -1130,6 +1132,14 @@ public class AdminHttpHandler {
                     + (dig.detailFields().get("hopSsn") != null
                     ? " ssn=" + dig.detailFields().get("hopSsn") : ""));
         }
+        String asUrl = dig.detailFields().get("asUrl");
+        if (asUrl != null) {
+            cdrDetailItem(sb, "AS URL", asUrl);
+        }
+        cdrAnswerItem(sb, "Upper HLR / hop sent?", dig.upperHlrSent());
+        cdrAnswerItem(sb, "HLR / hop response?", dig.hlrResponse());
+        cdrAnswerItem(sb, "Sent to AS?", dig.asNotifySent());
+        cdrAnswerItem(sb, "AS response?", dig.asResponse());
         cdrDetailItem(sb, "AS ussdString", asUssdSnip.isEmpty() ? null : asUssdSnip);
         cdrDetailItem(sb, "Gate ms", dig.gateMs() == null ? null : dig.gateMs() + " ms");
         cdrDetailItem(sb, "Observed EWMA ms",
@@ -1146,37 +1156,28 @@ public class AdminHttpHandler {
         sb.append("</dl></div>");
     }
 
-    /** Raw pipe / machine timeline — collapsed; no full HTTP wire dump. */
+    /**
+     * Raw pipe + machine timeline only — optional/collapsed.
+     * Ops fields (phase, hop GT, AS URL, plane answers) live in the visible
+     * session grid / 6-hop spine, not buried here.
+     */
     private static void appendCdrAdvancedRaw(StringBuilder sb, CdrRecord focus,
                                              CdrSessionDigest.Digest dig,
                                              List<CdrRecord> oldestFirst) {
         sb.append("<details class=\"cdr-advanced\">");
-        sb.append("<summary>Advanced · raw detail</summary>");
-        sb.append("<dl class=\"cdr-detail-grid mt-2\">");
-        cdrDetailItem(sb, "Phase (bridge)", focus == null ? null : focus.phase);
-        cdrDetailItem(sb, "Rolled status", focus == null ? null : focus.status);
-        cdrDetailItem(sb, "Long / redirect", dig == null ? null : dig.longOrRedirect());
-        cdrDetailItem(sb, "Origination", focus == null ? null : focus.originationType);
-        cdrDetailItem(sb, "Tenant", focus == null ? null : focus.tenantId);
+        sb.append("<summary>Advanced · raw pipe / event tape</summary>");
+        sb.append("<div class=\"cdr-advanced-body\">");
+        sb.append("<dl class=\"cdr-detail-grid\">");
+        cdrDetailItem(sb, "Rolled detail (pipe)", focus == null ? null : focus.detail);
         if (dig != null) {
-            cdrAnswerItem(sb, "Upper HLR / hop sent?", dig.upperHlrSent());
-            cdrAnswerItem(sb, "HLR / hop response?", dig.hlrResponse());
-            cdrAnswerItem(sb, "Sent to AS?", dig.asNotifySent());
-            cdrAnswerItem(sb, "AS response?", dig.asResponse());
-            String hopGt = dig.detailFields().get("hopGt");
-            if (hopGt != null) {
-                cdrDetailItem(sb, "Hop GT", hopGt
-                        + (dig.detailFields().get("hopSsn") != null
-                        ? " ssn=" + dig.detailFields().get("hopSsn") : ""));
-            }
             String asUrl = dig.detailFields().get("asUrl");
             if (asUrl != null) {
-                cdrDetailItem(sb, "AS URL", asUrl);
+                cdrDetailItem(sb, "AS URL (raw)", asUrl);
             }
         }
-        cdrDetailItem(sb, "Rolled detail (pipe)", focus == null ? null : focus.detail);
         sb.append("</dl>");
         if (oldestFirst != null && !oldestFirst.isEmpty()) {
+            sb.append("<p class=\"cdr-advanced-label\">Event tape</p>");
             sb.append("<ol class=\"cdr-timeline-list cdr-timeline-raw\">");
             for (CdrRecord t : oldestFirst) {
                 if (t == null) {
@@ -1192,13 +1193,13 @@ public class AdminHttpHandler {
                 if (summary != null && !summary.isBlank()) {
                     sb.append(" <span class=\"cdr-timeline-detail\" title=\"")
                             .append(esc(summary)).append("\">")
-                            .append(esc(clip(summary, 56))).append("</span>");
+                            .append(esc(clip(summary, 96))).append("</span>");
                 }
                 sb.append("</li>");
             }
             sb.append("</ol>");
         }
-        sb.append("</details>");
+        sb.append("</div></details>");
     }
 
     private static void cdrAnswerItem(StringBuilder sb, String label, CdrSessionDigest.Answer a) {

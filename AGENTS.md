@@ -92,7 +92,8 @@ digicom = main + Digicom seeds  ──push──►  digicom-et/main  (PRIVATE)
 - **TENANT login** — **username === tenantId**. UI brand = **Digicom-ET USSDGW** (packages stay `et.restlink.*`).
 - **Admin UX** — plane pages match **Routing** shell (seeded form-card; **no** `hx-live-badge`). **SS7/SMPP = JSON only** (no field grids); **HLR face** at `/admin/hlr` (mode/fake/upper/Diameter dest — not in SS7 JSON); **HTTP/gRPC = status only** (read-only NI URL on HTTP); **Diameter/SIP = enabled + listen/peer forms**. Canonical shells at `/admin/ss7|hlr|smpp|http|grpc|diameter|sip` (**no** hub redirect). SS7 `stackJson` editable **ADMIN/OPS** only — TENANT sees LIVE/DOWN. Status tables use **ink-panel** (not nested black `bg-ink`). Bridge wait/fail = UTF-8 + AUTO→UCS-2. Dashboard Planes Open → `/admin/ss7` etc. → [skills § Admin](docs/agents/skills.md)
 - **Dashboard KPI** — human short format (never raw `Map.toString()` / `{1=1000.0}`); **all** `.metric-card`s overflow-safe (`AdaptiveTimeout.formatSnapshotForDisplay`). → [skills § Admin](docs/agents/skills.md)
-- **CDR 6-hop spine (SIẾT — grilled)** — expand primary = **always 6 slots** via `CdrSessionSpine`: (1) UE USSD in (2) re-route HLR/MSC (3) HLR/MSC resp ~50 hop text (4) send AS (5) AS resp **~50** (6) gate→UE. Missing hop = **SKIPPED + reason**; SRI/NI fills slots 2–3 when present. Slot 6 **FAIL/`cdr-status--fail` (RED)** if AS had operator text but MAP END/CONTINUE not sent to UE. **AS ~50 visible** in ledger column + expand hero + step 5. Data = fold `events_json` / `as_ussd` only — **no new persist write path** (10k TPS honesty). Expand = dense spine info; Advanced = raw; **no scroll-jump / no auto-expand** on HTMX poll; keep AdaptiveTimeout/bridge CAS. Admin UX = **existing** Digicom scheme only (ink-panel / `cdr-status-*` / Routing shell) — denser info, not a new theme. Never `|`→`/` escape of `events_json` detail. Prove live `/admin/cdr/partial` has `cdr-hop-list` + AS snip. → [skills § Admin/CDR](docs/agents/skills.md) · [lessons](docs/agents/lessons.md)
+- **CDR 6-hop spine (SIẾT — grilled)** — expand primary = **always 6 slots** via `CdrSessionSpine`: (1) UE USSD in (2) re-route HLR/MSC (3) HLR/MSC resp ~50 hop text (4) send AS (5) AS resp **~50** (6) gate→UE. Missing hop = **SKIPPED + reason**; SRI/NI fills slots 2–3 when present. Slot 6 **FAIL/`cdr-status--fail` (RED)** if AS had operator text but MAP END/CONTINUE not sent to UE. **AS ~50 visible** in ledger column + expand hero + step 5. Data = fold `events_json` / `as_ussd` only — **no new persist write path** (10k TPS honesty). Expand = **full-width** AS hero + spine + session grid (visible without hunting); **Advanced = raw pipe/tape only**. Keep AdaptiveTimeout/bridge CAS. Admin UX = **existing** Digicom scheme only. Never `|`→`/` escape of `events_json` detail. Prove live `/admin/cdr/partial` has `cdr-hop-list` + AS snip. → [skills § Admin/CDR](docs/agents/skills.md) · [lessons](docs/agents/lessons.md)
+- **CDR click jumps to page bottom (SIẾT — agent-failure pattern)** — operators hit this across **many commits** while agents claimed “fixed” with `show:none` / poll-only scroll pin. That was **incomplete**. Exact mechanism + forbidden fake-fixes + correct pattern below (and [lessons](docs/agents/lessons.md)). **Forbidden** to close this bug without a **browser** prove: mid-page expand → `scrollY` unchanged on Digicom (or packaged `dist/` UI). Curl/status.json/html-grep alone ≠ prove.
 - **Digicom host = prod-bound** — live carrier peer + **PostgreSQL** dedicated DB **`ussdgw`** (never OTA’s `ota`). Not a disposable toy lab. Package with build-time **`db-kind=postgresql`**, then restore local **H2** for the public/dev tree. Rsync **jars/`lib`/`quarkus`/`app/html` only** — **never** overwrite Digicom `configs/` (operator SoT; not in nhanth87). → [schema](docs/agents/schema.md) · [ss7-lab-pair](docs/agents/ss7-lab-pair.md)
 - **Digicom / prod DB = operator SoT** — agents must **NOT** arbitrarily `UPDATE`/`DELETE` Digicom (or any prod-bound) routing rules (`ussd_short_code`), tenants, users, `network_id`, or other ops data. Config + PG on Digicom are operator-owned; **ask the user before any DB mutation**. Read/`SELECT` for diagnose is fine; silent “fix” of `as_url` / enable flags is not. → [lessons](docs/agents/lessons.md)
 - **Flyway / DB** — local dev **file H2** (`./data/ussdgw`, PG-mode); Digicom/prod **PostgreSQL** via server `configs` / `QUARKUS_DATASOURCE_*`. Dedicated DB **`ussdgw`**; `db-kind` is **build-time** (H2→PG needs rebuild). Single `V1__ussdgw_baseline.sql`; wipe **local** H2 / reset history after squash — never wipe Digicom PG casually. Boot guard `UssdSchemaInitializer`. Never `h2:mem` for ship. → [schema](docs/agents/schema.md) · [lessons](docs/agents/lessons.md)
@@ -102,6 +103,33 @@ digicom = main + Digicom seeds  ──push──►  digicom-et/main  (PRIVATE)
 - **AS empty body ≠ AdaptiveTimeout** — HTTP 200 + empty → `AS_EMPTY_BODY` (not EWMA gate). Point short-code at as-node / real XmlMAPDialog AS; HTTPS AS → Wireshark TLS/SNI. → [lessons](docs/agents/lessons.md)
 - **Lab heap** — `run-dist.sh` defaults **`-Xms2g -Xmx4g`** for shared hosts; **AlwaysPreTouch** only if `USSD_ALWAYS_PRETOUCH=1`; override to **8g** via `USSD_XMS`/`USSD_XMX` on bigger hosts. Do **not** co-force OTA **8G** + ussdgw **8G+PreTouch** on ~15 GiB. → [lessons](docs/agents/lessons.md)
 - **Commits** — **nhanth87 / Tran Nhan** only. No AI `Co-authored-by:` / trailers (Cursor injects — strip / clean `commit-tree`). Hooks reject; never `--no-verify`.
+
+## CDR scroll jump — agent-failure pattern (SIẾT)
+
+**Symptom:** click CDR timestamp (mid-page) → viewport jumps to **page bottom**. Also seen after HTMX 5s poll while a row is expanded.
+
+**Exact mechanism (not htmx `show:` alone):**
+1. **Chrome overflow-anchor (primary on click):** expanding a mid-list `<tr class="cdr-detail">` inserts a tall block **above** `.cdr-ledger-foot` / later rows. Scroll anchoring keeps that foot/later content in view → `scrollY` increases → looks like “jump to bottom”. Prior `show:none` + poll-only `pinScroll` **never ran on click**, so click stayed broken.
+2. **Ledger `overflow-x-auto` (amplifier):** CSS spec: non-`visible` `overflow-x` forces `overflow-y` to `auto` → nested scrollport; focus/layout then scrolls that port.
+3. **Bad “fix”:** `htmx.config.scrollBehavior = 'smooth'` fought any pin and made residual show/focus scroll worse.
+4. **HTMX poll path (secondary):** `#cdr-rows` `innerHTML` every 5s + `sessionStorage` restore re-opens tall panels — needs `show:none focus-scroll:false` **and** pin on `afterSwap`/`afterSettle`. `show:none` alone is a no-op for top/bottom but does **not** disable overflow-anchor on click.
+
+**What NOT to do (already failed across commits):**
+- Only add `hx-swap … show:none` and declare fixed
+- Only pin scroll on `htmx:afterSwap` (poll) — **click path untouched**
+- Set `scrollBehavior = 'smooth'`
+- Keep `overflow-x-auto` on `.cdr-ledger` / table-wrap that contains expand rows
+- Stuff ops spine/session into `<details class="cdr-advanced">` and call UX done
+- Ship after `mvn test` / html grep **without** Digicom (or packaged UI) **browser** `scrollY` prove
+
+**Correct pattern (this admin HTMX partial):**
+- CSS: `overflow-anchor: none` on `.cdr-ledger`, `tbody`, `.cdr-detail`, `.cdr-ledger-foot`; ledger wrap **`overflow: visible`** (no `overflow-x-auto`)
+- JS: on expand **click**, capture `scrollY` **before** toggle, restore via rAF/`scrollTo` after; same pin on poll restore
+- HTMX: `hx-swap="innerHTML settle:0 show:none focus-scroll:false"`; `htmx.config.scrollBehavior='instant'`; `defaultFocusScroll=false`
+- Markup: expand = full-width ink-panel (AS hero + 6-hop + session grid); Advanced = raw pipe/tape only
+- Prove: mid-page click → `|scrollY_after - scrollY_before| ≤ 1`; many commits without that prove = **agent failure**
+
+Detail: [lessons.md](docs/agents/lessons.md) · [skills.md](docs/agents/skills.md) § Admin/CDR · `app/html/admin/cdr.html` · `admin.css`
 
 ## Link status truth (non-negotiable)
 
