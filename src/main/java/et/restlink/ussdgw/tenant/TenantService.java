@@ -105,6 +105,26 @@ public class TenantService {
         return TenantEntity.deleteById(tenantId);
     }
 
+    /**
+     * Hot-update AS HTTP wire for an existing tenant ({@code XML}|{@code JSON}).
+     * Used by Routing dashboard so integrators can enable JSON without Tenants CRUD.
+     * Missing tenant → empty (caller must not invent tenants from routing).
+     */
+    @Transactional
+    public Optional<TenantEntity> updateHttpAsWireFormat(String tenantId, String httpAsWireFormat) {
+        if (tenantId == null || tenantId.isBlank()) {
+            return Optional.empty();
+        }
+        TenantEntity e = TenantEntity.findById(tenantId.trim());
+        if (e == null) {
+            return Optional.empty();
+        }
+        e.httpAsWireFormat = normalizeHttpAsWireFormat(httpAsWireFormat);
+        e.updatedAt = Instant.now();
+        e.persist();
+        return Optional.of(e);
+    }
+
     public static String generateKey() {
         byte[] b = new byte[24];
         RNG.nextBytes(b);
@@ -116,7 +136,7 @@ public class TenantService {
     }
 
     /** Normalize to {@code XML} or {@code JSON}; null/blank/unknown → {@code XML}. */
-    static String normalizeHttpAsWireFormat(String httpAsWireFormat) {
+    public static String normalizeHttpAsWireFormat(String httpAsWireFormat) {
         if (httpAsWireFormat == null || httpAsWireFormat.isBlank()) {
             return "XML";
         }

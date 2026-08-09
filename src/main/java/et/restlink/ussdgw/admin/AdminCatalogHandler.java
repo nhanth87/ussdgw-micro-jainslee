@@ -140,6 +140,7 @@ public class AdminCatalogHandler {
         }
         m.put("{{APP_USER_FIELD}}", appUserSelectHtml(who, defaultTenant,
                 seed.map(r -> r.appUsername() == null ? "" : r.appUsername()).orElse(null)));
+        seedHttpAsWireField(m, defaultTenant);
         String upperGt = resolvedUpperHlrGtSeed();
         m.put("{{UPPER_HLR_GT}}", esc(upperGt));
         m.put("{{UPPER_HLR_GT_PLACEHOLDER}}", esc(upperGt.isEmpty()
@@ -147,6 +148,21 @@ public class AdminCatalogHandler {
                 : "blank → " + upperGt + " (HLR Face)"));
         seedRoutingFormVars(m, seed.orElse(null), who);
         return m;
+    }
+
+    /**
+     * AS HTTP wire is stored on {@code ussd_tenant.http_as_wire_format} (not per short-code).
+     * Routing form exposes it so JSON can be enabled without Tenants catalog.
+     */
+    void seedHttpAsWireField(Map<String, String> m, String tenantId) {
+        String wire = "XML";
+        if (tenantId != null && !tenantId.isBlank() && tenants != null) {
+            wire = tenants.byId(tenantId)
+                    .map(t -> TenantService.normalizeHttpAsWireFormat(t.httpAsWireFormat))
+                    .orElse("XML");
+        }
+        m.put("{{FORM_WIRE_XML_SEL}}", "XML".equals(wire) ? " selected" : "");
+        m.put("{{FORM_WIRE_JSON_SEL}}", "JSON".equals(wire) ? " selected" : "");
     }
 
     /** Empty create form or Edit-seeded values for {@code routing.html}. */
@@ -434,6 +450,25 @@ public class AdminCatalogHandler {
             if (!tenantId.isEmpty() && networkId == 0) {
                 networkId = tenants.byId(tenantId).map(t -> t.networkId).orElse(0);
             }
+            String wireNote = "";
+            if (f.containsKey("httpAsWireFormat")) {
+                String wireRaw = f.getOrDefault("httpAsWireFormat", "XML");
+                String wire = TenantService.normalizeHttpAsWireFormat(wireRaw);
+                if (tenantId.isEmpty()) {
+                    if ("JSON".equals(wire)) {
+                        return routingRowsErr(who,
+                                "tenantId required to enable JSON AS wire "
+                                        + "(stored on ussd_tenant.http_as_wire_format)");
+                    }
+                } else {
+                    Optional<TenantEntity> wired = tenants.updateHttpAsWireFormat(tenantId, wire);
+                    if (wired.isEmpty()) {
+                        return routingRowsErr(who,
+                                "tenant not found: " + tenantId + " (create tenant before setting wire)");
+                    }
+                    wireNote = " wire=" + wire;
+                }
+            }
             routing.putAndPersist(ShortCodeRule.ofReroute(
                     code, ruleType, url, enabled,
                     tenantId.isEmpty() ? null : tenantId, networkId, mark,
@@ -441,7 +476,7 @@ public class AdminCatalogHandler {
                     rerouteEnable, redirectUssd.isEmpty() ? null : redirectUssd,
                     hlrMode.isEmpty() ? null : hlrMode.toUpperCase().replace('-', '_'),
                     hopDestGt.isEmpty() ? null : hopDestGt, hopDestSsn));
-            return routingRowsOk(who, "saved " + code + " - live");
+            return routingRowsOk(who, "saved " + code + wireNote + " - live");
         } catch (RuntimeException ex) {
             return routingRowsErr(who, "error: " + nullToEmpty(ex.getMessage()));
         }
@@ -548,17 +583,19 @@ public class AdminCatalogHandler {
         var rules = who != null && who.isTenantScoped()
                 ? routing.listForTenant(who.tenantId()) : routing.list();
         if (rules.isEmpty()) {
-            sb.append("<tr><td colspan=\"14\" class=\"px-3 py-4 text-ink-mute italic\">No short-code rules.</td></tr>");
+            sb.append("<tr><td colspan=\"15\" class=\"px-3 py-4 text-ink-mute italic\">No short-code rules.</td></tr>");
             return sb.toString();
         }
         for (ShortCodeRule r : rules) {
             String typeLabel = r.rerouteEnable() || r.ruleType() == RuleType.RE_ROUTE
                     ? "RE_ROUTE/" + r.asPullType().name()
                     : String.valueOf(r.ruleType());
+            String wire = tenantWireLabel(r.tenantId());
             sb.append("<tr><td").append(TD).append(">").append(esc(r.shortCode())).append("</td><td")
                     .append(TD).append(">").append(esc(typeLabel)).append("</td><td")
                     .append(TD).append(">").append(esc(r.asUrl())).append("</td><td")
                     .append(TD).append(">").append(esc(r.tenantId())).append("</td><td")
+                    .append(TD).append(">").append(esc(wire)).append("</td><td")
                     .append(TD).append(">").append(r.networkId()).append("</td><td")
                     .append(TD).append(">").append(esc(r.appUsername())).append("</td><td")
                     .append(TD).append(">").append(r.mark()).append("</td><td")
@@ -872,6 +909,16 @@ public class AdminCatalogHandler {
             m.put(k, v);
         }
         return m;
+    }
+
+    /** Tenant AS wire for Live rules table; unbound → dash (global props apply). */
+    private String tenantWireLabel(String tenantId) {
+        if (tenantId == null || tenantId.isBlank() || tenants == null) {
+            return "—";
+        }
+        return tenants.byId(tenantId)
+                .map(t -> TenantService.normalizeHttpAsWireFormat(t.httpAsWireFormat))
+                .orElse("—");
     }
 
     private static String nullToEmpty(String s) {

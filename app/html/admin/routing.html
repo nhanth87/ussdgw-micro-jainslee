@@ -138,6 +138,23 @@
           {{TENANT_FIELD}}
           {{APP_USER_FIELD}}
           <div>
+            <label class="block text-xs uppercase tracking-wider text-ink-mute">HTTP AS wire</label>
+            <select name="httpAsWireFormat"
+                    class="mt-1 w-full rounded-md border border-ink-line bg-ink-panel px-3 py-2 text-sm focus:border-signal focus:outline-none">
+              <option value="XML"{{FORM_WIRE_XML_SEL}}>XML — classic XmlMAPDialog (default)</option>
+              <option value="JSON"{{FORM_WIRE_JSON_SEL}}>JSON — AsRequest / AsResponse</option>
+            </select>
+            <p class="mt-1 text-xs text-ink-mute">
+              Stored on the <strong>tenant</strong>
+              (<code class="font-mono">ussd_tenant.http_as_wire_format</code>), not per short-code.
+              Applies to all rules under that tenant. Requires a tenantId.
+              Same control exists under Tenants. Content-Type:
+              <code class="font-mono">text/xml</code> vs
+              <code class="font-mono">application/json</code>.
+              Dual-wire samples: <code class="font-mono">docs/as-contract/map2map-as-xml.md</code>.
+            </p>
+          </div>
+          <div>
             <label class="block text-xs uppercase tracking-wider text-ink-mute">networkId</label>
             <input name="networkId" type="number" min="0" value="{{FORM_NETWORK_ID}}"
                    class="mt-1 w-full rounded-md border border-ink-line bg-ink-panel px-3 py-2 text-sm focus:border-signal focus:outline-none focus:ring-1 focus:ring-signal/40"/>
@@ -243,6 +260,7 @@
                 <th class="px-3 py-2.5 font-medium">Type</th>
                 <th class="px-3 py-2.5 font-medium">URL</th>
                 <th class="px-3 py-2.5 font-medium">tenant</th>
+                <th class="px-3 py-2.5 font-medium">wire</th>
                 <th class="px-3 py-2.5 font-medium">net</th>
                 <th class="px-3 py-2.5 font-medium">appUser</th>
                 <th class="px-3 py-2.5 font-medium">mark</th>

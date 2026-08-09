@@ -24,7 +24,8 @@ import java.util.concurrent.atomic.AtomicReference;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * RE_ROUTE only: hop REJECT/empty → AS {@code hlr reject}/{@code hlr none}, no second GATED.
+ * RE_ROUTE only: hop REJECT/empty → AS {@code hlr reject}/empty {@code string=}
+ * ({@code hlrResult=none}), no second GATED.
  */
 class Map2MapCompletionReRouteHopTest {
 
@@ -94,13 +95,18 @@ class Map2MapCompletionReRouteHopTest {
     }
 
     @Test
-    void empty_noRearm_sendsHlrNone() {
+    void empty_noRearm_sendsEmptyStringWithHlrNoneAttr() {
         completion.onMap2MapResponse(sample(), "", Map2MapCdr.OUTCOME_EMPTY);
         assertThat(gateArms.get()).isZero();
-        assertThat(lastAs.get().ussdString()).isEqualTo("hlr none");
+        assertThat(lastAs.get().ussdString()).isEmpty();
         assertThat(lastAs.get().redirectUssd()).isEqualTo("*875#");
         assertThat(lastAs.get().hopUssd()).isEqualTo("*875#");
         assertThat(lastAs.get().originatedUssd()).isEqualTo("*804#");
+        String xml = et.restlink.ussdgw.api.classic.ClassicDialogXmlCodec.encodePull(lastAs.get());
+        assertThat(xml)
+                .contains("hlrResult=\"none\"")
+                .contains("string=\"\"")
+                .doesNotContain("string=\"hlr none\"");
     }
 
     @Test
@@ -138,7 +144,7 @@ class Map2MapCompletionReRouteHopTest {
     void close_noRearm_stillExposesRedirectAndHopCodes() {
         completion.onMap2MapResponse(sample(), "", Map2MapCdr.OUTCOME_CLOSE);
         assertThat(gateArms.get()).isZero();
-        assertThat(lastAs.get().ussdString()).isEqualTo("hlr none");
+        assertThat(lastAs.get().ussdString()).isEmpty();
         assertThat(lastAs.get().redirectUssd()).isEqualTo("*875#");
         assertThat(lastAs.get().shortCode()).isEqualTo("*804#");
     }

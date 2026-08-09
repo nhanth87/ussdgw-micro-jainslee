@@ -7,6 +7,8 @@ import com.fasterxml.jackson.dataformat.xml.XmlMapper;
 import et.restlink.ussdgw.api.AsAction;
 import et.restlink.ussdgw.api.AsRequest;
 import et.restlink.ussdgw.api.AsResponse;
+import et.restlink.ussdgw.api.UssdAlphabet;
+import et.restlink.ussdgw.codec.SmsTextCodec;
 
 /**
  * Lightweight classic-compatible {@code <dialog>} XML codec (no org.mobicents.ussdgateway).
@@ -56,9 +58,15 @@ public final class ClassicDialogXmlCodec {
     }
 
     /**
-     * Decode AS pull/callback response body.
-     * Abort → ABORT; empty USSD string → END; otherwise CONTINUE.
-     * RestLink extension: {@code async="true"} on {@code <dialog>} for ASYNC_ACK (classic omits).
+     * Decode AS→GW pull/callback body.
+     * <ul>
+     *   <li>{@code processUnstructuredSSRequest_Response} → {@link AsAction#END} (final MO text)</li>
+     *   <li>{@code unstructuredSSRequest_Request} + text → {@link AsAction#CONTINUE} (menu)</li>
+     *   <li>empty / blank string → {@link AsAction#END}</li>
+     *   <li>abort attrs → {@link AsAction#ABORT}</li>
+     * </ul>
+     * Sync pull may omit {@code localId} — {@code fallbackCorr} from the outstanding pull is used.
+     * {@code dataCodingScheme} 72 / 0x48 → UCS-2 alphabet for Amharic/Ethiopic.
      */
     public static AsResponse decodeResponse(String xml, String fallbackCorr) {
         String corr = blankTo(fallbackCorr, "unknown");
@@ -90,10 +98,9 @@ public final class ClassicDialogXmlCodec {
                         null, sessionId, bridgeId, gateMs);
             }
 
-            String text = extractResponseString(root);
-            AsAction action = (text == null || text.isEmpty()) ? AsAction.END : AsAction.CONTINUE;
-            return new AsResponse(corr, corr, 1, text == null ? "" : text, action, async,
-                    null, sessionId, bridgeId, gateMs);
+            AsWirePayload payload = extractAsWirePayload(root);
+            return new AsResponse(corr, corr, 1, payload.text(), payload.action(), async,
+                    alphabetFromCbsDcs(payload.dcs()), sessionId, bridgeId, gateMs);
         } catch (Exception e) {
             throw new IllegalArgumentException("decode classic dialog XML", e);
         }
@@ -252,7 +259,7 @@ public final class ClassicDialogXmlCodec {
     /**
      * MAP2MAP RE_ROUTE dialog {@code hlrResult}:
      * <ul>
-     *   <li>{@code none} — hop empty CLOSE / no RESULT ({@code string=hlr none})</li>
+     *   <li>{@code none} — hop empty CLOSE / no RESULT ({@code string=} empty; never echo onto UE)</li>
      *   <li>{@code reject} — hop Dialog REJECT ({@code string=hlr reject})</li>
      *   <li>{@code pending} — early gated pull while hop in flight ({@code string=hlr pending})</li>
      *   <li>{@code responded} — hop returned USSD text ({@code string=} = that text)</li>
@@ -270,14 +277,18 @@ public final class ClassicDialogXmlCodec {
         if ("hlr reject".equals(ussd)) {
             return "reject";
         }
+        // Legacy AS bodies / older GW builds may still send the displayable sentinel.
         if ("hlr none".equals(ussd)) {
             return "none";
         }
         boolean map2map = notBlank(req.redirectUssd()) || notBlank(req.hopUssd());
-        if (map2map && notBlank(ussd)) {
-            return "responded";
+        if (!map2map) {
+            return null;
         }
-        return null;
+        if (ussd.isBlank()) {
+            return "none";
+        }
+        return "responded";
     }
 
     private static void openDialog(StringBuilder sb, String localId, int networkId,
@@ -437,17 +448,105 @@ public final class ClassicDialogXmlCodec {
     }
 
     private static String extractResponseString(JsonNode root) {
-        String s = extractNamedString(root, "processUnstructuredSSRequest_Response");
-        if (s != null) return s;
-        s = extractNamedString(root, "unstructuredSSRequest_Response");
-        if (s != null) return s;
-        s = extractNamedString(root, "unstructuredSSNotify_Response");
-        if (s != null) return s;
-        // CONTINUE menus sometimes arrive as Request from AS
-        s = extractNamedString(root, "unstructuredSSRequest_Request");
-        if (s != null) return s;
-        s = extractNamedString(root, "unstructuredSSNotify_Request");
-        return s;
+        return extractAsWirePayload(root).text();
+    }
+
+    /**
+     * Prefer final Response over Request so AS {@code processUnstructuredSSRequest_Response}
+     * is never mistaken for a CONTINUE menu (classic-xml mapping).
+     */
+    private record AsWirePayload(AsAction action, String text, Integer dcs) {
+        AsWirePayload {
+            if (action == null) {
+                action = AsAction.END;
+            }
+            if (text == null) {
+                text = "";
+            }
+        }
+    }
+
+    private static AsWirePayload extractAsWirePayload(JsonNode root) {
+        if (root == null) {
+            return new AsWirePayload(AsAction.END, "", null);
+        }
+        if (boolAttr(root, "prearrangedEnd")
+                || "true".equalsIgnoreCase(textChild(root, "prearrangedEnd"))) {
+            return new AsWirePayload(AsAction.END, "", null);
+        }
+        ElementPayload finalRsp = elementPayload(root, "processUnstructuredSSRequest_Response");
+        if (finalRsp.present()) {
+            return new AsWirePayload(AsAction.END, finalRsp.text(), finalRsp.dcs());
+        }
+        ElementPayload ussRsp = elementPayload(root, "unstructuredSSRequest_Response");
+        if (ussRsp.present()) {
+            // Subscriber digits toward AS are not an AS→GW menu; treat as END text if present.
+            return new AsWirePayload(AsAction.END, ussRsp.text(), ussRsp.dcs());
+        }
+        ElementPayload notifyRsp = elementPayload(root, "unstructuredSSNotify_Response");
+        if (notifyRsp.present()) {
+            return new AsWirePayload(AsAction.END, notifyRsp.text(), notifyRsp.dcs());
+        }
+        ElementPayload menu = elementPayload(root, "unstructuredSSRequest_Request");
+        if (menu.present()) {
+            String t = menu.text();
+            AsAction act = t.isEmpty() ? AsAction.END : AsAction.CONTINUE;
+            return new AsWirePayload(act, t, menu.dcs());
+        }
+        ElementPayload notify = elementPayload(root, "unstructuredSSNotify_Request");
+        if (notify.present()) {
+            return new AsWirePayload(AsAction.END, notify.text(), notify.dcs());
+        }
+        return new AsWirePayload(AsAction.END, "", null);
+    }
+
+    private record ElementPayload(boolean present, String text, Integer dcs) {
+        static ElementPayload absent() {
+            return new ElementPayload(false, "", null);
+        }
+    }
+
+    private static ElementPayload elementPayload(JsonNode root, String element) {
+        JsonNode n = root.get(element);
+        if (n == null || n.isNull() || n.isMissingNode()) {
+            return ElementPayload.absent();
+        }
+        if (n.isArray()) {
+            if (n.isEmpty()) {
+                return ElementPayload.absent();
+            }
+            n = n.get(0);
+            if (n == null || n.isNull() || n.isMissingNode()) {
+                return ElementPayload.absent();
+            }
+        }
+        String text;
+        if (n.isTextual()) {
+            text = n.asText();
+        } else {
+            text = firstNonBlank(attr(n, "string"), textChild(n, "string"), textChild(n, "ussdString"), "");
+        }
+        Integer dcs = parseInt(firstNonBlank(attr(n, "dataCodingScheme"),
+                textChild(n, "dataCodingScheme")));
+        return new ElementPayload(true, text == null ? "" : text, dcs);
+    }
+
+    /** CBS DCS on AS MAP message → {@link UssdAlphabet}; unknown / omitted → AUTO. */
+    static UssdAlphabet alphabetFromCbsDcs(Integer dcs) {
+        if (dcs == null) {
+            return UssdAlphabet.AUTO;
+        }
+        int v = dcs & 0xFF;
+        if (v == SmsTextCodec.CBS_UCS2 || v == 0x08 || v == 72) {
+            return UssdAlphabet.UNICODE;
+        }
+        if (v == SmsTextCodec.CBS_GSM8 || v == 0x44) {
+            return UssdAlphabet.UCS8;
+        }
+        if (v == SmsTextCodec.CBS_GSM7 || v == 0x0F || v == 15 || v == 0) {
+            return UssdAlphabet.UCS7;
+        }
+        return UssdAlphabet.AUTO;
     }
 
     private static String extractNamedString(JsonNode root, String element) {

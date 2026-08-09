@@ -62,7 +62,7 @@ public final class Map2MapCdr {
     public static final String AS_USSD_HLR_PENDING = "hlr pending";
     /** RE_ROUTE AS pull {@code string=} when hop Dialog REJECT. */
     public static final String AS_USSD_HLR_REJECT = "hlr reject";
-    /** RE_ROUTE AS pull {@code string=} when hop empty / timeout / abort / close. */
+    /** Legacy displayable sentinel — no longer placed in AS pull {@code string=} for empty hop. */
     public static final String AS_USSD_HLR_NONE = "hlr none";
 
     /** True when hop already finished without USSD text — do not re-arm AdaptiveTimeout. */
@@ -72,7 +72,13 @@ public final class Map2MapCdr {
 
     /**
      * RE_ROUTE only: AS ussdString after hop.
-     * Text hop → hop body; REJECT → {@link #AS_USSD_HLR_REJECT}; else empty → {@link #AS_USSD_HLR_NONE}.
+     * <ul>
+     *   <li>Text hop → hop body (AS may show / enrich)</li>
+     *   <li>REJECT → {@link #AS_USSD_HLR_REJECT} (logic sentinel; still prefer {@code hlrResult})</li>
+     *   <li>Empty / CLOSE / abort / timeout → <strong>empty</strong> {@code string=} —
+     *       status lives in dialog {@code hlrResult=none} so AS default menus are not
+     *       overwritten by echoing {@code hlr none} onto the handset</li>
+     * </ul>
      */
     public static String asUssdForReRouteHop(String hopText, String hopOutcome) {
         String hop = hopText == null ? "" : hopText.trim();
@@ -82,7 +88,7 @@ public final class Map2MapCdr {
         if (OUTCOME_REJECT.equals(hopOutcome == null ? "" : hopOutcome.trim())) {
             return AS_USSD_HLR_REJECT;
         }
-        return AS_USSD_HLR_NONE;
+        return "";
     }
 
     /** Map dialog-lost kind → CDR status (CLOSE/REJECT/abort ≠ timeout). */

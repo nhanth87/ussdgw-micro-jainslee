@@ -72,9 +72,9 @@ class Map2MapCdrTest {
         assertThat(Map2MapCdr.asUssdForReRouteHop("", Map2MapCdr.OUTCOME_REJECT))
                 .isEqualTo("hlr reject");
         assertThat(Map2MapCdr.asUssdForReRouteHop("", Map2MapCdr.OUTCOME_CLOSE))
-                .isEqualTo("hlr none");
+                .isEmpty();
         assertThat(Map2MapCdr.asUssdForReRouteHop("", Map2MapCdr.OUTCOME_EMPTY))
-                .isEqualTo("hlr none");
+                .isEmpty();
         assertThat(Map2MapCdr.asUssdForReRouteHop("hi", Map2MapCdr.OUTCOME_TEXT)).isEqualTo("hi");
         assertThat(Map2MapCdr.isTerminalHopOutcome(Map2MapCdr.OUTCOME_REJECT)).isTrue();
         assertThat(Map2MapCdr.isTerminalHopOutcome(Map2MapCdr.OUTCOME_CLOSE)).isTrue();

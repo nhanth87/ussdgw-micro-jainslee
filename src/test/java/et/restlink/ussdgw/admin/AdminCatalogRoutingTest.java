@@ -315,6 +315,78 @@ class AdminCatalogRoutingTest {
     }
 
     @Test
+    void saveHttpAsWireJsonUpdatesTenantAndAppearsInRows() {
+        TenantEntity bank = new TenantEntity();
+        bank.tenantId = "bank1";
+        bank.httpAsWireFormat = "XML";
+        bank.enabled = true;
+        AtomicReference<String> lastWire = new AtomicReference<>("XML");
+        set(catalog, "tenants", new TenantService() {
+            @Override
+            public List<TenantEntity> list() {
+                return List.of(bank);
+            }
+
+            @Override
+            public Optional<TenantEntity> byId(String tenantId) {
+                return "bank1".equals(tenantId) ? Optional.of(bank) : Optional.empty();
+            }
+
+            @Override
+            public Optional<TenantEntity> updateHttpAsWireFormat(String tenantId, String httpAsWireFormat) {
+                if (!"bank1".equals(tenantId)) {
+                    return Optional.empty();
+                }
+                bank.httpAsWireFormat = TenantService.normalizeHttpAsWireFormat(httpAsWireFormat);
+                lastWire.set(bank.httpAsWireFormat);
+                return Optional.of(bank);
+            }
+        });
+        AdminHttpHandler.HttpReply saved = catalog.routingPost(
+                "action=save&shortCode=%2A901%23&ruleType=HTTP&asUrl=http%3A%2F%2Fas%2Fjson"
+                        + "&enabled=true&tenantId=bank1&httpAsWireFormat=JSON",
+                null);
+        assertThat(saved.headers().get("HX-Trigger")).contains("wire=JSON").contains("live");
+        assertThat(lastWire.get()).isEqualTo("JSON");
+        assertThat(routing.find("*901#")).isPresent()
+                .get().extracting(ShortCodeRule::tenantId).isEqualTo("bank1");
+        assertThat(new String(saved.body())).contains("JSON");
+    }
+
+    @Test
+    void saveHttpAsWireJsonWithoutTenantRejected() {
+        AdminHttpHandler.HttpReply r = catalog.routingPost(
+                "action=save&shortCode=%2A902%23&ruleType=HTTP&asUrl=http%3A%2F%2Fas%2Fx"
+                        + "&enabled=true&httpAsWireFormat=JSON",
+                null);
+        assertThat(r.headers().get("HX-Trigger")).contains("tenantId required");
+        assertThat(routing.find("*902#")).isEmpty();
+    }
+
+    @Test
+    void routingPageVarsSeedHttpAsWireFromTenant() {
+        TenantEntity digicom = new TenantEntity();
+        digicom.tenantId = "digicom-push";
+        digicom.httpAsWireFormat = "JSON";
+        digicom.enabled = true;
+        set(catalog, "tenants", new TenantService() {
+            @Override
+            public List<TenantEntity> list() {
+                return List.of(digicom);
+            }
+
+            @Override
+            public Optional<TenantEntity> byId(String tenantId) {
+                return "digicom-push".equals(tenantId) ? Optional.of(digicom) : Optional.empty();
+            }
+        });
+        Map<String, String> vars = catalog.routingPageVars(
+                new AdminAuthService.Principal("ADMIN", null));
+        assertThat(vars.get("{{FORM_WIRE_JSON_SEL}}")).isEqualTo(" selected");
+        assertThat(vars.get("{{FORM_WIRE_XML_SEL}}")).isEqualTo("");
+    }
+
+    @Test
     void tenantsPostPassesSipTrunkIdToUpsert() {
         AtomicReference<String> capturedTrunk = new AtomicReference<>();
         set(catalog, "tenants", new TenantService() {

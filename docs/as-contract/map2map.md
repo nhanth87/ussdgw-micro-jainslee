@@ -1,6 +1,7 @@
 # MAP2MAP re-route — Case 2 (upper HLR USSD, no SRI)
 
-**AS XML samples (MO + MAP2MAP pull/response):** [`map2map-as-xml.md`](map2map-as-xml.md) — Digicom-ET USSDGW AS HTTP XML contract.
+**AS XML + JSON samples (MO + MAP2MAP pull/response):** [`map2map-as-xml.md`](map2map-as-xml.md) —
+dual-wire AS HTTP contract. Enable JSON from **Routing** (`HTTP AS wire`) or Tenants.
 
 
 Authoritative MO enrich path (routing-driven). **One unique short-code rule** covers both
@@ -34,7 +35,7 @@ UE *804#  (or mark *101 → *101123456#)
                         **hop text** → ussdString=hop + dialog `hlrResult=responded`; attrs `redirectUssd`/`hopUssd`; re-arm AdaptiveTimeout for AS budget;
                         **hop REJECT** → ussdString=`hlr reject` + dialog `hlrResult=reject`;
                           **no second GATE_ARMED** (hop already answered);
-                        **hop empty/timeout/abort/CLOSE** → ussdString=`hlr none` + `hlrResult=none` (still emit `redirectUssd`/`hopUssd`);
+                        **hop empty/timeout/abort/CLOSE** → ussdString empty + `hlrResult=none` (still emit `redirectUssd`/`hopUssd`; AS must not echo placeholder onto UE);
                         additive originatedUssd + shortCode + codeKind + redirectUssd + hopUssd;
                         if already S1_RELEASED → keep bridged (no CAS reset)
   → AS (HttpClientSbb / GrpcClientSbb / Sip MESSAGE) 200 / OK
@@ -168,7 +169,7 @@ XML dialog attrs / JSON fields (classic AS may ignore unknowns):
 | Field | Meaning |
 |-------|---------|
 | `msisdn` | Subscriber |
-| `ussdString` / `string=` | Hop RESULT text when present; else `hlr none` / `hlr reject` |
+| `ussdString` / `string=` | Hop RESULT text when `hlrResult=responded`; empty when `none`; `hlr reject` / `hlr pending` sentinels otherwise |
 | `hlrResult` | `responded` \| `none` \| `reject` \| `pending` |
 | `originatedUssd` | Full UE dialed string |
 | `shortCode` | Matched rule key |
@@ -251,7 +252,7 @@ survive process restart or cross-node (see [lessons.md](../agents/lessons.md) ·
 | `MAP2MAP_USSD_SENT` | Outbound UnstructuredSS toward hop GT (gate armed just before/with this) |
 | `MAP2MAP_GATED_HOP` | Gate fired during hop (also classic `BRIDGED`) |
 | `MAP2MAP_OK` / `MAP2MAP_COMPLETE_AFTER_GATE` | Hop done → AS pull (re-arm vs already S1_RELEASED) |
-| `HLR_REJECT` / `MAP2MAP_HOP_ABORT` / `MAP2MAP_HOP_CLOSE` | Peer REJECT / abort / CLOSE-without-RESULT — AS-pulls `hlr reject`/`hlr none` (not a timer) |
+| `HLR_REJECT` / `MAP2MAP_HOP_ABORT` / `MAP2MAP_HOP_CLOSE` | Peer REJECT / abort / CLOSE-without-RESULT — AS-pulls `hlr reject` / empty+`hlrResult=none` (not a timer) |
 | `MAP2MAP_TIMEOUT` / `MAP2MAP_TIMEOUT_AFTER_BRIDGE` | Real hop TTL (`BridgeGateScheduler`) or MAP `onDialogTimeout` only |
 | `GATE_ARMED` / `BRIDGED` / `GATE_EXPIRED` | Budget armed (not fired) / UE async-wait / NI park |
 | `MAP2MAP_MO_HOLD` | MO end deferred — hop still outstanding |

@@ -483,7 +483,7 @@ public final class MapUssdParentSbb implements Sbb, SleeEventHandler {
                 svc().map2MapTelemetry().failClosed();
             }
         } catch (Throwable ignored) { }
-        // RE_ROUTE: still AsPullRouter with string=hlr reject|hlr none (no second GATED).
+        // RE_ROUTE: still AsPullRouter with string=hlr reject|empty (hlrResult=none) (no second GATED).
         String routed;
         try {
             routed = svc().map2MapCompletion().onMap2MapResponse(req, "", outcome);
