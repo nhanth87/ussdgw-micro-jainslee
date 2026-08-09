@@ -82,7 +82,7 @@
               class="filter-bar flex flex-wrap items-end gap-3"
               hx-get="/admin/cdr/partial"
               hx-target="#cdr-rows"
-              hx-swap="innerHTML settle:0 show:none"
+              hx-swap="innerHTML settle:0 show:none focus-scroll:false"
               hx-indicator="#cdr-ind"
               hx-push-url="true"
               hx-trigger="submit, change from:select[name='status']">
@@ -122,7 +122,9 @@
         </ul>
       </section>
 
-      <div class="table-wrap cdr-ledger overflow-x-auto rounded-lg border border-ink-line bg-ink-panel/40">
+      <!-- No overflow-x-auto here: CSS would force overflow-y:auto too and create a
+           scrollport that steals focus-scroll on expand. Wide cells wrap / page scrolls. -->
+      <div class="table-wrap cdr-ledger rounded-lg border border-ink-line bg-ink-panel/40">
         <table class="w-full text-left text-sm">
           <thead class="bg-ink-panel text-xs uppercase tracking-wider text-ink-mute">
             <tr>
@@ -141,12 +143,13 @@
                  hx-get="/admin/cdr/partial"
                  hx-trigger="every 5s"
                  hx-include="#cdr-filter"
-                 hx-swap="innerHTML settle:0 show:none"
+                 hx-swap="innerHTML settle:0 show:none focus-scroll:false"
                  hx-indicator="#cdr-ind">{{ROWS}}</tbody>
         </table>
       </div>
-      <p class="mt-3 text-xs text-ink-mute">
-        Click a timestamp to expand the 6-hop spine. Expand state is kept across polls without scrolling the page.
+      <p class="cdr-ledger-foot mt-3 text-xs text-ink-mute">
+        Click a timestamp to expand the full-width 6-hop spine + session fields.
+        Expand stays open across polls; scroll position must not jump.
       </p>
     </div>
   </main>
@@ -158,9 +161,10 @@
       var scrollY = 0;
       var restoring = false;
 
-      // HTMX 2 may still focus/scroll the swap target — pin window scroll around polls.
+      // Keep HTMX default instant scroll; never enable smooth (fights pin + show:none).
       if (window.htmx && htmx.config) {
-        htmx.config.scrollBehavior = 'smooth';
+        htmx.config.scrollBehavior = 'instant';
+        htmx.config.defaultFocusScroll = false;
       }
 
       function loadOpen() {
@@ -184,12 +188,18 @@
         if (open) openIds[id] = true; else delete openIds[id];
         saveOpen(openIds);
       }
+      function setDetailOpen(detail, open) {
+        if (!detail) return;
+        // Prefer HTML hidden attribute (works with Tailwind divide-y :not([hidden])).
+        detail.hidden = !open;
+        detail.classList.toggle('hidden', !open);
+      }
       function applyOpenState(id) {
         var detail = body.querySelector('[data-cdr-detail="' + id + '"]');
         var btn = body.querySelector('[data-cdr-open="' + id + '"]');
         if (!detail) return false;
         var want = !!openIds[id];
-        detail.classList.toggle('hidden', !want);
+        setDetailOpen(detail, want);
         if (btn) {
           btn.setAttribute('aria-expanded', want ? 'true' : 'false');
           var row = btn.closest('tr');
@@ -200,8 +210,14 @@
       function restoreAllOpen() {
         Object.keys(openIds).forEach(function (id) { applyOpenState(id); });
       }
-      function pinScroll() {
-        try { window.scrollTo(0, scrollY); } catch (e) { /* ignore */ }
+      function pinScroll(y) {
+        var top = (typeof y === 'number') ? y : scrollY;
+        try { window.scrollTo(0, top); } catch (e) { /* ignore */ }
+      }
+      function pinScrollSoon(y) {
+        pinScroll(y);
+        requestAnimationFrame(function () { pinScroll(y); });
+        setTimeout(function () { pinScroll(y); }, 0);
       }
       function refreshCount() {
         var n = body.querySelectorAll('.cdr-ledger-row').length;
@@ -213,14 +229,20 @@
         var btn = e.target.closest('[data-cdr-open]');
         if (!btn || !body.contains(btn)) return;
         e.preventDefault();
+        e.stopPropagation();
         var id = btn.getAttribute('data-cdr-open');
         var detail = body.querySelector('[data-cdr-detail="' + id + '"]');
         if (!detail) return;
-        var open = detail.classList.toggle('hidden') === false;
+        // Capture BEFORE toggle — Chrome overflow-anchor otherwise keeps the
+        // ledger foot / later rows in view → perceived jump to page bottom.
+        var y = window.scrollY || window.pageYOffset || 0;
+        var open = detail.hidden || detail.classList.contains('hidden');
+        setDetailOpen(detail, open);
         btn.setAttribute('aria-expanded', open ? 'true' : 'false');
         var row = btn.closest('tr');
         if (row) row.classList.toggle('cdr-ledger-row--open', open);
         setOpen(id, open);
+        pinScrollSoon(y);
       });
 
       document.body.addEventListener('htmx:beforeSwap', function (e) {
@@ -235,24 +257,23 @@
         if (t && (t === body || t.id === 'cdr-rows')) {
           refreshCount();
           restoreAllOpen();
-          pinScroll();
-          requestAnimationFrame(pinScroll);
+          pinScrollSoon(scrollY);
         }
       });
       document.body.addEventListener('htmx:afterSettle', function (e) {
         var t = e.detail && e.detail.target;
         if (t && (t === body || t.id === 'cdr-rows')) {
           restoreAllOpen();
-          pinScroll();
+          pinScrollSoon(scrollY);
           restoring = false;
         }
       });
-      // Block accidental focus scroll during poll restore.
+      // Block accidental focus scroll during poll restore / expand.
       document.body.addEventListener('focusin', function (e) {
         if (!restoring) return;
         var t = e.target;
         if (t && body.contains(t)) {
-          pinScroll();
+          pinScroll(scrollY);
         }
       });
 

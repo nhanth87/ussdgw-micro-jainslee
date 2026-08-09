@@ -389,6 +389,21 @@ tbody.hx-table-live.htmx-settling {
 }
 .cdr-ledger {
   background: color-mix(in srgb, var(--color-ink-panel) 55%, transparent);
+  /* Never create a nested scrollport: overflow-x:auto forces overflow-y:auto per CSS
+   * and Chromium then focus-scrolls the expand panel → jump-to-bottom on click. */
+  overflow: visible;
+  overflow-anchor: none;
+}
+.cdr-ledger table {
+  width: 100%;
+  border-collapse: collapse;
+}
+.cdr-ledger tbody,
+.cdr-detail,
+.cdr-ledger-foot {
+  /* Expanding a mid-row inserts content above the page foot; without this,
+   * Chrome scroll-anchoring keeps the foot in view (= jump to bottom). */
+  overflow-anchor: none;
 }
 .cdr-ledger-row {
   transition: background 140ms ease;
@@ -473,19 +488,23 @@ tbody.hx-table-live.htmx-settling {
 }
 .cdr-as-ussd-empty { color: var(--color-ink-mute); }
 
-/* Expand hero: AS USSD + outcome — same ink-panel digest shell as Routing. */
+/* Expand hero: AS USSD + outcome — full-width, readable, not Advanced-buried. */
+.cdr-primary {
+  border-color: color-mix(in srgb, var(--color-signal) 35%, var(--color-ink-line));
+  background: color-mix(in srgb, var(--color-ink-panel) 85%, var(--color-signal) 15%);
+}
 .cdr-primary-row {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 0.5rem 0.85rem;
+  gap: 0.55rem 0.9rem;
 }
 .cdr-primary-ussd {
-  flex: 1 1 14rem;
+  flex: 1 1 18rem;
   margin: 0;
   font-family: "JetBrains Mono", ui-monospace, monospace;
-  font-size: 0.85rem;
-  line-height: 1.35;
+  font-size: 0.95rem;
+  line-height: 1.4;
   color: var(--color-fg-strong, #e2e8f0);
   overflow-wrap: anywhere;
   word-break: break-word;
@@ -497,18 +516,26 @@ tbody.hx-table-live.htmx-settling {
   font-size: 0.8rem;
 }
 .cdr-primary-human {
-  font-size: 0.75rem;
+  font-size: 0.78rem;
   font-family: "DM Sans", system-ui, sans-serif;
 }
 
-/* 6-hop spine — dense list using existing cdr-status chips + svc-like rows. */
+/* 6-hop spine — signature ops surface: dense, full-width, 2-col on wide. */
+.cdr-spine-journey {
+  border-color: color-mix(in srgb, var(--color-signal) 28%, var(--color-ink-line));
+}
 .cdr-hop-list {
   list-style: none;
-  margin: 0.25rem 0 0;
+  margin: 0.35rem 0 0;
   padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 0.4rem;
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 0.45rem;
+}
+@media (min-width: 900px) {
+  .cdr-hop-list {
+    grid-template-columns: 1fr 1fr;
+  }
 }
 .cdr-hop {
   display: grid;
@@ -614,9 +641,10 @@ tbody.hx-table-live.htmx-settling {
 .cdr-svc--gated .cdr-svc-state { color: #f0c674; }
 .cdr-svc--mute .cdr-svc-state { color: var(--color-ink-mute); }
 
+/* Advanced = optional raw only; never the primary ops surface. */
 .cdr-advanced {
   margin-top: 0.15rem;
-  padding: 0.65rem 0.85rem;
+  padding: 0.55rem 0.75rem;
   border: 1px dashed var(--color-ink-line);
   border-radius: 0.4rem;
   background: transparent;
@@ -628,10 +656,39 @@ tbody.hx-table-live.htmx-settling {
   text-transform: uppercase;
   color: var(--color-ink-mute);
   font-family: "DM Sans", system-ui, sans-serif;
+  list-style: none;
+}
+.cdr-advanced > summary::-webkit-details-marker { display: none; }
+.cdr-advanced > summary::before {
+  content: "+ ";
+  color: var(--color-signal);
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+}
+.cdr-advanced[open] > summary::before { content: "− "; }
+.cdr-advanced-body {
+  margin-top: 0.55rem;
+  padding-top: 0.55rem;
+  border-top: 1px dashed var(--color-ink-line);
+}
+.cdr-advanced-label {
+  margin: 0.65rem 0 0.25rem;
+  font-size: 0.62rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--color-ink-mute);
+  font-family: "DM Sans", system-ui, sans-serif;
 }
 .cdr-timeline-raw {
-  margin-top: 0.5rem;
-  opacity: 0.85;
+  margin-top: 0.35rem;
+  opacity: 0.9;
+}
+.cdr-timeline-raw .cdr-timeline-detail {
+  display: block;
+  max-width: none;
+  margin-top: 0.15rem;
+  white-space: normal;
+  overflow: visible;
+  text-overflow: unset;
 }
 
 /* Dashboard KPI cards — long Adaptive EWMA (and any future metric) must not overflow. */
@@ -721,8 +778,17 @@ html:not([data-theme="light"]) .cdr-status-chip.cdr-status--fail {
   border-color: rgba(91, 155, 213, 0.45);
   background: rgba(91, 155, 213, 0.08);
 }
-.cdr-detail td {
+.cdr-detail td,
+.cdr-detail-cell {
   border-top: none !important;
+}
+.cdr-detail-cell {
+  padding: 0.65rem 0.75rem 0.85rem !important;
+  vertical-align: top;
+}
+.cdr-detail[hidden],
+.cdr-detail.hidden {
+  display: none !important;
 }
 .cdr-detail-panel {
   border: 1px solid var(--color-ink-line);
@@ -730,24 +796,31 @@ html:not([data-theme="light"]) .cdr-status-chip.cdr-status--fail {
   border-radius: 0.5rem;
   display: flex;
   flex-direction: column;
-  gap: 0.85rem;
-  padding: 1rem 1.1rem 1.15rem;
+  gap: 0.95rem;
+  padding: 1.05rem 1.15rem 1.2rem;
+  width: 100%;
+  max-width: none;
+  box-sizing: border-box;
 }
 .cdr-digest {
   margin: 0;
-  padding: 0.75rem 0.85rem;
+  padding: 0.8rem 0.95rem;
   border: 1px solid var(--color-ink-line);
   border-radius: 0.4rem;
   background: color-mix(in srgb, var(--color-ink-panel) 92%, var(--color-signal) 8%);
 }
 .cdr-digest-title {
-  margin: 0 0 0.45rem;
-  font-size: 0.65rem;
+  margin: 0 0 0.5rem;
+  font-size: 0.68rem;
   letter-spacing: 0.14em;
   text-transform: uppercase;
   color: var(--color-signal);
   font-family: "DM Sans", system-ui, sans-serif;
   font-weight: 600;
+}
+.cdr-session-grid {
+  grid-template-columns: repeat(auto-fill, minmax(13.5rem, 1fr));
+  gap: 0.75rem 1.15rem;
 }
 .cdr-timeline-list {
   margin: 0;
@@ -773,8 +846,8 @@ html:not([data-theme="light"]) .cdr-status-chip.cdr-status--fail {
 }
 .cdr-detail-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(11rem, 1fr));
-  gap: 0.65rem 1rem;
+  grid-template-columns: repeat(auto-fill, minmax(12rem, 1fr));
+  gap: 0.7rem 1.1rem;
   margin: 0;
 }
 .cdr-detail-grid dt {
@@ -786,24 +859,30 @@ html:not([data-theme="light"]) .cdr-status-chip.cdr-status--fail {
   font-family: "DM Sans", system-ui, sans-serif;
 }
 .cdr-detail-grid dd {
-  margin: 0.15rem 0 0;
+  margin: 0.2rem 0 0;
   font-family: "JetBrains Mono", ui-monospace, monospace;
-  font-size: 0.75rem;
+  font-size: 0.78rem;
+  line-height: 1.35;
   color: var(--color-fg-soft);
   overflow-wrap: anywhere;
 }
 .cdr-gap-note {
-  margin: 0.75rem 0 0;
+  margin: 0.15rem 0 0;
   font-family: "DM Sans", system-ui, sans-serif;
   font-size: 0.7rem;
   color: var(--color-ink-mute);
   border-top: 1px dashed var(--color-ink-line);
   padding-top: 0.55rem;
 }
+.cdr-ledger-foot {
+  overflow-anchor: none;
+}
 @media (max-width: 640px) {
   .cdr-ledger th:nth-child(7),
   .cdr-ledger td.cdr-origin { display: none; }
-  .cdr-detail-grid { grid-template-columns: 1fr 1fr; }
+  .cdr-detail-grid,
+  .cdr-session-grid { grid-template-columns: 1fr 1fr; }
+  .cdr-hop-list { grid-template-columns: 1fr; }
 }
 @media (prefers-reduced-motion: reduce) {
   .cdr-ledger-row { transition: none; }
