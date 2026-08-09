@@ -29,7 +29,9 @@ import org.apache.logging.log4j.Logger;
  * <strong>REJECT / Abort / empty / timeout</strong> (RE_ROUTE only): that <em>is</em> the hop
  * response (TCAP Abort is not visible under a {@code gsm_map}-only Wireshark filter) — clear
  * hop-outstanding, pull AS with {@code string="hlr reject"} or {@code string="hlr none"}, then
- * MO {@code returnResultLast}. Never second {@code GATE_ARMED}.
+ * MO {@code returnResultLast}. Never second {@code GATE_ARMED}. AS pull always carries
+ * {@code originatedUssd} (dialed), {@code redirectUssd}/{@code hopUssd} (re-route codes),
+ * and hop RESULT text in {@code ussdString} when present.
  *
  * <p>Also stamps durable {@link UssdUserProfileStore} (PK=MSISDN) with last MAP2MAP TX fields.
  */
@@ -106,10 +108,13 @@ public class Map2MapCompletionService {
         String dialed = req.dialedUssd() == null ? "" : req.dialedUssd();
         String asUssd = Map2MapCdr.asUssdForReRouteHop(hop, outcome);
         String codeKind = ShortCodeRule.codeKind(dialed, req.mark(), req.shortCode());
+        String redirect = blankToNull(req.redirectUssd());
+        String hopCode = resolveHopCode(req);
         AsRequest asReq = new AsRequest(
                 session.virtualSessionId(), req.correlationId(), req.requestId(),
                 session.generation(), req.msisdn(), req.shortCode(), asUssd, req.networkId())
-                .withOriginated(dialed.isEmpty() ? null : dialed, codeKind);
+                .withOriginated(dialed.isEmpty() ? null : dialed, codeKind)
+                .withMap2MapCodes(redirect, hopCode);
         ShortCodeRule rule = ShortCodeRule.ofReroute(
                 req.shortCode(),
                 req.ruleType() == null ? RuleType.HTTP : req.ruleType().asPullPlane(),
@@ -172,6 +177,21 @@ public class Map2MapCompletionService {
         } catch (Throwable ignored) { }
         persistUserMap2Map(req, session, outcome);
         return "map2map-ok " + routed;
+    }
+
+
+    /** Resolved hop USSD actually sent to upper HLR (redirect + mark/long fold). */
+    private static String resolveHopCode(Map2MapRequestEvent req) {
+        if (req == null) {
+            return null;
+        }
+        String hop = ShortCodeRule.resolveHopUssd(
+                req.dialedUssd(), req.mark(), req.shortCode(), req.redirectUssd());
+        return blankToNull(hop != null && !hop.isBlank() ? hop : req.redirectUssd());
+    }
+
+    private static String blankToNull(String s) {
+        return s == null || s.isBlank() ? null : s.trim();
     }
 
     /** Last MAP2MAP TX → durable per-MSISDN {@code ussdUser} profile (not ussdTx). */

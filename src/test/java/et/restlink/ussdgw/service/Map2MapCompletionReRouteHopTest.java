@@ -98,6 +98,9 @@ class Map2MapCompletionReRouteHopTest {
         completion.onMap2MapResponse(sample(), "", Map2MapCdr.OUTCOME_EMPTY);
         assertThat(gateArms.get()).isZero();
         assertThat(lastAs.get().ussdString()).isEqualTo("hlr none");
+        assertThat(lastAs.get().redirectUssd()).isEqualTo("*875#");
+        assertThat(lastAs.get().hopUssd()).isEqualTo("*875#");
+        assertThat(lastAs.get().originatedUssd()).isEqualTo("*804#");
     }
 
     @Test
@@ -105,6 +108,17 @@ class Map2MapCompletionReRouteHopTest {
         completion.onMap2MapResponse(sample(), "Balance: 10", Map2MapCdr.OUTCOME_TEXT);
         assertThat(gateArms.get()).isEqualTo(1);
         assertThat(lastAs.get().ussdString()).isEqualTo("Balance: 10");
+        assertThat(lastAs.get().redirectUssd()).isEqualTo("*875#");
+        assertThat(lastAs.get().hopUssd()).isEqualTo("*875#");
+    }
+
+    @Test
+    void close_noRearm_stillExposesRedirectAndHopCodes() {
+        completion.onMap2MapResponse(sample(), "", Map2MapCdr.OUTCOME_CLOSE);
+        assertThat(gateArms.get()).isZero();
+        assertThat(lastAs.get().ussdString()).isEqualTo("hlr none");
+        assertThat(lastAs.get().redirectUssd()).isEqualTo("*875#");
+        assertThat(lastAs.get().shortCode()).isEqualTo("*804#");
     }
 
     private static Map2MapRequestEvent sample() {

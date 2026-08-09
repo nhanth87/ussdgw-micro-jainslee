@@ -67,7 +67,7 @@ export QUARKUS_DATASOURCE_JDBC_URL=jdbc:postgresql://127.0.0.1:5432/ussdgw
 
 Never `jdbc:h2:mem:` for shipped dist. Schema: Flyway `V1__ussdgw_baseline.sql` + boot guard — see [`docs/agents/schema.md`](docs/agents/schema.md).
 
-See `docs/as-contract/` and `AGENTS.md`.
+See `docs/as-contract/` and `AGENTS.md`. AS HTTP XML (MO + MAP2MAP): [`docs/as-contract/map2map-as-xml.md`](docs/as-contract/map2map-as-xml.md).
 
 ## Lab SS7 (public tree)
 

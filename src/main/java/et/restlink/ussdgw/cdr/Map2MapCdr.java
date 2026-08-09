@@ -38,7 +38,15 @@ public final class Map2MapCdr {
     public static final String HLR_REJECT = "HLR_REJECT";
     /** Peer USER_ABORT / PROVIDER_ABORT on outbound hop. */
     public static final String HOP_ABORT = "MAP2MAP_HOP_ABORT";
-    /** True hop / dialog TIMEOUT (not REJECT). */
+    /**
+     * Peer Dialog CLOSE/RELEASE on outbound hop <em>without</em> a USSD RESULT
+     * (empty TC-END / NOTICE+CLOSE). Not a timer — never call this {@link #TIMEOUT}.
+     */
+    public static final String HOP_CLOSE = "MAP2MAP_HOP_CLOSE";
+    /**
+     * True hop / dialog TIMEOUT only: MAP {@code onDialogTimeout} or
+     * {@code BridgeGateScheduler} hop TTL — never CLOSE/REJECT/abort.
+     */
     public static final String TIMEOUT = "MAP2MAP_TIMEOUT";
     public static final String TIMEOUT_AFTER_BRIDGE = "MAP2MAP_TIMEOUT_AFTER_BRIDGE";
 
@@ -77,7 +85,7 @@ public final class Map2MapCdr {
         return AS_USSD_HLR_NONE;
     }
 
-    /** Map dialog-lost kind → CDR status (reject ≠ timeout). */
+    /** Map dialog-lost kind → CDR status (CLOSE/REJECT/abort ≠ timeout). */
     public static String statusForDialogLost(String kind, boolean alreadyBridged) {
         String k = kind == null ? "" : kind.trim().toUpperCase();
         if ("REJECT".equals(k)) {
@@ -86,11 +94,19 @@ public final class Map2MapCdr {
         if ("USER_ABORT".equals(k) || "PROVIDER_ABORT".equals(k)) {
             return HOP_ABORT;
         }
+        if ("CLOSE".equals(k) || "RELEASE".equals(k)) {
+            return HOP_CLOSE;
+        }
         if ("TIMEOUT".equals(k)) {
             return alreadyBridged ? TIMEOUT_AFTER_BRIDGE : TIMEOUT;
         }
-        // CLOSE / RELEASE / unknown — not a peer refuse; keep timeout family for TTL-ish loss.
-        return alreadyBridged ? TIMEOUT_AFTER_BRIDGE : TIMEOUT;
+        // Unknown kind — fail-closed as hop-close (empty), never invent TIMEOUT.
+        return HOP_CLOSE;
+    }
+
+    /** True when dialog-lost kind is a real timer (MAP dialog timeout), not CLOSE/REJECT. */
+    public static boolean isTimerDialogLost(String kind) {
+        return "TIMEOUT".equals(kind == null ? "" : kind.trim().toUpperCase());
     }
 
     public static String hopOutcomeForDialogLost(String kind) {

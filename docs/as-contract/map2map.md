@@ -1,5 +1,8 @@
 # MAP2MAP re-route — Case 2 (upper HLR USSD, no SRI)
 
+**AS XML samples (MO + MAP2MAP pull/response):** [`map2map-as-xml.md`](map2map-as-xml.md) — Digicom-ET USSDGW AS HTTP XML contract.
+
+
 Authoritative MO enrich path (routing-driven). **One unique short-code rule** covers both
 exact short dials and long mark prefixes — no separate short/long rule types.
 
@@ -28,11 +31,11 @@ UE *804#  (or mark *101 → *101123456#)
   → peer upper HLR    processUnstructuredSS-Response / REJECT / abort
                       (legacy UnstructuredSS-Response still accepted)
   → Map2MapCompletion  sync AS pull via AsPullRouter (HTTP|gRPC|SIP per rule_type):
-                        **hop text** → ussdString=hop; re-arm AdaptiveTimeout for AS budget;
+                        **hop text** → ussdString=hop + dialog `hlrResult=responded`; attrs `redirectUssd`/`hopUssd`; re-arm AdaptiveTimeout for AS budget;
                         **hop REJECT** → ussdString=`hlr reject` + dialog `hlrResult=reject`;
                           **no second GATE_ARMED** (hop already answered);
-                        **hop empty/timeout/abort** → ussdString=`hlr none` + `hlrResult=none`;
-                        additive originatedUssd + shortCode + codeKind;
+                        **hop empty/timeout/abort/CLOSE** → ussdString=`hlr none` + `hlrResult=none` (still emit `redirectUssd`/`hopUssd`);
+                        additive originatedUssd + shortCode + codeKind + redirectUssd + hopUssd;
                         if already S1_RELEASED → keep bridged (no CAS reset)
   → AS (HttpClientSbb / GrpcClientSbb / Sip MESSAGE) 200 / OK
   → GW → MSC → UE     processUnstructuredSS result  (or NI late reconcile)
@@ -113,7 +116,7 @@ Full lab runbook: [`tools/map2map-lab/README.md`](../../tools/map2map-lab/README
 | short_code | `*804#` or mark `*101` | Exact short when mark=false; mark prefix for long |
 | mark | `true` / `false` | Prefix match; Ethiopia use `*101` not `*101*` |
 | reroute_enable | `true` | Positive arm flag (Case 2) |
-| map2map_gt | `*8744#` / `*875#` | **Redirect USSD string** on outbound Request (not SCCP GT) |
+| map2map_gt | `*875#` short / `*875*` long | **Redirect** base on outbound Request (not SCCP GT). Long mark: prefix shape. |
 | hop_dest_gt | `251971200201` | Optional fixed SCCP CalledParty GT |
 | hop_dest_ssn | `6` | Optional; default **6**; alone with Re-route = SSN for upper-gt |
 | hlr_mode | `INHERIT` / … | **Ignored** for Case 2 hop; NI / HLR face Case 1 only |
@@ -124,14 +127,36 @@ Full lab runbook: [`tools/map2map-lab/README.md`](../../tools/map2map-lab/README
 prefix. One mark rule can cover both short and long (e.g. `*101` matches `*101#` and
 `*101123456#`). Prefer mark prefix over inventing a second rule type.
 
+## Long-code suffix preserve (MAP2MAP hop USSD)
+
+Hop USSD is **not** always the literal `map2map_gt`. Resolver:
+`ShortCodeRule.resolveHopUssd` + chain fold `ShortCodeRoutingService.resolveMap2MapHopUssd`.
+
+| Dial / rule | Hop USSD |
+|-------------|----------|
+| `mark=false` exact (e.g. `*804#` → redirect `*875#`) | Literal redirect `*875#` |
+| `mark=true` short under prefix (`*804#` with key `*804`) | Literal redirect |
+| `mark=true` long (`*804*1234#`, key `*804*`, redirect `*875*`) | **Prefix replace only** → `*875*1234#` (leftover incl. `#`) |
+
+**Chain always:** after the first rewrite, if the hop string matches another armed RE_ROUTE
+rule, apply the same law again (cap 8). Example:
+`*804*1234#` → `*875*1234#` → mark `*875*` + redirect `*8775*` → `*8775*1234#`.
+
+Ops for Digicom long form (`*{n}*xxx#`): set **`mark=true`**, short_code **`*804*`** (not
+`*804#`), redirect **`*875*`** (prefix shape, not `*875#`). Ask before mutating live `*804#`.
+If a second RE_ROUTE sits on `*875*` / `*875#`, short `*804#` may chain past `*875#` — disable
+reroute on the intermediate or keep redirect prefixes intentional.
+
+CDR / Slee OUT: `dialed=…` + `hopUssd=…` (and `redirect=` = configured `map2map_gt`).
+
 ## Hop dest matrix (Case 2)
 
 | `hop_dest_gt` | Routing |
 |---------------|---------|
 | blank | `processUnstructuredSS-Request` (op **59**) → **`ussd.hlr.upper-gt`** + SSN (`hop_dest_ssn` or 6); destRef+component = MSISDN; Calling SSN **6**; **no SRI** |
-| set (e.g. `251971200201`) | Same op **59** hop to that GT + `hop_dest_ssn` (default 6); USSD = redirect; **no SRI** |
+| set (e.g. `251971200201`) | Same op **59** hop to that GT + `hop_dest_ssn` (default 6); USSD = **resolved** hop (suffix preserve + chain); **no SRI** |
 
-Ethio Brook wire (2026-08-09): hop is **not** `unstructuredSS-Request` (op 60). Op 60 is the UE menu leg after hop/AS. Digicom prove must show hop Begin **op 59**, Calling SSN **6**, destReference MSISDN.
+Ethio live wire (2026-08-09): hop is **not** `unstructuredSS-Request` (op 60). Op 60 is the UE menu leg after hop/AS. Digicom prove must show hop Begin **op 59**, Calling SSN **6**, destReference MSISDN.
 
 Fail-closed: unusable/blank/self-loop upper GT when hop dest blank (`MAP2MAP_UPPER_GT_FAIL`);
 blank hop GT digits when hop_dest set (`MAP2MAP_HOP_DEST_FAIL`).
@@ -143,9 +168,12 @@ XML dialog attrs / JSON fields (classic AS may ignore unknowns):
 | Field | Meaning |
 |-------|---------|
 | `msisdn` | Subscriber |
-| `ussdString` / `string=` | Hop response text (or dialed when hop empty) |
+| `ussdString` / `string=` | Hop RESULT text when present; else `hlr none` / `hlr reject` |
+| `hlrResult` | `responded` \| `none` \| `reject` \| `pending` |
 | `originatedUssd` | Full UE dialed string |
 | `shortCode` | Matched rule key |
+| `redirectUssd` | Rule redirect short code (e.g. `*875#`) |
+| `hopUssd` | Resolved hop USSD sent to upper HLR (short or long) |
 | `codeKind` | `SHORT` \| `LONG` |
 
 ## Case 1 HLR Face SRI (not MAP2MAP)
@@ -188,7 +216,7 @@ Reject / Timeout) clears the flag:
 | `VirtualSessionBridge` AS END/ABORT | CDR `MAP2MAP_MO_HOLD` — restore `AWAITING_AS` |
 | Gate with bridge armed | **Allowed** — `BRIDGED` async-wait (stay-on-call) |
 
-Brook note: gsm_map filter may hide TC-Abort; packet order that looks like
+Operator note: gsm_map filter may hide TC-Abort; packet order that looks like
 `returnResultLast` without hop Response is often MO hard-fail after hop Abort + AS empty —
 still two TCAP dialogs; enforce hop-terminal before MO end.
 
@@ -223,7 +251,8 @@ survive process restart or cross-node (see [lessons.md](../agents/lessons.md) ·
 | `MAP2MAP_USSD_SENT` | Outbound UnstructuredSS toward hop GT (gate armed just before/with this) |
 | `MAP2MAP_GATED_HOP` | Gate fired during hop (also classic `BRIDGED`) |
 | `MAP2MAP_OK` / `MAP2MAP_COMPLETE_AFTER_GATE` | Hop done → AS pull (re-arm vs already S1_RELEASED) |
-| `MAP2MAP_TIMEOUT` / `MAP2MAP_TIMEOUT_AFTER_BRIDGE` | Hop TTL / REJECT / abort — still AS-pulls empty hop then (if AS route fails) hard-fail UE |
+| `HLR_REJECT` / `MAP2MAP_HOP_ABORT` / `MAP2MAP_HOP_CLOSE` | Peer REJECT / abort / CLOSE-without-RESULT — AS-pulls `hlr reject`/`hlr none` (not a timer) |
+| `MAP2MAP_TIMEOUT` / `MAP2MAP_TIMEOUT_AFTER_BRIDGE` | Real hop TTL (`BridgeGateScheduler`) or MAP `onDialogTimeout` only |
 | `GATE_ARMED` / `BRIDGED` / `GATE_EXPIRED` | Budget armed (not fired) / UE async-wait / NI park |
 | `MAP2MAP_MO_HOLD` | MO end deferred — hop still outstanding |
 | `GATED_AS_NOTIFY` / `GATED_AS_ACK` / `GATED_AS_FAIL` | Gated XmlMAPDialog POST to AS |

@@ -116,6 +116,9 @@ components:
         shortCode: { type: string }
         ussdString: { type: string }
         originatedUssd: { type: string, description: Full UE dialed string (MAP2MAP / MO) }
+        redirectUssd: { type: string, description: MAP2MAP rule redirect short code (e.g. *875#) }
+        hopUssd: { type: string, description: Resolved hop USSD sent to upper HLR (short or long) }
+        hlrResult: { type: string, description: "MAP2MAP hop flag: none|reject|pending|responded" }
         codeKind: { type: string, enum: [SHORT, LONG], description: Mark-matched longer dial = LONG }
         networkId: { type: integer }
         virtualBridgeId: { type: string, description: Bridge arm id when armed (usually = correlationId) }

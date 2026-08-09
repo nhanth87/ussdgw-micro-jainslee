@@ -161,6 +161,37 @@ class ClassicDialogXmlCodecTest {
     }
 
     @Test
+    void encodePullMap2MapIncludesRedirectAndHopUssd() {
+        AsRequest req = new AsRequest("vs-1", "corr-m2m", "r1", 0, "251911230398", "*804#",
+                "hlr none", 0, "corr-m2m", 25000L, "BRIDGE")
+                .withOriginated("*804#", "SHORT")
+                .withMap2MapCodes("*875#", "*8775#");
+        String xml = ClassicDialogXmlCodec.encodePull(req);
+        assertThat(xml)
+                .contains("shortCode=\"*804#\"")
+                .contains("originatedUssd=\"*804#\"")
+                .contains("redirectUssd=\"*875#\"")
+                .contains("hopUssd=\"*8775#\"")
+                .contains("hlrResult=\"none\"")
+                .contains("string=\"hlr none\"")
+                .contains("number=\"251911230398\"");
+    }
+
+    @Test
+    void encodePullMap2MapHopTextKeepsRedirectAttrs() {
+        AsRequest req = new AsRequest("vs-1", "corr-ok", "r1", 0, "251911000001", "*804#",
+                "Balance: 12.50 ETB", 0)
+                .withOriginated("*804#", "SHORT")
+                .withMap2MapCodes("*875#", "*875#");
+        String xml = ClassicDialogXmlCodec.encodePull(req);
+        assertThat(xml)
+                .contains("string=\"Balance: 12.50 ETB\"")
+                .contains("redirectUssd=\"*875#\"")
+                .contains("hopUssd=\"*875#\"")
+                .contains("hlrResult=\"responded\"");
+    }
+
+    @Test
     void decodeResponseReadsAsyncAndBridgeAttrs() {
         String xml = """
                 <dialog localId="c-async" sessionId="vs-x" virtualBridgeId="c-async"

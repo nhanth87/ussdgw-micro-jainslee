@@ -17,7 +17,10 @@ import com.fasterxml.jackson.annotation.JsonInclude;
  *
  * <p>MAP2MAP / MO enrich (additive): {@link #originatedUssd()} = full UE dialed string;
  * {@link #codeKind()} = {@code SHORT}|{@code LONG}; {@link #shortCode()} = matched rule key;
- * {@link #ussdString()} = hop text after re-route (or dialed when no hop enrich).
+ * {@link #redirectUssd()} = rule redirect (e.g. {@code *875#}); {@link #hopUssd()} = resolved
+ * hop code actually sent toward upper HLR (may be long {@code *875*…#});
+ * {@link #ussdString()} = upper HLR/MSC hop USSD body only (never dialed/redirect codes),
+ * or {@code hlr none}/{@code hlr reject} when the hop had no text / REJECT.
  */
 @JsonIgnoreProperties(ignoreUnknown = true)
 @JsonInclude(JsonInclude.Include.NON_NULL)
@@ -37,13 +40,15 @@ public record AsRequest(
         String gateReason,
         Long observedEwmaMs,
         String originatedUssd,
-        String codeKind
+        String codeKind,
+        String redirectUssd,
+        String hopUssd
 ) {
     /** Backward-compatible ctor without late-push / gated metadata. */
     public AsRequest(String sessionId, String correlationId, String requestId, int generation,
                      String msisdn, String shortCode, String ussdString, int networkId) {
         this(sessionId, correlationId, requestId, generation, msisdn, shortCode, ussdString,
-                networkId, null, null, null, null, null, null, null, null);
+                networkId, null, null, null, null, null, null, null, null, null, null);
     }
 
     /** Backward-compatible ctor with bridge metadata only. */
@@ -51,24 +56,36 @@ public record AsRequest(
                      String msisdn, String shortCode, String ussdString, int networkId,
                      String virtualBridgeId, Long adaptiveTimeoutMs, String asMode) {
         this(sessionId, correlationId, requestId, generation, msisdn, shortCode, ussdString,
-                networkId, virtualBridgeId, adaptiveTimeoutMs, asMode, null, null, null, null, null);
+                networkId, virtualBridgeId, adaptiveTimeoutMs, asMode, null, null, null, null, null,
+                null, null);
     }
 
     public AsRequest withMetadata(String virtualBridgeId, Long adaptiveTimeoutMs, String asMode) {
         return new AsRequest(sessionId, correlationId, requestId, generation, msisdn, shortCode,
                 ussdString, networkId, virtualBridgeId, adaptiveTimeoutMs, asMode,
-                jsessionId, gateReason, observedEwmaMs, originatedUssd, codeKind);
+                jsessionId, gateReason, observedEwmaMs, originatedUssd, codeKind,
+                redirectUssd, hopUssd);
     }
 
     public AsRequest withGatedHint(String jsessionId, String gateReason, Long observedEwmaMs) {
         return new AsRequest(sessionId, correlationId, requestId, generation, msisdn, shortCode,
                 ussdString, networkId, virtualBridgeId, adaptiveTimeoutMs, asMode,
-                jsessionId, gateReason, observedEwmaMs, originatedUssd, codeKind);
+                jsessionId, gateReason, observedEwmaMs, originatedUssd, codeKind,
+                redirectUssd, hopUssd);
     }
 
     public AsRequest withOriginated(String originatedUssd, String codeKind) {
         return new AsRequest(sessionId, correlationId, requestId, generation, msisdn, shortCode,
                 ussdString, networkId, virtualBridgeId, adaptiveTimeoutMs, asMode,
-                jsessionId, gateReason, observedEwmaMs, originatedUssd, codeKind);
+                jsessionId, gateReason, observedEwmaMs, originatedUssd, codeKind,
+                redirectUssd, hopUssd);
+    }
+
+    /** MAP2MAP re-route codes: rule redirect + resolved hop USSD sent to upper HLR. */
+    public AsRequest withMap2MapCodes(String redirectUssd, String hopUssd) {
+        return new AsRequest(sessionId, correlationId, requestId, generation, msisdn, shortCode,
+                ussdString, networkId, virtualBridgeId, adaptiveTimeoutMs, asMode,
+                jsessionId, gateReason, observedEwmaMs, originatedUssd, codeKind,
+                redirectUssd, hopUssd);
     }
 }

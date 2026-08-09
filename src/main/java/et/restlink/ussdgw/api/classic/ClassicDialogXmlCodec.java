@@ -245,11 +245,25 @@ public final class ClassicDialogXmlCodec {
                 req.sessionId(), req.virtualBridgeId(), req.adaptiveTimeoutMs(),
                 req.asMode(), null, req.jsessionId(), req.gateReason(), req.observedEwmaMs(),
                 req.shortCode(), req.originatedUssd(), req.codeKind(),
-                hlrResultFromUssd(req.ussdString()));
+                hlrResultForPull(req),
+                req.redirectUssd(), req.hopUssd());
     }
 
-    /** RE_ROUTE → dialog {@code hlrResult} + {@code string=hlr pending|reject|none}. */
-    private static String hlrResultFromUssd(String ussd) {
+    /**
+     * MAP2MAP RE_ROUTE dialog {@code hlrResult}:
+     * <ul>
+     *   <li>{@code none} — hop empty CLOSE / no RESULT ({@code string=hlr none})</li>
+     *   <li>{@code reject} — hop Dialog REJECT ({@code string=hlr reject})</li>
+     *   <li>{@code pending} — early gated pull while hop in flight ({@code string=hlr pending})</li>
+     *   <li>{@code responded} — hop returned USSD text ({@code string=} = that text)</li>
+     * </ul>
+     * Non-MAP2MAP pulls (no redirect/hop attrs) leave {@code hlrResult} unset.
+     */
+    private static String hlrResultForPull(AsRequest req) {
+        if (req == null) {
+            return null;
+        }
+        String ussd = req.ussdString() == null ? "" : req.ussdString();
         if ("hlr pending".equals(ussd)) {
             return "pending";
         }
@@ -258,6 +272,10 @@ public final class ClassicDialogXmlCodec {
         }
         if ("hlr none".equals(ussd)) {
             return "none";
+        }
+        boolean map2map = notBlank(req.redirectUssd()) || notBlank(req.hopUssd());
+        if (map2map && notBlank(ussd)) {
+            return "responded";
         }
         return null;
     }
@@ -288,7 +306,7 @@ public final class ClassicDialogXmlCodec {
                                    String shortCode, String originatedUssd, String codeKind) {
         openDialog(sb, localId, networkId, emptyHandshake, sessionId, virtualBridgeId,
                 adaptiveTimeoutMs, asMode, async, jsessionId, gateReason, observedEwmaMs,
-                shortCode, originatedUssd, codeKind, null);
+                shortCode, originatedUssd, codeKind, null, null, null);
     }
 
     private static void openDialog(StringBuilder sb, String localId, int networkId,
@@ -298,6 +316,18 @@ public final class ClassicDialogXmlCodec {
                                    String jsessionId, String gateReason, Long observedEwmaMs,
                                    String shortCode, String originatedUssd, String codeKind,
                                    String hlrResult) {
+        openDialog(sb, localId, networkId, emptyHandshake, sessionId, virtualBridgeId,
+                adaptiveTimeoutMs, asMode, async, jsessionId, gateReason, observedEwmaMs,
+                shortCode, originatedUssd, codeKind, hlrResult, null, null);
+    }
+
+    private static void openDialog(StringBuilder sb, String localId, int networkId,
+                                   boolean emptyHandshake, String sessionId,
+                                   String virtualBridgeId, Long adaptiveTimeoutMs,
+                                   String asMode, Boolean async,
+                                   String jsessionId, String gateReason, Long observedEwmaMs,
+                                   String shortCode, String originatedUssd, String codeKind,
+                                   String hlrResult, String redirectUssd, String hopUssd) {
         sb.append("<dialog appCntx=\"").append(APP_CTX).append('"');
         appendIdentityAttrs(sb, localId, sessionId, virtualBridgeId, adaptiveTimeoutMs, asMode,
                 jsessionId, gateReason, observedEwmaMs);
@@ -309,6 +339,12 @@ public final class ClassicDialogXmlCodec {
         }
         if (notBlank(codeKind)) {
             sb.append(" codeKind=\"").append(xmlAttr(codeKind)).append('"');
+        }
+        if (notBlank(redirectUssd)) {
+            sb.append(" redirectUssd=\"").append(xmlAttr(redirectUssd)).append('"');
+        }
+        if (notBlank(hopUssd)) {
+            sb.append(" hopUssd=\"").append(xmlAttr(hopUssd)).append('"');
         }
         if (notBlank(hlrResult)) {
             sb.append(" hlrResult=\"").append(xmlAttr(hlrResult)).append('"');
