@@ -121,6 +121,8 @@ GW includes these on **PULL** encode (HTTP XML attrs / JSON fields; gRPC JSON by
 | `asMode` | `asMode` | Hint: `SYNC` \| `BRIDGE` (ASYNC_ACK is AS response `async=true`). |
 | `shortCode` | `shortCode` | Matched routing-rule key. |
 | `originatedUssd` | `originatedUssd` | Full UE dialed string (MAP2MAP keeps hop text in `ussdString`). |
+MAP2MAP AS pull samples (`hlrResult`, `redirectUssd`, `hopUssd`): [`map2map-as-xml.md`](map2map-as-xml.md).
+
 | `codeKind` | `codeKind` | `SHORT` \| `LONG` (mark + longer dial → LONG). |
 
 Classic AS may ignore unknown attributes. RestLink also accepts `async="true"` on response `<dialog>` for XML ASYNC_ACK.

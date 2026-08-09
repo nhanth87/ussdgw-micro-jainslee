@@ -190,7 +190,8 @@ public class AsPullRouter {
                         asReq.ussdString(), asReq.networkId(), asReq.virtualBridgeId(),
                         asReq.adaptiveTimeoutMs(), asReq.asMode(), asReq.jsessionId(),
                         asReq.gateReason(), asReq.observedEwmaMs(),
-                        asReq.originatedUssd(), asReq.codeKind());
+                        asReq.originatedUssd(), asReq.codeKind(),
+                        asReq.redirectUssd(), asReq.hopUssd());
             }
             String ct = format == AsHttpWireFormat.JSON ? SIP_CT_JSON : SIP_CT_XML;
             return new SipPullBody(ct, wireFacade.encodePullRequest(forEncode, format));
