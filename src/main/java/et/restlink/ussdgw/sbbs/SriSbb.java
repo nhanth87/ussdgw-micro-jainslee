@@ -44,7 +44,11 @@ public final class SriSbb implements Sbb, SleeEventHandler {
         SleeEventTrace.inSbb("SriSbb", event, Pii.msisdnDetail(ni.msisdn()));
         String detail;
         try { detail = startSri(ni); }
-        catch (Throwable t) { detail = "error=" + t.getClass().getSimpleName(); }
+        catch (Throwable t) {
+            detail = "error=" + t.getClass().getSimpleName() + ":" + String.valueOf(t.getMessage());
+            org.apache.logging.log4j.LogManager.getLogger(SriSbb.class)
+                    .error("SriSbb startSri failed corr={}", ni.correlationId(), t);
+        }
         SleeEventTrace.outSbb("SriSbb", event, detail);
     }
 
