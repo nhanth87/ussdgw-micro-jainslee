@@ -187,9 +187,11 @@ public class Map2MapCompletionService {
             rearmed = true;
         }
 
+        // First AS after hop = wire gen 0 (BEGIN / processUnstructured…). Session gen
+        // stays until MS digit so BPLUS keeps dialog/language across multimenu.
         AsRequest asReq = new AsRequest(
                 session.virtualSessionId(), req.correlationId(), req.requestId(),
-                session.generation(), req.msisdn(), req.shortCode(), asUssd, req.networkId())
+                0, req.msisdn(), req.shortCode(), asUssd, req.networkId())
                 .withOriginated(dialed.isEmpty() ? null : dialed, codeKind)
                 .withMap2MapCodes(redirect, hopCode);
         ShortCodeRule rule = ShortCodeRule.ofReroute(

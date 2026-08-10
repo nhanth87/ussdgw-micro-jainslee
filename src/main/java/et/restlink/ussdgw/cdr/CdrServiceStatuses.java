@@ -108,6 +108,8 @@ public final class CdrServiceStatuses {
             case "GATED_AS_SKIP" -> "AS notify skipped";
             case "AS_EMPTY_BODY" -> "AS empty body";
             case "AS_PULL_FAIL" -> "AS pull fail";
+            case "AS_DROP" -> "AS drop (gen/state)";
+            case "MS_DIGIT" -> "MS digit (menu)";
             case "END" -> "AS→UE end";
             case "CONTINUE" -> "AS→UE continue";
             case "ABORT" -> "AS→UE abort";
@@ -146,6 +148,30 @@ public final class CdrServiceStatuses {
             }
             return gateMs != null ? ("budget " + gateMs + " ms") : "budget armed";
         }
+        if (st.equals(CdrStatuses.MS_DIGIT)) {
+            String dig = kv.get("digit");
+            String gen = kv.get("gen");
+            StringBuilder ms = new StringBuilder("digit=");
+            ms.append(dig == null || dig.isBlank() ? "?" : dig);
+            if (gen != null && !gen.isBlank()) {
+                ms.append(" gen=").append(gen);
+            }
+            return ms.toString();
+        }
+        if (st.equals(CdrStatuses.AS_DROP)) {
+            String reason = kv.get("reason");
+            String wire = kv.get("wireGen");
+            String sess = kv.get("sessionGen");
+            StringBuilder drop = new StringBuilder("drop");
+            if (reason != null && !reason.isBlank()) {
+                drop.append('=').append(reason);
+            }
+            if (wire != null || sess != null) {
+                drop.append(" wireGen=").append(wire == null ? "?" : wire)
+                        .append(" sessionGen=").append(sess == null ? "?" : sess);
+            }
+            return drop.toString();
+        }
         // AS text only when this milestone's detail carries asUssd= (or AS→UE statuses).
         String detailAs = kv.get("asUssd");
         boolean asRow = st.equals("END") || st.equals("CONTINUE") || st.equals("ABORT")
@@ -156,7 +182,8 @@ public final class CdrServiceStatuses {
                 : (asRow ? r.asUssd : null);
         String snip = CdrUssdSnippet.of(as);
         if (!snip.isEmpty()) {
-            return "AS: " + snip;
+            String gen = kv.get("gen");
+            return gen != null && !gen.isBlank() ? ("AS: " + snip + " gen=" + gen) : ("AS: " + snip);
         }
         String hop = kv.get("hopOutcome");
         if (hop != null && !hop.isBlank()) {

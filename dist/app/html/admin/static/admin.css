@@ -524,6 +524,40 @@ tbody.hx-table-live.htmx-settling {
 .cdr-spine-journey {
   border-color: var(--color-ink-line);
 }
+.cdr-menu-tape {
+  border-color: var(--color-ink-line);
+}
+.cdr-menu-path {
+  margin: 0.35rem 0 0.25rem;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 0.78rem;
+  line-height: 1.35;
+  color: var(--color-ink);
+  overflow-wrap: anywhere;
+}
+.cdr-menu-meta {
+  margin: 0 0 0.4rem;
+  font-size: 0.72rem;
+}
+.cdr-menu-steps {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 0.25rem;
+}
+.cdr-menu-steps li {
+  font-size: 0.78rem;
+  line-height: 1.3;
+}
+.cdr-menu-kind {
+  font-weight: 600;
+  color: var(--color-signal);
+}
+.cdr-menu-gen,
+.cdr-menu-text {
+  font-size: 0.74rem;
+}
 .cdr-hop-list {
   list-style: none;
   margin: 0.35rem 0 0;

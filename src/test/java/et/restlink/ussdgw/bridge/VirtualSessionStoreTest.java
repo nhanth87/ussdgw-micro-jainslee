@@ -8,6 +8,8 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
+import java.util.concurrent.atomic.AtomicInteger;
+
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -145,12 +147,77 @@ class VirtualSessionStoreTest {
     }
 
     @Test
-    void assertSameMsisdnAllowsBlankOrEqual() {
+    void putAllowsPlusPrefixSameDigitsMsisdn() {
+        store.put(new VirtualSession("vs1", "corr-plus", "req-1",
+                "251911230398", 0, "corr-plus", ""));
+        // Same digits with leading + must not false-reject (NI/MO format variance).
+        store.put(new VirtualSession("vs1", "corr-plus", "req-1",
+                "+251911230398", 0, "corr-plus", ""));
+        assertThat(store.get("corr-plus").orElseThrow().msisdn())
+                .isIn("251911230398", "+251911230398");
+    }
+
+    @Test
+    void assertSameMsisdnDigitsNormalizeAndRefuseBlankOverwrite() {
         VirtualSessionStore.assertSameMsisdn("c", "", "2519");
-        VirtualSessionStore.assertSameMsisdn("c", "2519", "");
-        VirtualSessionStore.assertSameMsisdn("c", "2519", "2519");
+        VirtualSessionStore.assertSameMsisdn("c", "2519", "+2519");
+        VirtualSessionStore.assertSameMsisdn("c", "+251 911", "251911");
         assertThatThrownBy(() -> VirtualSessionStore.assertSameMsisdn("c", "2519", "2520"))
                 .isInstanceOf(IllegalStateException.class);
+        assertThatThrownBy(() -> VirtualSessionStore.assertSameMsisdn("c", "2519", ""))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("refusing blank overwrite");
+        assertThatThrownBy(() -> VirtualSessionStore.assertSameMsisdn("c", "2519", null))
+                .isInstanceOf(IllegalStateException.class);
+    }
+
+    @Test
+    void concurrentPutSameCorrDifferentMsisdnExactlyOneWins() throws Exception {
+        String corr = "corr-race";
+        AtomicInteger wins = new AtomicInteger();
+        AtomicInteger rejects = new AtomicInteger();
+        Runnable a = () -> {
+            try {
+                store.put(new VirtualSession("vs-a", corr, "req-a",
+                        "251911000001", 0, corr, ""));
+                wins.incrementAndGet();
+            } catch (IllegalStateException e) {
+                rejects.incrementAndGet();
+            }
+        };
+        Runnable b = () -> {
+            try {
+                store.put(new VirtualSession("vs-b", corr, "req-b",
+                        "251911000002", 0, corr, ""));
+                wins.incrementAndGet();
+            } catch (IllegalStateException e) {
+                rejects.incrementAndGet();
+            }
+        };
+        Thread t1 = new Thread(a);
+        Thread t2 = new Thread(b);
+        t1.start();
+        t2.start();
+        t1.join();
+        t2.join();
+        assertThat(wins.get()).isEqualTo(1);
+        assertThat(rejects.get()).isEqualTo(1);
+        assertThat(store.size()).isEqualTo(1);
+        String bound = AdaptiveTimeout.normalizeMsisdn(
+                store.get(corr).orElseThrow().msisdn());
+        assertThat(bound).isIn("251911000001", "251911000002");
+    }
+
+    @Test
+    void byDialogIdDoesNotSwapMsisdnAcrossSessions() {
+        store.put(new VirtualSession("vs-a", "corr-dlg-a", "req-a",
+                "251911000010", 0, "dlg-a", "*804#"));
+        store.put(new VirtualSession("vs-b", "corr-dlg-b", "req-b",
+                "251911000011", 0, "dlg-b", "*804#"));
+        assertThat(store.byDialogId("dlg-a").orElseThrow().msisdn()).isEqualTo("251911000010");
+        assertThat(store.byDialogId("dlg-b").orElseThrow().msisdn()).isEqualTo("251911000011");
+        assertThat(store.get("corr-dlg-a").orElseThrow().msisdn()).isEqualTo("251911000010");
+        assertThat(store.get("corr-dlg-b").orElseThrow().msisdn()).isEqualTo("251911000011");
     }
 
     private static void set(Object target, String field, Object value) {

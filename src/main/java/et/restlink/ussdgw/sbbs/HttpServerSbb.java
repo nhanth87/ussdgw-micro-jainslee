@@ -198,11 +198,15 @@ public final class HttpServerSbb implements Sbb, SleeEventHandler {
         int networkId = resolveNiNetworkId(ingress, auth);
 
         // Client-supplied correlationId must not steal another subscriber's ussdTx row
-        // (PK = correlationId; classic MO always mints its own id).
+        // (PK = correlationId; classic MO always mints its own id). Digits-normalize so
+        // +251… vs 251… of the *same* user is not a false 409.
         Optional<VirtualSession> existing = svc().store().get(corr);
         if (existing.isPresent()) {
-            String bound = existing.get().msisdn() == null ? "" : existing.get().msisdn().trim();
-            if (!bound.isEmpty() && !msisdn.isEmpty() && !bound.equals(msisdn)) {
+            String bound = et.restlink.ussdgw.bridge.AdaptiveTimeout.normalizeMsisdn(
+                    existing.get().msisdn());
+            String want = et.restlink.ussdgw.bridge.AdaptiveTimeout.normalizeMsisdn(msisdn);
+            if (bound != null && !bound.isEmpty() && want != null && !want.isEmpty()
+                    && !bound.equals(want)) {
                 replyNiError(req, format, 409, "correlationId already bound to another msisdn");
                 return "ni-corr-msisdn-conflict";
             }

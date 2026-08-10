@@ -23,6 +23,7 @@ import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentSkipListSet;
+import java.util.concurrent.atomic.AtomicReference;
 
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
@@ -60,12 +61,30 @@ public class VirtualSessionStore {
     private final ConcurrentSkipListSet<GateKey> gateIndex = new ConcurrentSkipListSet<>();
     private final ConcurrentHashMap<String, Long> gateDeadlines = new ConcurrentHashMap<>();
 
+    /**
+     * Process-wide MS digit continue claims. {@link #get}/{@link #byDialogId} always
+     * rehydrate a <em>new</em> {@link VirtualSession} from ussdTx, so a heap
+     * {@code AtomicLong} on the session object resets to unset and cannot dedup dual
+     * jSS7 {@code unstructuredSSRequest_Response} deliveries (~ms apart).
+     */
+    private final ConcurrentHashMap<String, AtomicReference<MsDigitClaim>> msDigitClaims =
+            new ConcurrentHashMap<>();
+
     private record GateKey(long deadlineMs, String correlationId) implements Comparable<GateKey> {
         @Override
         public int compareTo(GateKey o) {
             int c = Long.compare(deadlineMs, o.deadlineMs);
             return c != 0 ? c : correlationId.compareTo(o.correlationId);
         }
+    }
+
+    /** Last MS continue invoke + whether a digit AS pull is still in flight. */
+    private record MsDigitClaim(long invokeId, boolean inFlight) {}
+
+    /** Why {@link #tryClaimMsDigitContinue} lost (for {@code dup-skip-continue} reason=). */
+    public enum MsDigitClaimLoss {
+        INVOKE,
+        IN_FLIGHT
     }
 
     /**
@@ -137,11 +156,11 @@ public class VirtualSessionStore {
                 p = (UssdTxProfile) plo.getProfile();
             } else {
                 p = (UssdTxProfile) plo.getProfile();
-                // PK = correlationId (classic parity). Never let a second MSISDN hijack the row:
-                // UssdTxProfileMapper.write would overwrite CMP msisdn/MSC/IMSI and corrupt
-                // concurrent subscribers that share a reused client-supplied correlationId.
-                assertSameMsisdn(corr, p.getMsisdn(), session.msisdn());
             }
+            // PK = correlationId (classic parity). Bind MSISDN with CAS before full write so two
+            // concurrent puts (same corr, different MSISDN) cannot both pass a blank-row check
+            // and last-writer-wins the subscriber fields.
+            ensureMsisdnBound(f, id, p, session.msisdn());
             UssdTxProfileMapper.write(p, session, expires);
             indexGate(session);
             return session;
@@ -233,6 +252,7 @@ public class VirtualSessionStore {
         if (correlationId == null || correlationId.isBlank()) return;
         ensureTable();
         unindexGate(correlationId);
+        clearMsDigitClaim(correlationId);
         ProfileFacility f = facility();
         if (f == null) return;
         try {
@@ -240,6 +260,69 @@ public class VirtualSessionStore {
         } catch (RuntimeException e) {
             LOG.warn("remove ussdTx {}: {}", correlationId, e.toString());
         }
+    }
+
+    /**
+     * Claim one MS digit continue for {@code correlationId} (race-safe across rehydrate).
+     *
+     * <ul>
+     *   <li>Same {@code invokeId} already claimed → empty ({@link MsDigitClaimLoss#INVOKE})</li>
+     *   <li>Another digit still in-flight (AS not yet CONTINUE→ACTIVE) → empty
+     *       ({@link MsDigitClaimLoss#IN_FLIGHT}) — covers dual delivery with distinct invokeIds
+     *       before {@code AWAITING_AS} persists</li>
+     *   <li>Else win and mark in-flight until {@link #releaseMsDigitInFlight}</li>
+     * </ul>
+     */
+    public Optional<MsDigitClaimLoss> tryClaimMsDigitContinue(String correlationId, long invokeId) {
+        if (correlationId == null || correlationId.isBlank()) {
+            return Optional.of(MsDigitClaimLoss.IN_FLIGHT);
+        }
+        AtomicReference<MsDigitClaim> slot = msDigitClaims.computeIfAbsent(
+                correlationId, k -> new AtomicReference<>(new MsDigitClaim(Long.MIN_VALUE, false)));
+        for (;;) {
+            MsDigitClaim cur = slot.get();
+            if (cur.invokeId() == invokeId) {
+                return Optional.of(MsDigitClaimLoss.INVOKE);
+            }
+            if (cur.inFlight()) {
+                return Optional.of(MsDigitClaimLoss.IN_FLIGHT);
+            }
+            MsDigitClaim next = new MsDigitClaim(invokeId, true);
+            if (slot.compareAndSet(cur, next)) {
+                return Optional.empty();
+            }
+        }
+    }
+
+    /**
+     * Clear in-flight after AS CONTINUE→ACTIVE (menu shown; next real digit allowed).
+     * Keeps last invokeId so a late duplicate of the same component still loses.
+     */
+    public void releaseMsDigitInFlight(String correlationId) {
+        if (correlationId == null || correlationId.isBlank()) {
+            return;
+        }
+        AtomicReference<MsDigitClaim> slot = msDigitClaims.get(correlationId);
+        if (slot == null) {
+            return;
+        }
+        for (;;) {
+            MsDigitClaim cur = slot.get();
+            if (!cur.inFlight()) {
+                return;
+            }
+            if (slot.compareAndSet(cur, new MsDigitClaim(cur.invokeId(), false))) {
+                return;
+            }
+        }
+    }
+
+    /** Drop claim row on saga end / remove. */
+    public void clearMsDigitClaim(String correlationId) {
+        if (correlationId == null || correlationId.isBlank()) {
+            return;
+        }
+        msDigitClaims.remove(correlationId);
     }
 
     /**
@@ -474,13 +557,75 @@ public class VirtualSessionStore {
     }
 
     /**
+     * Atomically claim blank {@code msisdn} on the row, or fail-closed when already bound to
+     * another digits-normalized subscriber. Closes the create→write TOCTOU where two threads
+     * both saw a blank row and last-writer-won.
+     */
+    private void ensureMsisdnBound(ProfileFacility f, ProfileID id, UssdTxProfile p,
+                                    String incomingMsisdn) {
+        String corr = id.getProfileName();
+        String wantDigits = AdaptiveTimeout.normalizeMsisdn(incomingMsisdn);
+        String haveDigits = AdaptiveTimeout.normalizeMsisdn(p.getMsisdn());
+        if (haveDigits != null && !haveDigits.isEmpty()) {
+            assertSameMsisdn(corr, p.getMsisdn(), incomingMsisdn);
+            return;
+        }
+        if (wantDigits == null || wantDigits.isEmpty()) {
+            return;
+        }
+        // Prefer storing digits-only so +251… and 251… share the same bind key.
+        boolean claimed = casMsisdn(f, id, null, wantDigits) || casMsisdn(f, id, "", wantDigits);
+        if (claimed) {
+            p.setMsisdn(wantDigits);
+            return;
+        }
+        // Lost bind race — reload and require same digits MSISDN.
+        try {
+            ProfileLocalObject plo = f.getProfile(id);
+            if (plo == null) {
+                throw new IllegalStateException(
+                        "ussdTx correlationId=" + corr + " vanished during msisdn bind");
+            }
+            UssdTxProfile fresh = (UssdTxProfile) plo.getProfile();
+            assertSameMsisdn(corr, fresh.getMsisdn(), incomingMsisdn);
+            p.setMsisdn(fresh.getMsisdn());
+        } catch (RuntimeException e) {
+            if (e instanceof IllegalStateException) {
+                throw e;
+            }
+            throw new IllegalStateException(
+                    "ussdTx correlationId=" + corr + " msisdn bind race: " + e, e);
+        }
+    }
+
+    private static boolean casMsisdn(ProfileFacility f, ProfileID id, Object expect, String update) {
+        try {
+            return f.compareAndSetField(id, "msisdn", expect, update);
+        } catch (RuntimeException e) {
+            return false;
+        }
+    }
+
+    /**
      * Fail-closed when an existing {@code ussdTx} row is updated with a different subscriber.
-     * Empty/blank stored MSISDN is treated as unset (first writer wins).
+     * Comparison is <em>digits-normalized</em> ({@link AdaptiveTimeout#normalizeMsisdn}) so
+     * {@code +251911} and {@code 251911} are the same user. Empty stored MSISDN is unset
+     * (first binder wins via {@link #ensureMsisdnBound}). Blank incoming against a bound row
+     * is refused — never clear a subscriber key via overwrite.
      */
     static void assertSameMsisdn(String correlationId, String existingMsisdn, String incomingMsisdn) {
-        String have = existingMsisdn == null ? "" : existingMsisdn.trim();
-        String want = incomingMsisdn == null ? "" : incomingMsisdn.trim();
-        if (have.isEmpty() || want.isEmpty() || have.equals(want)) {
+        String have = AdaptiveTimeout.normalizeMsisdn(existingMsisdn);
+        String want = AdaptiveTimeout.normalizeMsisdn(incomingMsisdn);
+        if (have == null || have.isEmpty()) {
+            return;
+        }
+        if (want == null || want.isEmpty()) {
+            throw new IllegalStateException(
+                    "ussdTx correlationId=" + correlationId
+                            + " already bound to msisdn=" + have
+                            + "; refusing blank overwrite");
+        }
+        if (have.equals(want)) {
             return;
         }
         throw new IllegalStateException(

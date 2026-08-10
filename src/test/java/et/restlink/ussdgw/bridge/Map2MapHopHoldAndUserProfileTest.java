@@ -72,6 +72,7 @@ class Map2MapHopHoldAndUserProfileTest {
         set(bridge, "adaptive", adaptive);
         set(bridge, "config", config);
         set(bridge, "cdr", recordingCdr());
+        set(bridge, "userProfiles", userProfiles);
         bridge.bindSs7(() -> ss7);
 
         saga = new UssdSagaCoordinator();
@@ -206,6 +207,25 @@ class Map2MapHopHoldAndUserProfileTest {
         assertThat(p.getLastHopOutcome()).isEqualTo(Map2MapCdr.OUTCOME_REJECT);
         assertThat(p.getLastGateMs()).isEqualTo(3200L);
         assertThat(p.getMap2mapTxCount()).isEqualTo(1);
+    }
+
+    @Test
+    void continueWritesMenuStateToUssdUser() {
+        VirtualSession s = newSession("corr-menu", "251911230400");
+        s.setState(VirtualSessionState.AWAITING_AS);
+        s.setGeneration(2);
+        store.put(s);
+
+        bridge.onAsResponse(
+                new AsResponse("corr-menu", "r1", 2, "1. Packages 2. Balance", AsAction.CONTINUE, false),
+                40);
+
+        var p = userProfiles.get("251911230400").orElseThrow();
+        assertThat(p.getLastGeneration()).isEqualTo(2);
+        assertThat(p.getLastAsAction()).isEqualTo("CONTINUE");
+        assertThat(p.getLastMenuAsUssd()).contains("Packages");
+        assertThat(p.getLastCorrId()).isEqualTo("corr-menu");
+        assertThat(cdrStatuses).contains("CONTINUE");
     }
 
     private VirtualSession newSession(String corr, String msisdn) {

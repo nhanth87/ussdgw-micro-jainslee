@@ -64,4 +64,23 @@ public record AsResponse(
         return new AsResponse(correlationId, requestId, generation, text, action, async, alphabet,
                 sessionId, virtualBridgeId, adaptiveTimeoutMs);
     }
+
+    /**
+     * Align wire generation to the live session generation (Sip / HTTP / gRPC parity).
+     *
+     * <p>Applies to <strong>any</strong> AS wire: classic XML ({@code ClassicDialogXmlCodec}
+     * hardcodes {@code 1}) and JSON (AS may echo {@code "generation":1} or omit it → 0).
+     * After an MS digit the session is ≥2; an unstamped reply loses
+     * {@code claimForAsResponse} and is dropped as late/zombie.
+     */
+    public AsResponse stampedToSessionGeneration(int sessionGeneration) {
+        if (sessionGeneration <= 0) {
+            return this;
+        }
+        if (generation > 0 && generation == sessionGeneration) {
+            return this;
+        }
+        return new AsResponse(correlationId, requestId, sessionGeneration, text, action, async,
+                alphabet, sessionId, virtualBridgeId, adaptiveTimeoutMs);
+    }
 }

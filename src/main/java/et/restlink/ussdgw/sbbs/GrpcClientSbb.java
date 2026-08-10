@@ -3,6 +3,7 @@ package et.restlink.ussdgw.sbbs;
 import et.restlink.ussdgw.api.AsRequest;
 import et.restlink.ussdgw.api.AsResponse;
 import et.restlink.ussdgw.api.AsWireCodec;
+import et.restlink.ussdgw.bridge.VirtualSession;
 import et.restlink.ussdgw.events.PullGrpcEvent;
 import et.restlink.ussdgw.logging.SleeEventTrace;
 import et.restlink.ussdgw.service.AsPullClient;
@@ -18,6 +19,8 @@ import com.microjainslee.api.SleeEventHandler;
 import com.microjainslee.api.annotations.InjectRa;
 import com.microjainslee.ra.grpc.command.InvokeGrpc;
 import com.microjainslee.ra.grpc.events.GrpcInvokeResponseEvent;
+
+import java.util.Optional;
 
 /**
  * gRPC pull toward AS — UTF-8 JSON bytes on InvokeGrpc (greenfield contract).
@@ -141,8 +144,19 @@ public final class GrpcClientSbb implements Sbb, SleeEventHandler {
             svc().asPull().recordSuccess(target.circuitKey());
         }
         AsResponse resp = AsWireCodec.decodeResponse(done.payload(), corr);
+        int wireGen = resp.generation();
+        // Classic / JSON omit or hardcode gen=1; after MS digit session may be ≥2 (Sip parity).
+        Optional<VirtualSession> sess = svc().store().get(corr);
+        if (sess.isPresent()) {
+            resp = resp.stampedToSessionGeneration(sess.get().generation());
+        }
         svc().bridge().onAsResponse(resp, latency);
-        return "ok latencyMs=" + latency;
+        String action = resp.action() == null ? "?" : resp.action().name();
+        String asSnip = et.restlink.ussdgw.cdr.CdrUssdSnippet.of(resp.text(), 24);
+        return "ok latencyMs=" + latency
+                + " wireGen=" + wireGen + " gen=" + resp.generation()
+                + " asAction=" + action
+                + (asSnip.isEmpty() ? "" : " asUssd=" + asSnip);
     }
 
     private void invoke(RaCommandPort port, String corr, AsPullTarget.Grpc target) {

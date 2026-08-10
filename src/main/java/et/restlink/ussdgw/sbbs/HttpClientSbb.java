@@ -243,10 +243,20 @@ public final class HttpClientSbb implements Sbb, SleeEventHandler {
         svc().asPull().logHttpPullComplete(corr, url, shortCode, networkId, tenantId,
                 status, bodyLen, false, contentType, "ok");
         AsResponse resp = svc().wireFacade().decodePullResponse(body, format, corr);
+        int wireGen = resp.generation();
+        // Any wire: XML hardcodes gen=1; JSON may echo 1 / omit (0). Digit → session ≥2.
+        if (sess.isPresent()) {
+            resp = resp.stampedToSessionGeneration(sess.get().generation());
+        }
         // EWMA via bridge.onAsResponse(latency) only — avoid double-sample
         svc().bridge().onAsResponse(resp, latency);
+        String action = resp.action() == null ? "?" : resp.action().name();
+        String asSnip = et.restlink.ussdgw.cdr.CdrUssdSnippet.of(resp.text(), 24);
         return "ok latencyMs=" + latency + " wire=" + format
-                + " status=" + status + " bodyLen=" + bodyLen;
+                + " status=" + status + " bodyLen=" + bodyLen
+                + " wireGen=" + wireGen + " gen=" + resp.generation()
+                + " asAction=" + action
+                + (asSnip.isEmpty() ? "" : " asUssd=" + asSnip);
     }
 
     /** POST raw AS pull body with format Content-Type (XML or JSON). */
