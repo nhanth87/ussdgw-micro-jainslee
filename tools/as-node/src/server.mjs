@@ -29,7 +29,10 @@ import { listMenus, nextMenuResponse } from './menus.mjs';
 export async function startPullServer(opts = {}) {
   const port = Number(opts.port ?? process.env.PORT ?? 8090);
   const host = opts.host ?? process.env.HOST ?? '0.0.0.0';
-  const delayMs = Number(opts.delayMs ?? process.env.DELAY_MS ?? 0);
+  // AS_DELAY_MS aliases DELAY_MS for load-test AdaptiveTimeout EWMA warm-up.
+  const delayMs = Number(
+    opts.delayMs ?? process.env.AS_DELAY_MS ?? process.env.DELAY_MS ?? 0,
+  );
   const mode = String(opts.mode ?? process.env.MODE ?? 'sync').toLowerCase();
   const wirePref = String(opts.wire ?? process.env.WIRE ?? 'auto').toLowerCase();
   const action = String(opts.action ?? process.env.ACTION ?? 'CONTINUE').toUpperCase();

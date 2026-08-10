@@ -8,7 +8,12 @@ CFG="${CONFIG:-$ROOT/config.example.json}"
 # Override for dedicated pull-lab pair (8024→8023): LAB_XML=…/ussdgw_lab_pull_client.xml
 LAB_XML="${LAB_XML:-$ROOT/data/ussdgw_lab_client.xml}"
 CLI_JAR="$ROOT/cli/ussd-cli.jar"
+LOAD_JAR="$ROOT/cli/ussd-load.jar"
 LOAD_JSON="${LOAD_JSON:-$ROOT/ss7-ussd-client-ussdgw.json}"
+LOAD_JSON_PULL="${LOAD_JSON_PULL:-$ROOT/ss7-ussd-client-ussdgw-pull.json}"
+# Digicom L3-LAB-SIM (SCCP networkId=1, :8024→:8023, PC 2→1470, RC 101)
+LOAD_JSON_DIGICOM_LAB="${LOAD_JSON_DIGICOM_LAB:-$ROOT/ss7-ussd-client-digicom-lab.json}"
+MAP_LOAD_HOME="${MAP_LOAD_HOME:-}"
 
 JSS7_SIM_HOME="${JSS7_SIM_HOME:-}"
 candidates=(
@@ -84,10 +89,27 @@ java25() {
 }
 
 ensure_cli_jar() {
-  if [[ ! -f "$CLI_JAR" ]]; then
+  if [[ ! -f "$CLI_JAR" ]] || [[ ! -f "$LOAD_JAR" ]]; then
     chmod +x "$ROOT/cli/build.sh"
     (cd "$ROOT/cli" && ./build.sh)
   fi
+}
+
+resolve_map_load_home() {
+  local c
+  for c in \
+    "$MAP_LOAD_HOME" \
+    "$ROOT/../../../jSS7/coral-valley/jSS7/map/load" \
+    "$ROOT/../../../../jSS7/coral-valley/jSS7/map/load" \
+    "$HOME/Desktop/ethiopia-working-dir/worktrees/jSS7/coral-valley/jSS7/map/load"
+  do
+    [[ -z "$c" ]] && continue
+    if [[ -f "$c/target/map-load-9.2.8-j25.jar" ]] || [[ -f "$c/ant-classpath.txt" ]]; then
+      echo "$(readlink -f "$c")"
+      return 0
+    fi
+  done
+  return 1
 }
 
 seed_lab_xml() {
@@ -155,10 +177,8 @@ EOF
       exit 1
     fi
     seed_lab_xml "$dist"
-    # Canonical path — MainCore uses -DSIMULATOR_HOME + /data/<name>_simulator2.xml
     dist="$(readlink -f "$dist")"
     export SIMULATOR_HOME="$dist"
-    # Force JDK 25 for the sim JVM (ignore ambient JAVA_HOME if it is not 25)
     JAVA_HOME_25=""
     for cand in \
       "${HOME}/.local/share/mise/installs/java/zulu-25" \
@@ -177,7 +197,6 @@ EOF
     fi
     export JAVA_HOME="$JAVA_HOME_25"
     export JAVA="$JAVA_HOME/bin/java"
-    # MainCore reads system property SIMULATOR_HOME (not env) → $SIMULATOR_HOME/data/<name>_simulator2.xml
     export JAVA_OPTS="${JAVA_OPTS:-} -DSIMULATOR_HOME=$dist -Dussd.sim.autoResponseSequence=$DIGITS -Dussd.sim.autoResponseDelayMs=$DELAY -Dussd.sim.msisdnList=$MSISDNS"
     echo "Starting sim core name=$SIM_NAME rmi=$RMI_PORT home=$dist JAVA_HOME=$JAVA_HOME"
     echo "Config XML: $dist/data/${SIM_NAME}_simulator2.xml"
@@ -185,59 +204,123 @@ EOF
     cd "$dist"
     exec bash bin/run.sh core -n "$SIM_NAME" -r "$RMI_PORT"
     ;;
+  load)
+    # Brook Digicom / lab load: TPS = MSISDN sessions/s (MO starts), not TCAP message count.
+    # Digicom locked scenario: --scenario brook  (*804# digit 1, smoke tps=1) — see BROOK-SCENARIO.md
+    # Default engine=mapload for --tps>2 (see SPIKE-JMX-CONCURRENCY.md).
+    shift || true
+    ensure_cli_jar
+    MAP_HOME=""
+    MAP_HOME="$(resolve_map_load_home)" || true
+    MAP_JAR=""
+    MAP_CP=""
+    if [[ -n "$MAP_HOME" ]]; then
+      MAP_JAR="$MAP_HOME/target/map-load-9.2.8-j25.jar"
+      MAP_CP="$MAP_HOME/ant-classpath.txt"
+    fi
+    EXTRA=()
+    if [[ -f "$MAP_JAR" ]]; then
+      EXTRA+=(--map-jar "$MAP_JAR")
+    fi
+    if [[ -f "$MAP_CP" ]]; then
+      EXTRA+=(--map-cp "$MAP_CP")
+    fi
+    HAS_JSON=0
+    HAS_SCENARIO=0
+    for a in "$@"; do
+      [[ "$a" == "--map-json" ]] && HAS_JSON=1
+      [[ "$a" == "--scenario" ]] && HAS_SCENARIO=1
+    done
+    if [[ "$HAS_JSON" -eq 0 ]]; then
+      if [[ "$HAS_SCENARIO" -eq 1 ]] && [[ -f "$LOAD_JSON_DIGICOM_LAB" ]]; then
+        # Digicom Brook / --scenario * → L3-LAB nwid=1 JSON (driver also sets this)
+        EXTRA+=(--map-json "$LOAD_JSON_DIGICOM_LAB")
+      else
+        EXTRA+=(--map-json "$LOAD_JSON_PULL")
+      fi
+    fi
+    # Pass JDK 25 java path into child ProcessBuilder
+    JBIN="$JAVA_HOME/bin/java"
+    for cand in \
+      "${HOME}/.local/share/mise/installs/java/zulu-25/bin/java" \
+      "${HOME}/.local/share/mise/installs/java/25/bin/java"
+    do
+      [[ -x "$cand" ]] && JBIN="$cand" && break
+    done
+    java25 -jar "$LOAD_JAR" --java "$JBIN" "${EXTRA[@]}" "$@"
+    ;;
+  load-jmx)
+    # Digicom Brook smoke: $0 load-jmx --scenario brook  (wait green light; AS=real BPLUS)
+    shift || true
+    ensure_cli_jar
+    java25 -jar "$LOAD_JAR" --engine jmx "$@"
+    ;;
   load-env)
     cat <<EOF
-# MAP load Client against ussdgw lab (rebuild map/load after Client.java shortCode patch):
-# Config: $LOAD_JSON
-mise exec zulu-25 -- java \\
-  -Dss7.load.shortCode='*100#' \\
-  -Dss7.load.digits=1,2,3,4 \\
-  -Dss7.load.msisdn=251911000001 \\
-  -Dss7.load.origPc=2 -Dss7.load.destPc=1 -Dss7.load.ussdSsn=8 \\
-  -Dss7.load.ndialogs=100 -Dss7.load.rateLimit=10 \\
-  -cp '<map-load-classpath>' \\
-  org.restcomm.protocols.ss7.map.load.ussd.Client \\
-  $LOAD_JSON
+# MAP load Client against ussdgw pull-lab (8024→8023).
+# TPS = MSISDN sessions/s (MO starts), NOT TCAP messages.
+# Digicom Brook (real BPLUS, wait green light — never as-node; ss7-sim nwid=1):
+#   $0 load --scenario brook
+#   $0 load-jmx --scenario brook
+# Digicom map JSON: $LOAD_JSON_DIGICOM_LAB  (networkId=1, :8024→:8023, destPc=1470, RC=101)
+# Lab as-node ramp only (not Digicom): $0 load --tps 100 --duration 60 --short-code '*804#' --digits 1
+# Oracle: $ROOT/BROOK-SCENARIO.md
 
-# Or via ant (from jSS7 map/load) after aligning ports in ss7-ussd-client.json / this JSON.
-# Interactive dial/DT: prefer '$0 cli' (JMX), not load Client.
+MAP_HOME=\$(…/jSS7/…/map/load)
+# Digicom L3-LAB example (after green light):
+mise exec zulu-25 -- java \\
+  -Dss7.load.shortCode='*804#' \\
+  -Dss7.load.digits=1 \\
+  -Dss7.load.msisdn= \\
+  -Dss7.load.msisdnPrefix=25191 \\
+  -Dss7.load.origPc=2 -Dss7.load.destPc=1470 -Dss7.load.ussdSsn=8 \\
+  -Dss7.load.ndialogs=30 -Dss7.load.rateLimit=1 \\
+  -cp "\$MAP_HOME/target/map-load-9.2.8-j25.jar:\$(cat \$MAP_HOME/ant-classpath.txt)" \\
+  org.restcomm.protocols.ss7.map.load.ussd.Client \\
+  $LOAD_JSON_DIGICOM_LAB
 EOF
     ;;
   help|*)
     cat <<EOF
-Usage: $0 <http|cli|sim|build-cli|print-env|load-env|xml|path|help>
+Usage: $0 <http|cli|sim|build-cli|load|load-jmx|print-env|load-env|xml|path|help>
 
   cli [args…]  Interactive / one-shot USSD CLI (Java 25 → JMX → jSS7 sim)
   sim|core     Start jSS7 USSD_TEST_CLIENT core + RMI :$RMI_PORT (seeds lab XML)
-  build-cli    Compile tools/ss7-simulator/cli → ussd-cli.jar
+  build-cli    Compile tools/ss7-simulator/cli → ussd-cli.jar + ussd-load.jar
+  load […]     Brook load driver — TPS = MSISDN sessions/s (map/load default)
+                 Digicom: --scenario brook  (*804# digit 1; ss7-sim nwid=1; smoke tps=1)
+  load-jmx […] Sequential JMX smoke (1 concurrent dialog)
+                 Digicom: --scenario brook  (wait green light; AS=real BPLUS, never as-node)
   http         Multi-user digit loop against as-node HTTP pull (no MAP)
   print-env    Print env / -D flags for jSS7 auto-digit + multi-MSISDN
-  load-env     Print map/load Client -D example for ussdgw lab
+  load-env     Print raw map/load Client -D example
   xml          Print path to lab USSD_TEST_CLIENT XML
   path         Resolve jSS7 tools/simulator directory
 
 Lab XML: $LAB_XML
 Config:  $CFG
 CLI jar: $CLI_JAR
-Load JSON: $LOAD_JSON
+Load jar: $LOAD_JAR
+Load JSON (default pair): $LOAD_JSON
+Load JSON (pull-lab nwid=0): $LOAD_JSON_PULL
+Load JSON (Digicom L3-LAB nwid=1): $LOAD_JSON_DIGICOM_LAB
+Brook Digicom:            $ROOT/BROOK-SCENARIO.md  (+ config-brook.json)
 
-Classic PULL on default pair (:8013↔:8014):
+Digicom Brook (real BPLUS — wait green light; ss7-sim networkId=1; live *804 stays nwid=0):
+  $0 load --scenario brook
+  $0 load-jmx --scenario brook
+
+Lab PULL with as-node (:8013↔:8014) — not Digicom:
   1. ./dist/run.sh                          # ussdgw SS7 :8013
-  2. cd tools/as-node && npm run pull:fast
-  3. $0 sim                                 # jSS7 core + RMI :$RMI_PORT
-  4. $0 cli                                 # REPL → dial *100#
+  2. cd tools/as-node && npm run pull:brook804
+  3. $0 sim                                 # jSS7 core + RMI :$RMI_PORT (JMX only)
+  4. $0 load --tps 100 --duration 60 --short-code '*804#' --digits 1
 
 Dedicated PULL pair (:8023↔:8024) — prefer:
   ./tools/ss7-simulator/pull-lab.sh help
 
-One-shot:
-  $0 cli dial '*100#' --msisdn 251911000001 --dt 1,2,3
-  $0 cli dial '*100*1234567890#' --manual
-
-Short vs long / Mark routing:
-  Exact short code *100#  → non-mark rule
-  Mark prefix *100*       → *100*1234567890# (longest mark prefix)
-  Long mark-style keys    → e.g. *5198…# as configured in /admin/routing
+TPS definition: 100 TPS = 100 unique MSISDN MO sessions/second (not 100 TCAP msgs).
+JMX concurrency ceiling = 1 dialog — see SPIKE-JMX-CONCURRENCY.md
 EOF
     ;;
 esac
