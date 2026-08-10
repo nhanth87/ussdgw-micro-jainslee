@@ -57,6 +57,7 @@ digicom = main + Digicom seeds  ──push──►  digicom-et/main  (PRIVATE)
 ## Do-not-miss checklist
 
 - **Java 25 only** — mise `zulu-25`; never downgrade. False alarms: `bcprov-jdk18on` ≠ Java 8; APT `RELEASE_8` is upstream metadata. → OTA [packaging](../../ota-service/ota-sim-push/docs/agents/packaging.md)
+- **Session/identity SIẾT (shared)** — in-flight corr ≠ `ussdUser` MSISDN; rehydrate claim maps; wire gen stamp; 10k honesty; Digicom PG bake — portable law in skill `digicom-et-host` § Session / identity SIẾT; USSD multimenu/`ussdTx` detail → [lessons](docs/agents/lessons.md).
 - **No Joda Time (SIẾT)** — host USSDGW code uses **`java.time` only** (`Instant`, `OffsetDateTime`, `DateTimeFormatter`, …). Never import/add `org.joda.time.*` / `joda-time` in new or changed app code (CDR spine timestamps included). Transitive joda on the classpath from legacy deps ≠ license to call it. → [lessons](docs/agents/lessons.md)
 - **Ship only `dist/`** — after `./build/package-dist.sh`, copy **`dist/` alone** → `dist/run.sh`. Do **not** scp the worktree, `build/`, `src/`, or repo-root `app/`. UI = `app/html/` files — **never WAR / uber-jar**. → [skills § Dist](docs/agents/skills.md)
 - **Never sandbox `package-dist` / `mvn package|test` / prove-as-wire-lab** — request Shell **`required_permissions: ["all"]`** on the **first** call (`.m2-agent-repo` / Digicom ship); do not fail-then-retry. → [lessons](docs/agents/lessons.md)
