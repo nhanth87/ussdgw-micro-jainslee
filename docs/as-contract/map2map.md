@@ -234,7 +234,7 @@ Operator note: gsm_map filter may hide TC-Abort; packet order that looks like
 `returnResultLast` without hop Response is often MO hard-fail after hop Abort + AS empty —
 still two TCAP dialogs; enforce hop-terminal before MO end.
 
-## Per-MSISDN `ussdUser` profile (durable last MAP2MAP TX)
+## Per-MSISDN `ussdUser` profile (last MAP2MAP TX + multimenu snapshot)
 
 | Field | Meaning |
 |-------|---------|
@@ -243,12 +243,14 @@ still two TCAP dialogs; enforce hop-terminal before MO end.
 | `lastHopDestGt` / `lastHopDestSsn` | Last hop CalledParty |
 | `lastHopOutcome` | `pending` \| `text` \| `reject` \| `abort` \| `empty` \| … |
 | `lastGateMs` / `lastEwmaMs` | Last AdaptiveTimeout budget + observed EWMA |
+| `lastGeneration` / `lastDigit` / `lastMenuAsUssd` (≤50) / `lastAsAction` / `lastDialogId` | Last multimenu stamp |
 | `map2mapTxCount` | Count of terminal hop outcomes (not `pending`) |
 | `lastUpdatedAtMs` | Wall clock of last stamp |
 
-Written at hop-arm (`pending`) and hop-complete (terminal outcome). **Not** Digicom JDBC —
-ProfileFacility in-process (same family as `ussdTx`). **JVM-local until clustering** — does not
-survive process restart or cross-node (see [lessons.md](../agents/lessons.md) · Digicom redeploy).
+**Writes:** hop-arm/complete (`recordMap2Map`); MS digit after dup-skip (`recordMenuState` pending);
+AS→UE CONTINUE/END (`recordMenuState`). **MO:** seed AdaptiveTimeout from `lastEwmaMs` only —
+**never** reuse `lastCorrId` as AS/BPLUS session. In-flight CAS stays on **`ussdTx`** (corr).
+**Not** Digicom JDBC — ProfileFacility JVM-local until clustering.
 
 ## Telemetry / CDR
 
