@@ -51,6 +51,7 @@ digicom = main + Digicom seeds  ──push──►  digicom-et/main  (PRIVATE)
 | Ethiopia MO pull `*101…` | [`ss7-lab-pair.md` § Ethiopia MO pull](docs/agents/ss7-lab-pair.md) — mark `*101` → as-node `:8090/ussd/pull`; MAP `processUnstructuredSS-Request` → AS XML gen0 |
 | Multimenu digit / gen stamp | § Multimenu below · [lessons.md](docs/agents/lessons.md) — gen stamp + `dup-skip-continue` / invoke claim + wire BEGIN gen0; CDR `MS_DIGIT`/`CONTINUE`/`AS_DROP` + `CdrMenuTape` |
 | Parity vs classic | [`docs/parity-matrix.md`](docs/parity-matrix.md) |
+| CMP / Profile inventory | [`docs/agents/cmp-inventory.md`](docs/agents/cmp-inventory.md) — `ussdTx`/`ussdUser` fields, classic CMP → micro, gap register |
 | AS contract / 3GPP USSD | [`docs/as-contract/`](docs/as-contract/) · [`ussd-3gpp-notes.md`](docs/as-contract/ussd-3gpp-notes.md) |
 | MAP2MAP Case 2 call flow | [`docs/as-contract/map2map.md`](docs/as-contract/map2map.md) § Call flow (locked) |
 

@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
-# Build ussd-cli.jar (Java 25, JDK only — no Maven deps).
+# Build ussd-cli.jar + ussd-load.jar (Java 25, JDK only — no Maven deps).
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")" && pwd)"
 SRC="$ROOT/src"
 OUT="$ROOT/out"
-JAR="$ROOT/ussd-cli.jar"
+CLI_JAR="$ROOT/ussd-cli.jar"
+LOAD_JAR="$ROOT/ussd-load.jar"
 
 resolve_java25() {
   if [[ -n "${JAVA_HOME:-}" && -x "${JAVA_HOME}/bin/javac" ]]; then
@@ -40,12 +41,18 @@ mkdir -p "$OUT"
 # shellcheck disable=SC2046
 "$JAVAC" --release 25 -encoding UTF-8 -d "$OUT" $(find "$SRC" -name '*.java' | sort)
 
-MANIFEST="$OUT/MANIFEST.MF"
-cat >"$MANIFEST" <<EOF
+write_jar() {
+  local main="$1"
+  local jar="$2"
+  local mf="$OUT/MANIFEST-$main.MF"
+  cat >"$mf" <<EOF
 Manifest-Version: 1.0
-Main-Class: et.digicom.ussdsim.UssdCli
+Main-Class: $main
 
 EOF
+  "$JAR_BIN" cfm "$jar" "$mf" -C "$OUT" .
+  echo "Built $jar (Main-Class=$main JAVA_HOME=$JAVA_HOME)"
+}
 
-"$JAR_BIN" cfm "$JAR" "$MANIFEST" -C "$OUT" .
-echo "Built $JAR (JAVA_HOME=$JAVA_HOME)"
+write_jar et.digicom.ussdsim.UssdCli "$CLI_JAR"
+write_jar et.digicom.ussdsim.UssdLoadDriver "$LOAD_JAR"
