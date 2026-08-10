@@ -7,8 +7,11 @@
  *   MENU_PICK=rotate — atomic counter
  *   MENU_PICK=main|lang|promo|help — force one catalog entry
  *   MENU_PICK=multimenu — scripted prove path: abc → digit 2 → 2-dce → (xyz) END
+ *   MENU_PICK=brook804 — Brook-like *804# : Amharic root → digit 1 submenu CONTINUE → 0 END
  *
  * Labels are intentional so GW / as-node logs show which menu/branch fired.
+ *
+ * Optional AS delay: DELAY_MS or AS_DELAY_MS (alias) — sleep before SYNC body so AdaptiveTimeout EWMA moves.
  */
 
 const CATALOG = [
@@ -63,6 +66,16 @@ export const MULTIMENU = {
   menu1: 'abc',
   menu2: '2-dce',
   end: '(xyz)',
+};
+
+/**
+ * Brook *804#-shaped lab menus (classic XmlMAPDialog CONTINUE).
+ * Root mimics Amharic BPLUS; digit 1 → English submenu (locale switch is AS-side in lab).
+ */
+export const BROOK804 = {
+  root: 'ባላንስ ፕላስ\n1. ቀሪ ሂሳብ\n2. ጥቅሎች\n0. ውጣ',
+  submenu: 'Balance Plus\n1. Balance\n2. Packages\n0. Exit',
+  end: '[brook804] Goodbye.',
 };
 
 export function listMenus() {
@@ -122,10 +135,87 @@ function normalizeDigit(ussd) {
   const raw = String(ussd ?? '').trim();
   if (!raw) return '';
   // Handset often sends a single digit; tolerate "*1#" / "1#" lab shapes.
-  const m = raw.match(/([0-4])\s*$/);
+  const m = raw.match(/([0-9])\s*$/);
   if (m) return m[1];
-  if (/^[0-4]$/.test(raw)) return raw;
+  if (/^[0-9]$/.test(raw)) return raw;
   return raw;
+}
+
+/**
+ * Brook *804 path: root CONTINUE → digit 1 submenu CONTINUE → digit 0 END.
+ * Keyed by correlationId (same as multimenu).
+ */
+function nextBrook804Response(parsed, key, digit, isInitial) {
+  let state = sessions.get(key);
+  if (!state || isInitial) {
+    state = { menuId: 'brook804', screen: 'brook_root' };
+    sessions.set(key, state);
+    return {
+      text: BROOK804.root,
+      action: 'CONTINUE',
+      menuId: 'brook804',
+      screen: 'brook_root',
+      sessionKey: key,
+    };
+  }
+  if (state.screen === 'brook_root') {
+    if (digit === '1') {
+      state.screen = 'brook_sub';
+      sessions.set(key, state);
+      return {
+        text: BROOK804.submenu,
+        action: 'CONTINUE',
+        menuId: 'brook804',
+        screen: 'brook_sub',
+        sessionKey: key,
+      };
+    }
+    if (digit === '0') {
+      sessions.delete(key);
+      return {
+        text: BROOK804.end,
+        action: 'END',
+        menuId: 'brook804',
+        screen: 'end',
+        sessionKey: key,
+      };
+    }
+    return {
+      text: `[brook804] pick 1 or 0\n${BROOK804.root}`,
+      action: 'CONTINUE',
+      menuId: 'brook804',
+      screen: 'brook_root',
+      sessionKey: key,
+    };
+  }
+  if (state.screen === 'brook_sub') {
+    if (digit === '0') {
+      sessions.delete(key);
+      return {
+        text: BROOK804.end,
+        action: 'END',
+        menuId: 'brook804',
+        screen: 'end',
+        sessionKey: key,
+      };
+    }
+    // Any other digit: stay on submenu (CONTINUE) so load digit=1 then idle is OK.
+    return {
+      text: BROOK804.submenu,
+      action: 'CONTINUE',
+      menuId: 'brook804',
+      screen: 'brook_sub',
+      sessionKey: key,
+    };
+  }
+  sessions.delete(key);
+  return {
+    text: BROOK804.end,
+    action: 'END',
+    menuId: 'brook804',
+    screen: 'end',
+    sessionKey: key,
+  };
 }
 
 /**
@@ -189,8 +279,12 @@ export function nextMenuResponse(parsed, opts = {}) {
     (String(parsed.ussdString || '').includes('*') &&
       String(parsed.ussdString || '').includes('#'));
 
-  if (String(pickMode).toLowerCase() === 'multimenu') {
+  const mode = String(pickMode).toLowerCase();
+  if (mode === 'multimenu') {
     return nextMultimenuResponse(parsed, key, digit, isInitial);
+  }
+  if (mode === 'brook804' || mode === 'brook' || mode === '*804#') {
+    return nextBrook804Response(parsed, key, digit, isInitial);
   }
 
   let state = sessions.get(key);

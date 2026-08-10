@@ -129,33 +129,73 @@ Lab XML (Jackson `ConfigurationData` format) is copied to
 `$SIMULATOR_HOME/data/main_simulator2.xml` via `-DSIMULATOR_HOME=…`
 (`FORCE_LAB_XML=1` to overwrite). Old attribute-style XML will not load — L1 stays NO.
 
-## Load test (`map/load` Client)
+## Load test (Brook — **TPS = MSISDN sessions/s**)
 
-Hardcoded `*125*…` USSD string is replaced by system properties (coral-valley `Client.java`):
+**Definition:** `--tps N` means **N unique MSISDN MO starts per second**, not N TCAP
+messages. Each session = `processUnstructuredSS-Request` (`*804#`) + digit CONTINUE traffic;
+digits do **not** inflate TPS.
 
-| Property | Default | Role |
-|----------|---------|------|
-| `ss7.load.shortCode` | `*125*+3162%06d#` | USSD string; `%` → `String.format` with random |
-| `ss7.load.digits` | `1` | DT sequence on UnstructuredSS-Request |
-| `ss7.load.msisdn` | _(empty → random)_ | Fixed MSISDN |
-| `ss7.load.origPc` / `destPc` / `ussdSsn` | `1` / `2` / `147` | MAP address PC/SSN — use `2`/`1`/`8` for ussdgw |
+### Digicom Brook (locked) — real BPLUS
+
+Oracle: **[`BROOK-SCENARIO.md`](BROOK-SCENARIO.md)** (+ [`config-brook.json`](config-brook.json)).
+
+| Rule | Detail |
+|------|--------|
+| Short code / digit | `*804#` + digit **`1`** (Balance path after MAP2MAP hop) |
+| **ss7-sim SCCP** | **`networkId = 1`** (L3-LAB-SIM / AS-LAB) — **not** live BP 0 |
+| Live handset `*804` | stays **`networkId = 0`** — do **not** flip Digicom routing DB |
+| SCTP / PC | sim **`:8024`** → Digicom **`:8023`**; sim **PC=2**, GW **PC=1470**; M3UA **RC=101** |
+| map JSON | [`ss7-ussd-client-digicom-lab.json`](ss7-ussd-client-digicom-lab.json) (selected by `--scenario brook`) |
+| MAP2MAP hop | `ussd.map.live-network-id` default **0** (live GTT) even when MO dialog is nwid=1 |
+| AS | **Real BPLUS** via Digicom routing `as_url` — **never as-node** |
+| Smoke | `--scenario brook` → tps=1, duration=30, destPc=1470 |
+| Gate | **Wait operator green light** before any Digicom run |
+| Rate | **Never 100 TPS on Digicom** without explicit approval |
 
 ```bash
-# Rebuild map/load after pulling Client.java patch
-cd worktrees/jSS7/coral-valley/jSS7/map/load && mvn -q -DskipTests package
-
-./tools/ss7-simulator/run.sh load-env   # prints full java example
-
-mise exec zulu-25 -- java \
-  -Dss7.load.shortCode='*100#' \
-  -Dss7.load.digits=1,2,3,4 \
-  -Dss7.load.msisdn=251911000001 \
-  -Dss7.load.origPc=2 -Dss7.load.destPc=1 -Dss7.load.ussdSsn=8 \
-  -Dss7.load.ndialogs=100 -Dss7.load.rateLimit=10 \
-  -cp '…map-load classpath…' \
-  org.restcomm.protocols.ss7.map.load.ussd.Client \
-  tools/ss7-simulator/ss7-ussd-client-ussdgw.json
+# After green light — Digicom host (AS=BPLUS, not as-node; simulator nwid=1):
+./tools/ss7-simulator/run.sh load --scenario brook
+./tools/ss7-simulator/run.sh load-jmx --scenario brook
+# or:
+java -jar tools/ss7-simulator/cli/ussd-load.jar --scenario brook --tps 1 --duration 30
 ```
+
+Laptop pull-lab JSON (`ss7-ussd-client-ussdgw-pull.json`, **nwid=0** / destPc=1) is for local as-node only — never Digicom Brook.
+### Lab ramp (as-node only — not Digicom)
+
+JMX CLI is **1 concurrent dialog** — see [`SPIKE-JMX-CONCURRENCY.md`](SPIKE-JMX-CONCURRENCY.md).
+For ≥~3 TPS use **map/load** via `run.sh load` (default engine when `--tps > 2`).
+
+| Property / flag | Role |
+|-----------------|------|
+| `--scenario brook` | Digicom lock: `*804#` + digit 1 + smoke tps=1 / duration=30 + **nwid=1** digicom-lab JSON |
+| `--tps` / `ss7.load.rateLimit` | MO / MSISDN sessions per second |
+| `--duration` / `ndialogs≈tps×duration` | Run length |
+| `--short-code '*804#'` | Brook short code |
+| `--digits 1` | DT after root CONTINUE |
+| `--msisdn-random` / `ss7.load.msisdnPrefix=25191` | Unique `25191`+7 digits per MO |
+| as-node `npm run pull:brook804` | **Lab only** Amharic root → digit 1 (`MENU_PICK=brook804`) |
+| `AS_DELAY_MS` / `pull:brook804:ewma` | Artificial AS delay for AdaptiveTimeout EWMA |
+
+```bash
+# Lab stack (pull-lab :8023↔:8024) — as-node, NOT Digicom/BPLUS
+./tools/ss7-simulator/pull-lab.sh apply-ss7 && ./dist/run.sh
+cd tools/as-node && npm run pull:brook804          # optional: npm run pull:brook804:ewma
+./tools/ss7-simulator/pull-lab.sh reseed-brook     # *804# → :8090/ussd/pull  networkId=0
+# map/load does NOT need jSS7 USSD_TEST_CLIENT RMI — own SCTP client on :8024
+./tools/ss7-simulator/run.sh load --tps 100 --duration 60 --short-code '*804#' --digits 1
+
+# Functional smoke (1 MSISDN session at a time via JMX — start sim first)
+./tools/ss7-simulator/pull-lab.sh sim
+./tools/ss7-simulator/run.sh load-jmx --tps 1 --duration 30 --short-code '*804#' --digits 1
+```
+
+Pass bar (lab): `ss7.live=true`, error rate &lt;1%, achieved MSISDN/s ≈ target, EWMA seeded when
+`AS_DELAY_MS>0`. **Never Digicom/BPLUS at 100 TPS without approval.** Results:
+[`RAMP-RESULTS.md`](RAMP-RESULTS.md) · Digicom oracle: [`BROOK-SCENARIO.md`](BROOK-SCENARIO.md).
+
+Coral-valley `Client.java` also accepts `ss7.load.msisdnPrefix` (hot-patch jar if Maven
+`map/load` rebuild fails on unrelated map-impl tests).
 
 Interactive single dialogs → **CLI**, not load Client.
 

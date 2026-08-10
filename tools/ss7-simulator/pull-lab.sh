@@ -51,6 +51,13 @@ case "$cmd" in
     fi
     ;;
 
+  reseed-brook)
+    # Same SQL as reseed-pull (*804# included) — alias for Brook load docs.
+    "$0" reseed-pull
+    echo "Brook lab: ensure as-node MENU_PICK=brook804 (npm run pull:brook804)"
+    echo "  short-code *804# → http://127.0.0.1:8090/ussd/pull  networkId=0  SSN 8+147+6"
+    ;;
+
   sim)
     LAB_XML="$ROOT/data/ussdgw_lab_pull_client.xml" \
       CONFIG="$CFG_PULL" \
@@ -71,23 +78,22 @@ case "$cmd" in
 
   help|*)
     cat <<EOF
-Usage: $0 <apply-ss7|reseed-pull|sim|cli|dial-pull|help>
+Usage: $0 <apply-ss7|reseed-pull|reseed-brook|sim|cli|dial-pull|help>
 
 Dedicated pull lab SCTP/SCCP (does not use :8013/:8014):
   GW  SCTP server 127.0.0.1:8023  PC=1  services SSN 8+147+6
   sim SCTP client 127.0.0.1:8024  PC=2  SSN 8 → remote GW SSN 8
+  networkId=0 on short-code rows (match lab SCCP)
 
 Functional USSD pull (classic ussdgateway MO → AS):
   1. ./build/package-dist.sh && $0 apply-ss7
   2. $DIST/run.sh                         # listen :8023
-  3. cd tools/as-node && npm run pull:fast # :8090/ussd/pull
-  4. $0 reseed-pull                       # *100# *123# *101 → as-node
-  5. $0 sim                               # jSS7 USSD_TEST_CLIENT + RMI
-  6. $0 cli                               # or: $0 dial-pull '*100#'
-       ussd> connect
-       ussd> dial *100#
-       ussd> dt 1
-       ussd> dial *101123456#
+  3. cd tools/as-node && npm run pull:brook804   # or pull:fast
+  4. $0 reseed-brook                      # *100# *123# *101 *804# → as-node
+  5. $0 sim                               # jSS7 USSD_TEST_CLIENT + RMI (JMX smoke)
+  6. Load 100 MSISDN/s (not TCAP msg/s):
+       ./tools/ss7-simulator/run.sh load --tps 100 --duration 60 --short-code '*804#' --digits 1
+  7. Or JMX one-shot: $0 cli dial '*804#' --msisdn 251911000001 --dt 1
 
 Files:
   $SS7_PULL

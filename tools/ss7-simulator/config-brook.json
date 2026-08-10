@@ -1,0 +1,28 @@
+{
+  "scenario": "brook",
+  "note": "Locked Digicom Brook prove: *804# MAP2MAP→BPLUS multimenu. ss7-sim SCCP networkId=1 (L3-LAB :8023/:8024, PC 2→1470). Live handset *804 stays nwid=0. AS=real BPLUS. Wait green light. Do not flip Digicom routing DB.",
+  "shortCode": "*804#",
+  "digits": "1",
+  "digitDelayMs": 500,
+  "msisdnPrefix": "25191",
+  "tps": 1,
+  "durationSec": 30,
+  "networkId": 1,
+  "mapJson": "ss7-ussd-client-digicom-lab.json",
+  "sctp": {
+    "simLocal": "127.0.0.1:8024",
+    "gwPeer": "127.0.0.1:8023",
+    "simPc": 2,
+    "gwPc": 1470,
+    "m3uaRoutingContext": 101
+  },
+  "liveHandsetNetworkId": 0,
+  "map2mapLiveNetworkId": 0,
+  "as": "BPLUS (Digicom routing as_url — not as-node)",
+  "map2map": true,
+  "jmx": {
+    "url": "service:jmx:rmi:///jndi/rmi://127.0.0.1:9999/server",
+    "hostObjectName": "SS7_Simulator_main:type=TesterHost",
+    "ussdClientObjectName": "SS7_Simulator_main:type=TestUssdClientMan"
+  }
+}

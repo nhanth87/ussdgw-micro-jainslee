@@ -16,6 +16,8 @@
     "pull:map2map:bridge": "MAP2MAP=true ASSERT_ENRICH=true ECHO_HOP=true GATED_ACK=true DELAY_MS=8000 MODE=sync INTERACTIVE=false ACTION=CONTINUE MENU_TEXT='Late MAP2MAP lab' node src/index.mjs pull",
     "pull:multimenu": "DELAY_MS=0 MODE=sync INTERACTIVE=true MENU_PICK=multimenu GATED_ACK=true node src/index.mjs pull",
     "pull:multimenu:map2map": "MAP2MAP=true ASSERT_ENRICH=true ECHO_HOP=false DELAY_MS=0 MODE=sync INTERACTIVE=true MENU_PICK=multimenu GATED_ACK=true node src/index.mjs pull",
+    "pull:brook804": "MODE=sync INTERACTIVE=true MENU_PICK=brook804 GATED_ACK=true WIRE=xml node src/index.mjs pull",
+    "pull:brook804:ewma": "AS_DELAY_MS=50 DELAY_MS=50 MODE=sync INTERACTIVE=true MENU_PICK=brook804 GATED_ACK=true WIRE=xml node src/index.mjs pull",
     "push:ni": "INTERACTIVE=true node src/index.mjs ni",
     "push:ni:static": "INTERACTIVE=false node src/index.mjs ni"
   },
