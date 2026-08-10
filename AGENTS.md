@@ -49,6 +49,7 @@ digicom = main + Digicom seeds  ──push──►  digicom-et/main  (PRIVATE)
 | SS7 lab + HLR face | [`ss7-lab-pair.md`](docs/agents/ss7-lab-pair.md) · admin `/admin/hlr` |
 | Operator Digicom / live carrier | [`ss7-lab-pair.md` § Operator Digicom](docs/agents/ss7-lab-pair.md) — dual push [`push-dual.sh`](build/push-dual.sh); public = `ss7-lab.json`; Digicom overlay on digicom-et `main` |
 | Ethiopia MO pull `*101…` | [`ss7-lab-pair.md` § Ethiopia MO pull](docs/agents/ss7-lab-pair.md) — mark `*101` → as-node `:8090/ussd/pull`; MAP `processUnstructuredSS-Request` → AS XML gen0 |
+| Multimenu digit / gen stamp | § Multimenu below · [lessons.md](docs/agents/lessons.md) — gen stamp + `dup-skip-continue` / invoke claim + wire BEGIN gen0; CDR `MS_DIGIT`/`CONTINUE`/`AS_DROP` + `CdrMenuTape` |
 | Parity vs classic | [`docs/parity-matrix.md`](docs/parity-matrix.md) |
 | AS contract / 3GPP USSD | [`docs/as-contract/`](docs/as-contract/) · [`ussd-3gpp-notes.md`](docs/as-contract/ussd-3gpp-notes.md) |
 | MAP2MAP Case 2 call flow | [`docs/as-contract/map2map.md`](docs/as-contract/map2map.md) § Call flow (locked) |
@@ -74,7 +75,8 @@ digicom = main + Digicom seeds  ──push──►  digicom-et/main  (PRIVATE)
 - **SBB handlers** — catch **`Throwable`** in every `onEvent`; end/cancel MAP dialogs; `IN SBB=` count must match `OUT SBB=`.
 - **Bridge idempotency** — a MAP reply / NI push may only follow a **won CAS**, never a read-only state check: `claimForAsResponse` (`AWAITING_AS|S1_RELEASED → RESPONDING`) and `onGateExpired` (returns `false` when it loses). Never `get()`+full `put()` after a CAS — it reverts concurrent single-field writes. Gate tick = `ConcurrentExecution.SKIP` + per-session `catch (Throwable)` + O(due) deadline index; one bad session must never starve every parked dialog. → [skills.md](docs/agents/skills.md)
 - **Bridge + AdaptiveTimeout auto-run** — no admin Start. Boot arms `BridgeGateScheduler` (`@Scheduled` gate tick) + `ClassicNiHttpPark` + `AdaptiveTimeout`. `ussd.bridge.enabled` default **true** (arm vs hard-fail only). Prove: `scheduler.gateTicks` in `/admin/status.json` climbing; boot log `BridgeGateScheduler first gate tick`. → [lessons](docs/agents/lessons.md)
-- **HTTP/gRPC** — RA **callbacks** only — never 50ms timer poll. Pull body = raw wire (XML default or JSON per tenant) — **not** `CallbackRequest` envelope. Classic **NI sync** on `ussd.http.ni-path` (default `/ussd`) with **JSESSIONID**; park HTTP via async + **`AdaptiveTimeout`** — never `Thread.sleep`.
+- **HTTP/gRPC** — RA **callbacks** only — never 50ms timer poll. Pull body = raw wire (XML default or JSON per tenant) — **not** `CallbackRequest` envelope. Classic **NI sync** on `ussd.http.ni-path` (default `/ussd`) with **JSESSIONID**; park HTTP via async + **`AdaptiveTimeout`** — never `Thread.sleep`. After decode (XML **or** JSON), stamp AS response gen to `session.generation()` before `bridge.onAsResponse` (classic XML hardcodes `1`; JSON may echo/missing) — else digit menus → `Drop late/zombie … gen=1`. → § Multimenu digit gen below
+- **Multimenu digit continue (SIẾT)** — `generation` bumps **only** on MS digit; AS CONTINUE must **not** bump. Stamp pull response gen (any wire) before CAS. Dual jSS7 Response → `tryClaimMsContinueInvoke(invokeId)` + `AWAITING_AS|RESPONDING` → `dup-skip-continue` (no dual AS / Amharic→English). First AS after hop/MO = **wire gen 0** BEGIN. CDR: `MS_DIGIT` + `CONTINUE gen=` + Multimenu tape; fail = `AS_DROP`. Keep AdaptiveTimeout + CAS. → § Multimenu below · [lessons](docs/agents/lessons.md)
 - **HLR face** — inbound SRI-SM: `ussd.hlr.mode` default **PROXY_MAP fail-closed**; no silent FAKE; outbound SRI CalledParty = resolved **`ussd.hlr.upper-gt`** (never MSISDN); blank/self-loop fail-closed; never `PendingSri`/`HLR takeAny`. → [ss7-lab-pair](docs/agents/ss7-lab-pair.md) · [lessons](docs/agents/lessons.md)
 - **Tenant `network_id` ≡ SCCP `networkId`** — live Digicom GTT is typically **networkId=0** only; mismatch → SCCP `no matching Rule` → 0 SCTP DATA + `SRI_TIMEOUT` despite `SRI-SM sent`. → [lessons](docs/agents/lessons.md)
 - **NI push after SRI** — SCCP dest = SRI **`networkNodeNumber` (MSC)** + MAP destReference **IMSI**; never MSISDN as CalledParty when live. Carry MSC/IMSI on `NiPushReadyEvent.fromSri` (do not rely on profile round-trip alone). Dual SCTP: SRI answer may arrive on a non-ACTIVE ASP while AS stays ACTIVE — m3ua must still deliver PayloadData (else `SRI_TIMEOUT` despite pcap). Live fail-closed: no MSC → `SRI_NO_MSC` / `NI_NO_MSC`. → [lessons](docs/agents/lessons.md)
@@ -83,7 +85,7 @@ digicom = main + Digicom seeds  ──push──►  digicom-et/main  (PRIVATE)
 - **Notify ≠ full NI push** — Peer **Notify RESULT** settles parked HTTP (`onNotifyResponse` / `completeParkedEncoded`; AdaptiveTimeout still ontop). **Same-dialog continue** (JSESSIONID + live MSC): `continueOnDialog` → `niContinue` / `MapUnstructuredSsContinue`. **Release:** empty/`mapMessagesSize=0` → `niClose`; abort → `abort` (corr reverse-map). Specs: **22.090 / 23.090**; MAP **29.002** — **22.002 ≠ USSD**. → [ussd-3gpp-notes.md](docs/as-contract/ussd-3gpp-notes.md) · [lessons](docs/agents/lessons.md)
 - **AdaptiveTimeout / Virtual bridge on top of MAP NI** — `ClassicNiHttpPark` + EWMA gate + `ussdTx` / `claimForAsResponse` / `onGateExpired` own AS park; MAP Notify/Request/continue/TC-END sit **under** that. Never replace bridge/adaptive with raw MAP-only. → [ussd-3gpp-notes.md](docs/as-contract/ussd-3gpp-notes.md) §6
 - **MAP2MAP call flow (locked)** — HLR/MSC **USSD text** → CDR `MAP2MAP_HOP_CLOSE` (**amber** chip, never red via `phase=FAILED`) + AS `string=`=hop text / `hlrResult=responded`. **No** hop text → CDR **FAIL** (red) + AS empty `string=` / `hlrResult=none` (never echo `hlr none` onto UE). AS reply → forward to UE; AS silent → Bridge page wait/hard-fail text (`ussd.bridge.async-wait-message` / hard-fail). → [map2map.md](docs/as-contract/map2map.md) · [lessons](docs/agents/lessons.md)
-- **Per-MSISDN profiles** — `ussdTx` PK = **correlationId** (not MSISDN); each in-flight user gets its own row. Never reuse/overwrite a corr bound to another MSISDN (`VirtualSessionStore.put` fail-closed; NI `/ussd` → **409**). Concurrent users = concurrent corr rows; registries (`AsPullStateRegistry`, `PendingSri*`) stay keyed by corr — never `takeAny`. → [lessons](docs/agents/lessons.md)
+- **Per-MSISDN profiles** — `ussdTx` PK = **correlationId** (not MSISDN); each in-flight user gets its own row. Never reuse/overwrite a corr bound to another MSISDN (`VirtualSessionStore.put` fail-closed; NI `/ussd` → **409**). Concurrent users = concurrent corr rows; registries (`AsPullStateRegistry`, `PendingSri*`) stay keyed by corr — never `takeAny`. **`ussdUser`** (PK=MSISDN) = last MAP2MAP + multimenu snapshot + EWMA seed on MO — **not** AS session resurrect / not in-flight CAS. → [lessons](docs/agents/lessons.md) · [map2map.md](docs/as-contract/map2map.md) § ussdUser
 - **5k TPS honesty** — shared-host heap often **2g/4g**; pool knobs ×10 (`sbb-pool-max=40960`, `buffer-size=16384`) are **BUILD_TIME**. Runtime targets for sync AS: HTTP worker **512**, client pool **8192**, JDBC **128/16**, CDR queue **100k**/batch **2k**. Dual live SCTP links help share, not automatic 5k. **5k not measured** without dedicated load host (≥8g) + map/load + AS sim. → [lessons](docs/agents/lessons.md)
 - **Quarkus Digicom ship** — CDI eager bridge/adaptive on boot (`BridgeGateScheduler`); build-time **`db-kind=postgresql`** for Digicom package then restore local **h2**; rsync jars/`lib`/`quarkus`/`app/html` only; after restart wait **`:8088`** `/admin/status.json` (systemd active ≠ ready); NI park = async + AdaptiveTimeout (**never** `Thread.sleep`); status truth = `/admin/status.json` `ss7.live` only. → [skills § Digicom redeploy](docs/agents/skills.md) · [lessons](docs/agents/lessons.md) · [schema](docs/agents/schema.md)
 - **Digicom crash-loop after deploy (SIẾT — H2-baked jar)** — see § below. **Never** rsync a laptop `package-dist` built with `quarkus.datasource.db-kind=h2` onto Digicom. Killer tree = whole fast-jar bake (`ussdgw-app.jar` + **`quarkus/`** + `lib/`), not “one bad class”.
@@ -143,6 +145,60 @@ Digicom **runtime** `configs/application.properties` has `db-kind=postgresql` + 
 6. Restart → wait `:8088` 200 → prove. On loop: `tail` **`/tmp/ussdgw.service.log`** (systemd stdout/stderr), restore bak.
 
 Detail: [skills.md](docs/agents/skills.md) § Digicom · [lessons.md](docs/agents/lessons.md) · [schema.md](docs/agents/schema.md)
+
+## Multimenu digit gen mismatch — packages drop (SIẾT)
+
+**Symptom (Digicom / BPLUS `*804#`):** root menu CONTINUE OK; digit (e.g. `2` packages) → AS HTTP **200** with next menu body, but UE never sees it. Log: `Drop late/zombie AS response … gen=1` (×2 if dual delivery). CDR stuck on root `CONTINUE`; packages never MAP-CONTINUE’d.
+
+**Exact mechanism (proven 2026-08-10):**
+1. MS digit → `nextGeneration()` → session **gen ≥ 2** + `AWAITING_AS` + AS pull with digit.
+2. Classic XmlMAPDialog has **no** generation attribute → `ClassicDialogXmlCodec` hardcodes **`AsResponse.generation=1`**. JSON AS may echo `"generation":1` or omit (0).
+3. `VirtualSessionStore.acceptAsResponse`: `generation > 0 && generation != s.generation()` → empty → `claimForAsResponse` loses → `VirtualSessionBridge.dropLate` — **no MAP CONTINUE**.
+4. Root menu works because session starts at gen **1** (matches hardcode).
+
+**Not primary:** AdaptiveTimeout / MAP2MAP hop race (those show BRIDGED / S1_RELEASED / dead-leg ZOMBIE, not this log with packages ignored).
+
+**Correct fix (keep bridge CAS):**
+- After decode on **HTTP and gRPC** (Sip already had parity): `AsResponse.stampedToSessionGeneration(session.generation())` when wire gen `≤0` or `!=` session gen — **wire-agnostic** (XML + JSON).
+- Do **not** rip AdaptiveTimeout / `claimForAsResponse` / `onGateExpired`.
+- Do **not** require BPLUS to echo generation (classic XML cannot).
+
+**Ops / CDR / log prove floor (fold `events_json` only):**
+
+| Signal | Pass |
+|--------|------|
+| CDR `MS_DIGIT` | `digit=` + `gen=` after UE input |
+| CDR `CONTINUE` | `gen=` / `menuTurn=` + `asUssd=` per menu |
+| CDR `AS_DROP` | **absent** on that corr (detail has `wireGen`/`sessionGen`/`reason=genMismatch` when present) |
+| Expand **Multimenu · digits / CONTINUE** | path e.g. `continue[1]=… → dig[2]=2 → continue[2]=packages…` (`CdrMenuTape`) |
+| SLEE / Log4j | pull `wireGen=1 gen=2 asAction=CONTINUE asUssd=…`; drop log shows `wireGen`/`sessionGen`/`reason` |
+| Handset | packages (or next menu) on UE — unit tests alone ≠ ship |
+
+**What NOT to do:**
+- Assume AS JSON/XML “generation” is session truth without stamp
+- Fix only XML codec `1→0` and leave JSON echo path
+- Rip bridge for “raw MAP”
+- Claim multimenu fixed from `mvn test` / status.json without Digicom jar symbols + CDR tape / handset digit
+
+Detail: [lessons.md](docs/agents/lessons.md) · `AsResponse#stampedToSessionGeneration` · `HttpClientSbb` / `GrpcClientSbb` · `CdrMenuTape` · [map2map-as-xml.md](docs/as-contract/map2map-as-xml.md) §4d
+
+## Multimenu Amharic→English / dual digit pull (SIẾT)
+
+**Symptom (Brook / Digicom `*804#`, corr `24570475-…931d`):** Amharic root OK; digit → English `Balance Plus…` (or AS “lost dialog”). Not a new BPLUS URL/link.
+
+**Exact mechanism:**
+1. jSS7 delivers `unstructuredSSRequest_Response` **twice** (~5 ms) for one digit.
+2. Dual `onUserContinue` → `continue gen=2` **and** `gen=3` → **two** AS pulls → BPLUS resets locale/session.
+3. Gen-stamp alone does not stop dual pull (both stamped correctly).
+
+**Correct fix:**
+- `VirtualSessionStore.tryClaimMsDigitContinue(corr, invokeId)` (process-wide; first wins; same invoke / in-flight loses) **before** `nextGeneration` / AS route / `MS_DIGIT` CDR.
+- Never rely on `VirtualSession.tryClaimMsContinueInvoke` alone — `store.get` rehydrates and resets heap AtomicLong.
+- `releaseMsDigitInFlight` on AS CONTINUE→ACTIVE; belt: state already `AWAITING_AS`/`RESPONDING` → `dup-skip-continue`.
+- First AS after hop/MO = **wire generation 0** (`processUnstructuredSSRequest_Request` BEGIN); session gen stays until MS digit.
+- Keep AdaptiveTimeout + bridge CAS + gen stamp.
+
+**Prove:** one `PullHttp` + one `MS_DIGIT` per digit; slee `dup-skip-continue reason=invoke|in-flight|state`; handset one language.
 
 ## CDR scroll jump — agent-failure pattern (SIẾT)
 
@@ -251,3 +307,16 @@ Lab AS sims: **`tools/as-node/`** (Fastify — prefer), `tools/as-http-sim.py`, 
 - Alphabets: **AS-driven** (`ucs7`|`ucs8`|`unicode`|`auto`) → MAP CBS DCS.
 
 Detail tables (admin paths, AS modes, tenant, saga): keep in chat only if needed — prefer [`skills.md`](docs/agents/skills.md) and source under `src/main/java/et/restlink/ussdgw/`.
+
+## Cursor Cloud specific instructions
+
+Durable, non-obvious notes for Cloud Agent VMs (toolchain refresh is handled by the startup update script — see below; do not re-run one-off installs here).
+
+- **Toolchain = mise.** JDK 25 (`zulu-25`) + Maven pinned in [`mise.toml`](mise.toml) (`[tools]` format). `mise install` restores both; put them on PATH via `export PATH="$HOME/.local/share/mise/shims:$HOME/.local/bin:$PATH"` (or `mise exec -- …`). Build scripts also honor `JAVA_HOME` — set `export JAVA_HOME="$(mise where java)"` before `./build/package-dist.sh` / `mvn`.
+- **Upstream deps are built from source, not published.** `com.microjainslee:*:1.2.0-SNAPSHOT` (+ jss7 `9.2.8-j25`, sctp `2.27.32`) come from cloning `sctp` (`java25-upgrade`), `jss7` (`j25`), `jain-slee` (`micro-jainslee-2`) and `mvn install` into `~/.m2`. The private `restlink` org is unreachable — use the public fallback: `GIT_BASE=https://github.com/nhanth87 ./dist-package-script.sh`. These artifacts persist in the VM snapshot, so a normal session does **not** rebuild them. First-time bootstrap gotchas (already applied once): jss7 and jain-slee reactors fail the initial POM scan because leaf modules declare a parent whose default `relativePath` points at the wrong pom — pre-install the parents with `mvn -N install` (jss7 root once; then jain-slee `jainslee-pom/` BOM first, then jain-slee root). Also the public `nhanth87/jss7` `j25` lagged `jain-slee` `micro-jainslee-2` — `ra-jss7` expects a `routingContexts` field on `Ss7Config.As`; add it to `~/ussdgw-build/jss7/ss7-config` and rebuild that module if a fresh bootstrap ever fails to compile `ra-jss7`.
+- **No SCTP in this kernel ⇒ no SS7/MAP.** The Cloud VM kernel has no SCTP module (`checksctp` → "Protocol not supported"), so `ra-jss7` cannot activate. This is expected: boot logs `SS7 boot wire failed (lab may run without MAP)` and `status.json` shows `ss7.live=false` with honest detail. The app degrades gracefully and everything else runs. The `tools/ss7-simulator` MAP path and any real MO/NI-over-MAP flow **cannot be exercised in Cloud** — use the HTTP-drivable paths instead.
+- **Database = PostgreSQL (server parity).** Local dev uses PostgreSQL 16 (role/db `ussdgw`/`ussdgw`). Start it with `sudo pg_ctlcluster 16 main start` (not auto-started on boot; the initialized cluster persists in the snapshot). `quarkus.datasource.db-kind` is **BUILD-TIME**: the shipped `dist/` here was packaged with `db-kind=postgresql` (temporarily flip `build/application.properties` db-kind→postgresql for the `package-dist` run, then restore it to the tracked H2 lab default; the committed `dist/configs/application.properties` already targets Postgres). The password is never in git — supply `QUARKUS_DATASOURCE_PASSWORD` at runtime.
+- **Run / ready-gate.** `cd dist && QUARKUS_DATASOURCE_PASSWORD=ussdgw ./run.sh`. Ready only when `:8088` `/admin/status.json` returns 200 (process-started ≠ Quarkus ready — poll for it). AS simulator: `cd tools/as-node && npm install && npm run pull:fast` (`:8090`).
+- **Exercise a real MO→AS pull without MAP (Lab MO).** Enable a stub plane (e.g. `curl -X POST :8088/admin/diameter -H 'X-USSD-Admin-Key: ussd-admin' --data-urlencode action=save --data-urlencode enabled=true`), then `POST /admin/lab/mo` (`plane=DIAMETER&msisdn=…&shortCode=*100#&ussd=*100#`). This drives the true gateway pipeline → `HttpClientSbb PullHttpEvent` → AS 200. Note: stub planes (Diameter/SMPP/SIP without a live peer) have **no return leg** to the UE, so the AS reply is recorded and dropped by design (CDR slot 6 = "AS text not sent to UE"); that is expected, not a bug.
+- **Admin UI.** Browser login `admin` / `ussd-admin`. HTML pages require a browser session cookie; the `X-USSD-Admin-Key` header alone serves JSON/HTMX partials but 302s on full HTML pages. The product CDR ledger is **`ussd_cdr_session`** (one row per correlation) — `ussd_cdr` stays empty by design.
+- **Test server (ussdgw).** `ssh app@100.110.205.176` — no password. APP_HOME `/home/app/ota-push-services/ussdgw-micro-jainslee/`, service `ussdgw.service`. It is a Tailscale host (`100.x`) using Tailscale SSH, so SSH works directly from any machine already on the tailnet. A Cloud Agent VM must first join the tailnet: `sudo tailscaled --tun=userspace-networking --socks5-server=localhost:1055 --outbound-http-proxy-listen=localhost:1054 &` then `sudo tailscale up` (approve the printed URL, or use a `TS_AUTHKEY`); then SSH/rsync through the SOCKS proxy, e.g. `ssh -o ProxyCommand='nc -X 5 -x localhost:1055 %h %p' app@100.110.205.176` and `rsync -e 'ssh -o ProxyCommand=…' …`. Deploy = rsync `ussdgw-app.jar`+`quarkus-run.jar`+`lib/`+`quarkus/`+`app/html/` only (never `configs/`), then `sudo systemctl restart ussdgw.service`, wait `:8088 /admin/status.json` 200. That host has SCTP, so full MO/NI + `ss7-simulator` can be proven there (unlike the Cloud VM). Focus this host on **ussdgw** — do not deploy OTA here.

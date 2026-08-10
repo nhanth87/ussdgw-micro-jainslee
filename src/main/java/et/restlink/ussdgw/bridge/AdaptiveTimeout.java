@@ -106,6 +106,38 @@ public class AdaptiveTimeout {
     }
 
     /**
+     * Warm per-MSISDN EWMA from a durable profile sample once. Returns {@code true} when
+     * seeded; {@code false} when MSISDN blank, sample ≤0, or already seeded (no rewrite).
+     */
+    public boolean seedObservedMs(String msisdn, long observedMs) {
+        String key = normalizeMsisdn(msisdn);
+        if (key == null || observedMs <= 0L) {
+            return false;
+        }
+        trimMsisdnIfNeeded();
+        Ewma e = perMsisdn.computeIfAbsent(key, k -> new Ewma());
+        synchronized (e) {
+            if (e.seeded && !isStale(e, System.nanoTime())) {
+                return false;
+            }
+            long sample = Math.clamp(observedMs, FLOOR_MS, DEFAULT_MAX_SAMPLE_MS);
+            e.valueMs = sample;
+            e.seeded = true;
+            e.lastSampleNanos = System.nanoTime();
+            return true;
+        }
+    }
+
+    /** {@code true} when per-MSISDN EWMA is live (seeded and not stale). */
+    public boolean isMsisdnSeeded(String msisdn) {
+        String key = normalizeMsisdn(msisdn);
+        if (key == null) {
+            return false;
+        }
+        return observedOf(perMsisdn.get(key)) > 0d;
+    }
+
+    /**
      * Observed / suggested gate from EWMA (telemetry only) —
      * {@code clamp(EWMA × HEADROOM, FLOOR_MS, configuredGate)}.
      * Does not arm live session deadlines; see {@link #effectiveGateMs}.
