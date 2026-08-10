@@ -215,15 +215,10 @@ public final class SipUssiSbb implements Sbb, SleeEventHandler {
                     ? body.trim() : decoded.ussdText();
             resp = plainTextReply(corr, session.generation(), text);
         }
-        if (resp.generation() <= 0 || resp.generation() != session.generation()) {
-            return new AsResponse(corr, resp.requestId() == null ? corr : resp.requestId(),
-                    session.generation(), resp.text(), resp.action(), resp.async(),
-                    resp.alphabet(), resp.sessionId(), resp.virtualBridgeId(),
-                    resp.adaptiveTimeoutMs());
-        }
+        resp = resp.stampedToSessionGeneration(session.generation());
         if (resp.correlationId() == null || resp.correlationId().isBlank()) {
-            return new AsResponse(corr, resp.requestId(), resp.generation(), resp.text(),
-                    resp.action(), resp.async(), resp.alphabet(),
+            return new AsResponse(corr, resp.requestId() == null ? corr : resp.requestId(),
+                    resp.generation(), resp.text(), resp.action(), resp.async(), resp.alphabet(),
                     resp.sessionId(), resp.virtualBridgeId(), resp.adaptiveTimeoutMs());
         }
         return resp;

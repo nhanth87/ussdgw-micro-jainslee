@@ -3,12 +3,18 @@ package et.restlink.ussdgw.bridge;
 import et.restlink.ussdgw.access.OriginationType;
 
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 
 public final class VirtualSession {
     private final String virtualSessionId;
     private final String correlationId;
     private final String requestId;
     private final AtomicInteger generation = new AtomicInteger(1);
+    /**
+     * Last MS {@code unstructuredSSRequest_Response} invokeId claimed for AS digit continue.
+     * jSS7 can deliver the same component twice; second claim with the same invokeId loses.
+     */
+    private final AtomicLong lastMsContinueInvokeId = new AtomicLong(-1L);
     private final String msisdn;
     private final int networkId;
     private final String dialogId;
@@ -100,6 +106,29 @@ public final class VirtualSession {
     }
     public long invokeId() { return invokeId; }
     public void setInvokeId(long invokeId) { this.invokeId = invokeId; }
+
+    /**
+     * Heap-only claim on <em>this</em> instance. Prefer
+     * {@link VirtualSessionStore#tryClaimMsDigitContinue} — {@code store.get}/{@code byDialogId}
+     * rehydrate a new session from ussdTx and reset this field.
+     *
+     * @return {@code false} when this invokeId was already claimed on this instance
+     */
+    public boolean tryClaimMsContinueInvoke(long invokeId) {
+        for (;;) {
+            long cur = lastMsContinueInvokeId.get();
+            if (cur == invokeId) {
+                return false;
+            }
+            if (lastMsContinueInvokeId.compareAndSet(cur, invokeId)) {
+                return true;
+            }
+        }
+    }
+
+    public long lastMsContinueInvokeId() {
+        return lastMsContinueInvokeId.get();
+    }
     public boolean dialogAlive() { return dialogAlive; }
     public void setDialogAlive(boolean dialogAlive) { this.dialogAlive = dialogAlive; }
     public boolean adaptiveBridgeArm() { return adaptiveBridgeArm; }

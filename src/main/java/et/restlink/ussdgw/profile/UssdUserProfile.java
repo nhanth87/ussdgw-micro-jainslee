@@ -6,9 +6,9 @@ import com.microjainslee.api.ProfileAccessorInvoker;
 import java.lang.reflect.Method;
 
 /**
- * Durable per-subscriber (MSISDN) profile row — last MAP2MAP TX snapshot + counters.
- * Primary key = digits-only MSISDN. Distinct from in-flight {@link UssdTxProfile} (PK =
- * correlationId).
+ * Durable per-subscriber (MSISDN) profile row — last MAP2MAP TX snapshot + last multimenu
+ * snapshot + counters. Primary key = digits-only MSISDN. Distinct from in-flight
+ * {@link UssdTxProfile} (PK = correlationId). JVM-local until clustering.
  */
 public final class UssdUserProfile extends ProfileAbstractCmp {
 
@@ -116,6 +116,51 @@ public final class UssdUserProfile extends ProfileAbstractCmp {
 
     public void setTenantId(String v) {
         set(s("tenantId"), v);
+    }
+
+    /** Last multimenu generation (MS digit / AS CONTINUE stamp). */
+    public Integer getLastGeneration() {
+        return (Integer) ProfileAccessorInvoker.getValue(this, g("lastGeneration"));
+    }
+
+    public void setLastGeneration(Integer v) {
+        set(s("lastGeneration", Integer.class), v);
+    }
+
+    /** Last MS digit (short). */
+    public String getLastDigit() {
+        return str(g("lastDigit"));
+    }
+
+    public void setLastDigit(String v) {
+        set(s("lastDigit"), v);
+    }
+
+    /** Last AS→UE menu text snippet (≤50). */
+    public String getLastMenuAsUssd() {
+        return str(g("lastMenuAsUssd"));
+    }
+
+    public void setLastMenuAsUssd(String v) {
+        set(s("lastMenuAsUssd"), v);
+    }
+
+    /** Last AS action: CONTINUE / END / ABORT / pending. */
+    public String getLastAsAction() {
+        return str(g("lastAsAction"));
+    }
+
+    public void setLastAsAction(String v) {
+        set(s("lastAsAction"), v);
+    }
+
+    /** Optional MAP dialog id for ops. */
+    public String getLastDialogId() {
+        return str(g("lastDialogId"));
+    }
+
+    public void setLastDialogId(String v) {
+        set(s("lastDialogId"), v);
     }
 
     private String str(Method getter) {
