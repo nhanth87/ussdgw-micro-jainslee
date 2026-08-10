@@ -1,0 +1,57 @@
+{
+  "stackName": "ussdgw-digicom-lab-client",
+  "note": "Digicom co-hosted L3-LAB-SIM face: SCTP client :8024 → GW :8023, SCCP networkId=1, sim PC=2, GW PC=1470, M3UA RC=101 (AS-LAB). Live BP handset stays networkId=0 — do not flip Digicom routing DB. MAP2MAP hop uses ussd.map.live-network-id=0.",
+  "protocols": { "map": true, "cap": false },
+  "sctp": {
+    "connectDelay": 10000,
+    "workerThreads": 8,
+    "links": [
+      {
+        "name": "clientLinkDigicomLab",
+        "local": "127.0.0.1:8024",
+        "peer": "127.0.0.1:8023"
+      }
+    ]
+  },
+  "m3ua": {
+    "deliveryThreads": 16,
+    "as": [
+      {
+        "name": "AS1",
+        "mode": "loadshare",
+        "functionality": "ipsp",
+        "ipsp": "client",
+        "exchangeType": "SE",
+        "routingContext": 101,
+        "networkAppearance": 0,
+        "links": ["clientLinkDigicomLab"]
+      }
+    ],
+    "routes": [
+      { "to": { "dpc": 1470, "opc": 2, "si": 3 }, "via": "AS1" }
+    ]
+  },
+  "sccp": {
+    "localPoints": [
+      {
+        "pc": 2,
+        "networkIndicator": "national",
+        "networkId": 1,
+        "reachablePointCodes": [1470]
+      }
+    ],
+    "routing": [
+      { "from": "remote", "networkId": 1, "match": { "gt": "*/" }, "to": { "pc": 2 } },
+      { "from": "local", "networkId": 1, "match": { "gt": "*/" }, "to": { "pc": 1470 } }
+    ]
+  },
+  "tcap": {
+    "dialogIdleTimeout": 30000,
+    "invokeTimeout": 15000,
+    "maxDialogs": 50000
+  },
+  "services": [
+    { "name": "msc", "ssn": 8, "protocol": "map" },
+    { "name": "hlr", "ssn": 6, "protocol": "map" }
+  ]
+}

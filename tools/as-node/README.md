@@ -18,11 +18,13 @@ Default `ACTION=CONTINUE` runs a **3–4 menu catalog** with multi-turn digits `
 
 **Menu pick** (`MENU_PICK`, default **`hash`**): stable `hash(msisdn) % 4` so the same
 subscriber always gets the same menu. Alternatives: `random`, `rotate`, force
-`main` / `lang` / `promo` / `help`, or **`multimenu`** (scripted prove:
-`abc` → digit `2` → `2-dce` → END `(xyz)`).
+`main` / `lang` / `promo` / `help`, **`multimenu`** (scripted prove:
+`abc` → digit `2` → `2-dce` → END `(xyz)`), or **`brook804`** (Brook `*804#`:
+Amharic-like root → digit `1` submenu CONTINUE → `0` END).
 
 Leaf replies are labeled `[menu/digit] …` for log grepping. Session key = `correlationId`
 (XML `localId`). Set `INTERACTIVE=false` to restore flat `MENU_TEXT` one-shot CONTINUE.
+`AS_DELAY_MS` aliases `DELAY_MS` (AdaptiveTimeout EWMA warm under load).
 
 ## Install
 
@@ -41,6 +43,8 @@ npm install
 | `npm run pull:map2map:bridge` | Same + `DELAY_MS=8000` (prove AdaptiveTimeout / gate) |
 | `npm run pull:multimenu` | Scripted N-step prove: `abc` → `2-dce` → `(xyz)` |
 | `npm run pull:multimenu:map2map` | Same multimenu + MAP2MAP enrich assert (no hop-echo overlay) |
+| `npm run pull:brook804` | Brook `*804#` Amharic root → digit 1 submenu (XML) |
+| `npm run pull:brook804:ewma` | Same + `AS_DELAY_MS=50` for AdaptiveTimeout EWMA |
 | `npm run pull:async` | `MODE=async_ack` + `WIRE=json` — ACK then `/as/callback` |
 | `npm run push:ni` | Classic NI interactive menu → GW `/ussd` + `JSESSIONID` multi-turn |
 | `npm run push:ni:static` | NI one-shot (`INTERACTIVE=false`) |
@@ -58,7 +62,7 @@ MSISDN=251911000001 GW_NI=http://127.0.0.1:8088/ussd npm run push:ni
 | Env | Default | Role |
 |-----|---------|------|
 | `PORT` / `HOST` | `8090` / `0.0.0.0` | Pull listen |
-| `DELAY_MS` | `0` | Sync pull sleep (`8000` → bridge lab) |
+| `DELAY_MS` / `AS_DELAY_MS` | `0` | Sync pull sleep (`8000` → bridge lab; `AS_DELAY_MS` alias for load EWMA) |
 | `MODE` | `sync` | `sync` \| `async_ack` |
 | `WIRE` | `auto` | `xml` \| `json` \| `auto` |
 | `ACTION` | `CONTINUE` | `CONTINUE` \| `END` \| `ABORT` (END/ABORT skip menus) |
