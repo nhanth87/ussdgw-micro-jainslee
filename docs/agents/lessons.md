@@ -4,6 +4,8 @@ Short memory for Digicom footguns. Prefer this + OTA peer [`lessons.md`](../../.
 
 **Shared (USSDGW / OTA / Elisa / jain-slee):** workspace [`docs/agents/lessons.md`](../../../../../docs/agents/lessons.md) · skill `digicom-et-host`.
 
+**Cross-product (portable):** skill `digicom-et-host` § Session / identity SIẾT (in-flight PK ≠ profile PK; rehydrate wipe; wire-gen stamp; 10k honesty; Digicom PG bake). USSD-specific multimenu/`ussdTx` rows below.
+
 ## Do not
 
 | Mistake | Rule | Detail |
