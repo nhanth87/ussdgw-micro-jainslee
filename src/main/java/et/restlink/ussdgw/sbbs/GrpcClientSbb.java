@@ -48,7 +48,11 @@ public final class GrpcClientSbb implements Sbb, SleeEventHandler {
             SleeEventTrace.inSbb("GrpcClientSbb", event, "target=" + pull.target());
             String detail;
             try { detail = sendPull(pull); }
-            catch (Throwable t) { detail = "error=" + t.getClass().getSimpleName(); }
+            catch (Throwable t) {
+                detail = "error=" + t.getClass().getSimpleName() + ":" + String.valueOf(t.getMessage());
+                org.apache.logging.log4j.LogManager.getLogger(GrpcClientSbb.class)
+                        .error("GrpcClientSbb sendPull failed target={}", pull.target(), t);
+            }
             SleeEventTrace.outSbb("GrpcClientSbb", event, detail);
             return;
         }
@@ -56,7 +60,11 @@ public final class GrpcClientSbb implements Sbb, SleeEventHandler {
             SleeEventTrace.inSbb("GrpcClientSbb", event, "status=" + done.statusCode());
             String detail;
             try { detail = onCompleted(done); }
-            catch (Throwable t) { detail = "error=" + t.getClass().getSimpleName(); }
+            catch (Throwable t) {
+                detail = "error=" + t.getClass().getSimpleName() + ":" + String.valueOf(t.getMessage());
+                org.apache.logging.log4j.LogManager.getLogger(GrpcClientSbb.class)
+                        .error("GrpcClientSbb onCompleted failed status={}", done.statusCode(), t);
+            }
             SleeEventTrace.outSbb("GrpcClientSbb", event, detail);
         }
     }
@@ -89,6 +97,8 @@ public final class GrpcClientSbb implements Sbb, SleeEventHandler {
             invoke(port, corr, target);
         } catch (RuntimeException e) {
             svc().asPullState().close(corr);
+            svc().asPull().recordFailure(circuitKey);
+            svc().saga().onAsPullFailed(corr, "AS_SUBMIT_" + e.getClass().getSimpleName());
             throw e;
         }
         return "submitted corr=" + corr;
