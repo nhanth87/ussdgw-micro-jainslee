@@ -6,7 +6,10 @@ import et.restlink.ussdgw.api.AsRequest;
 import et.restlink.ussdgw.api.classic.ClassicNiHttpPark;
 import et.restlink.ussdgw.bridge.VirtualSession;
 import et.restlink.ussdgw.bridge.VirtualSessionState;
+import et.restlink.ussdgw.bridge.VirtualSessionStore;
 import et.restlink.ussdgw.cdr.CdrPhase;
+import et.restlink.ussdgw.cdr.CdrStatuses;
+import et.restlink.ussdgw.cdr.CdrUssdSnippet;
 import et.restlink.ussdgw.cdr.Map2MapCdr;
 import et.restlink.ussdgw.events.InboundSriSmEvent;
 import et.restlink.ussdgw.events.Map2MapRequestEvent;
@@ -15,6 +18,7 @@ import et.restlink.ussdgw.logging.SleeEventTrace;
 import et.restlink.ussdgw.routing.RuleType;
 import et.restlink.ussdgw.routing.ShortCodeRule;
 import et.restlink.ussdgw.routing.ShortCodeRoutingService;
+import et.restlink.ussdgw.profile.UssdUserProfileStore;
 import et.restlink.ussdgw.service.MapDialogHelper;
 import et.restlink.ussdgw.service.PendingMap2MapRegistry;
 import et.restlink.ussdgw.service.SbbServices;
@@ -31,6 +35,9 @@ import com.microjainslee.ra.jss7.event.Ss7MapEvent;
 import java.util.Optional;
 import java.util.UUID;
 
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
+
 import org.restcomm.protocols.ss7.map.api.MAPMessage;
 import org.restcomm.protocols.ss7.map.api.MAPMessageType;
 import org.restcomm.protocols.ss7.map.api.primitives.IMSI;
@@ -43,6 +50,9 @@ import org.restcomm.protocols.ss7.map.api.service.supplementary.UnstructuredSSNo
 import org.restcomm.protocols.ss7.map.api.service.supplementary.UnstructuredSSResponse;
 
 public final class MapUssdParentSbb implements Sbb, SleeEventHandler {
+    /** Non-SLEE helper logs only — onEvent stays SleeEventTrace. */
+    private static final Logger LOG = LogManager.getLogger(MapUssdParentSbb.class);
+
     private final SbbServices services;
 
     @InjectRa(name = "ra-jss7")
@@ -371,6 +381,8 @@ public final class MapUssdParentSbb implements Sbb, SleeEventHandler {
         if (r.map2mapArmed()) {
             session.setRedirectUssd(r.redirectUssdString());
         }
+        // Warm AdaptiveTimeout EWMA from ussdUser lastEwmaMs — never reuse lastCorrId as AS session.
+        seedAdaptiveFromUserProfile(msisdn, networkId, corr);
 
         if (r.map2mapArmed()) {
             // RE_ROUTE order: hop to upper HLR first; arm AdaptiveTimeout only after hop
@@ -406,8 +418,10 @@ public final class MapUssdParentSbb implements Sbb, SleeEventHandler {
         svc().store().put(session);
         svc().bridge().startAwaitingAs(session);
 
+        // Wire generation 0 = classic BEGIN (processUnstructuredSSRequest_Request).
+        // Session.generation stays 1 until first MS digit bumps — keeps claim/stamp identity.
         AsRequest asReq = new AsRequest(
-                session.virtualSessionId(), corr, reqId, session.generation(),
+                session.virtualSessionId(), corr, reqId, 0,
                 msisdn, shortCode, ussd, networkId)
                 .withOriginated(ussd, r.codeKindForDial(ussd));
         return svc().asPullRouter().route(r, asReq, corr);
@@ -563,7 +577,34 @@ public final class MapUssdParentSbb implements Sbb, SleeEventHandler {
         Optional<VirtualSession> opt = resolveNiSession(dialogId);
         if (opt.isEmpty()) return "no-session";
         VirtualSession s = opt.get();
-        s.setInvokeId(resp.getInvokeId());
+        // jSS7 can deliver the same unstructuredSSRequest_Response twice (~ms apart).
+        // Dual AS pull loses BPLUS dialog/language (Amharic root → English menu).
+        // Claim on VirtualSessionStore (process-wide) — NOT session.tryClaim*: get()/byDialogId
+        // rehydrate a fresh VirtualSession from ussdTx, resetting any heap AtomicLong.
+        // Real 2nd digit: releaseMsDigitInFlight on AS CONTINUE→ACTIVE, then new invokeId.
+        long incomingInvokeId = resp.getInvokeId();
+        Optional<VirtualSessionStore.MsDigitClaimLoss> claimLoss =
+                svc().store().tryClaimMsDigitContinue(s.correlationId(), incomingInvokeId);
+        if (claimLoss.isPresent()) {
+            VirtualSessionStore.MsDigitClaimLoss why = claimLoss.get();
+            return "dup-skip-continue dialog=" + dialogId
+                    + " corr=" + s.correlationId()
+                    + " gen=" + s.generation()
+                    + " invokeId=" + incomingInvokeId
+                    + " reason=" + (why == VirtualSessionStore.MsDigitClaimLoss.INVOKE
+                            ? "invoke" : "in-flight");
+        }
+        VirtualSessionState st = s.state();
+        if (st == VirtualSessionState.AWAITING_AS || st == VirtualSessionState.RESPONDING) {
+            // Belt: profile already shows pull in progress (late duplicate after persist).
+            svc().store().releaseMsDigitInFlight(s.correlationId());
+            return "dup-skip-continue dialog=" + dialogId
+                    + " corr=" + s.correlationId()
+                    + " gen=" + s.generation()
+                    + " state=" + st
+                    + " reason=state";
+        }
+        s.setInvokeId(incomingInvokeId);
         s.setDialogAlive(true);
         String ussd;
         try {
@@ -575,20 +616,26 @@ public final class MapUssdParentSbb implements Sbb, SleeEventHandler {
         if (svc().niHttpPark().isHttpNi(s.correlationId())) {
             s.nextGeneration();
             svc().store().put(s);
+            writeMsDigitCdr(s, ussd, "http-ni");
+            recordUserMenuDigit(s, ussd);
             boolean done = svc().niHttpPark().completeParked(
                     s.correlationId(), ussd, et.restlink.ussdgw.api.AsAction.CONTINUE);
+            // Park complete → AS will CONTINUE again; allow next digit after release on ACTIVE.
             return done ? "http-ni-ms-continue gen=" + s.generation()
+                    + " digit=" + CdrUssdSnippet.of(ussd, 16)
                     : "http-ni-no-park gen=" + s.generation();
         }
         Optional<ShortCodeRule> rule = svc().routing().find(s.shortCode());
         if (rule.isEmpty()) {
-            MapDialogHelper.replyAndEnd(ss7, dialogId, resp.getInvokeId(), "Session ended.");
+            svc().store().clearMsDigitClaim(s.correlationId());
+            MapDialogHelper.replyAndEnd(ss7, dialogId, incomingInvokeId, "Session ended.");
             return "no-rule";
         }
         ShortCodeRule r = rule.get();
         TenantGuard.Decision admit = svc().tenantGuard().admit(s.tenantId() != null ? s.tenantId() : r.tenantId());
         if (!admit.allowed()) {
-            MapDialogHelper.replyAndEnd(ss7, dialogId, resp.getInvokeId(),
+            svc().store().clearMsDigitClaim(s.correlationId());
+            MapDialogHelper.replyAndEnd(ss7, dialogId, incomingInvokeId,
                     admit.reason() == TenantGuard.Reason.RATE_LIMITED
                             ? "Service busy. Please try again."
                             : "Service temporarily unavailable.");
@@ -597,6 +644,8 @@ public final class MapUssdParentSbb implements Sbb, SleeEventHandler {
         s.nextGeneration();
         s.setAdaptiveBridgeArm(adaptiveBridgeArmFor(r.ruleType()));
         svc().bridge().startAwaitingAs(s);
+        writeMsDigitCdr(s, ussd, "as-pull");
+        recordUserMenuDigit(s, ussd);
         // Digit in ussdString only — never overwrite originatedUssd with the digit alone.
         String originated = blankToFallback(s.originatedUssd(), s.shortCode());
         AsRequest asReq = new AsRequest(
@@ -607,7 +656,85 @@ public final class MapUssdParentSbb implements Sbb, SleeEventHandler {
             asReq = asReq.withMap2MapCodes(
                     blankToNull(s.redirectUssd()), blankToNull(s.hopUssd()));
         }
-        return svc().asPullRouter().route(r, asReq, s.correlationId()) + " continue gen=" + s.generation();
+        return svc().asPullRouter().route(r, asReq, s.correlationId())
+                + " continue gen=" + s.generation()
+                + " digit=" + CdrUssdSnippet.of(ussd, 16);
+    }
+
+    /** Best-effort ussdUser digit stamp after dup-skip passed. Never breaks MAP. */
+    private void recordUserMenuDigit(VirtualSession s, String digit) {
+        if (s == null || svc().userProfiles() == null) {
+            return;
+        }
+        try {
+            Long ewma = null;
+            if (svc().adaptive() != null) {
+                double v = svc().adaptive().observedLatencyMs(s.networkId(), s.msisdn());
+                if (v > 0d) {
+                    ewma = Math.round(v);
+                }
+            }
+            svc().userProfiles().recordMenuState(s.msisdn(), new UssdUserProfileStore.MenuStateSnapshot(
+                    s.correlationId(),
+                    s.shortCode(),
+                    s.generation(),
+                    digit,
+                    null,
+                    "pending",
+                    s.dialogId(),
+                    s.gateMs() > 0 ? s.gateMs() : null,
+                    ewma,
+                    s.networkId(),
+                    s.tenantId()));
+            LOG.info(
+                    "parent ussdUser digit-write corr={} msisdn={} gen={} digit={}",
+                    s.correlationId(),
+                    et.restlink.ussdgw.bridge.AdaptiveTimeout.normalizeMsisdn(s.msisdn()),
+                    s.generation(),
+                    CdrUssdSnippet.of(digit, 16));
+        } catch (Throwable t) {
+            LOG.info("parent ussdUser digit-write FAILED corr={} reason={}",
+                    s.correlationId(), t.toString());
+        }
+    }
+
+    /** MO warm: seed AdaptiveTimeout from ussdUser lastEwmaMs (not lastCorrId). */
+    private void seedAdaptiveFromUserProfile(String msisdn, int networkId, String corr) {
+        if (svc().userProfiles() == null) {
+            return;
+        }
+        try {
+            boolean seeded = svc().userProfiles().seedAdaptiveFromProfile(
+                    svc().adaptive(), msisdn, networkId);
+            LOG.info("parent ussdUser MO-EWMA-seed corr={} msisdn={} net={} seeded={}",
+                    corr,
+                    et.restlink.ussdgw.bridge.AdaptiveTimeout.normalizeMsisdn(msisdn),
+                    networkId,
+                    seeded);
+        } catch (Throwable t) {
+            LOG.info("parent ussdUser MO-EWMA-seed FAILED corr={} reason={}", corr, t.toString());
+        }
+    }
+
+    /** CDR + ops tape for multimenu: MS digit bumps generation then AS pull / NI park. */
+    private void writeMsDigitCdr(VirtualSession s, String digit, String path) {
+        if (s == null || s.correlationId() == null || s.correlationId().isBlank()) {
+            return;
+        }
+        String dig = digit == null ? "" : digit.trim();
+        String detail = "service=MapUssdParentSbb|MS_DIGIT|path=" + path
+                + "|gen=" + s.generation()
+                + "|digit=" + CdrUssdSnippet.of(dig, 32)
+                + (dig.isEmpty() ? "|digit-empty" : "")
+                + "|note=MS→menu";
+        try {
+            svc().cdr().write(s.correlationId(), CdrPhase.S1_ACTIVE, s.msisdn(), s.shortCode(),
+                    CdrStatuses.MS_DIGIT, detail, s.networkId(), s.tenantId(),
+                    s.originationType() == null ? "MAP" : s.originationType().name(),
+                    s.gateMs() > 0 ? s.gateMs() : null, null);
+        } catch (Throwable ignored) {
+            // CDR must never break MAP digit continue
+        }
     }
 
     private static String blankToFallback(String value, String fallback) {

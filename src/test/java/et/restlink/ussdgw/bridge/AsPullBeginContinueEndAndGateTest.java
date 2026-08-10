@@ -2,7 +2,10 @@ package et.restlink.ussdgw.bridge;
 
 import et.restlink.ussdgw.access.OriginationType;
 import et.restlink.ussdgw.api.AsAction;
+import et.restlink.ussdgw.api.AsHttpWireFormat;
 import et.restlink.ussdgw.api.AsResponse;
+import et.restlink.ussdgw.api.AsWireFacade;
+import et.restlink.ussdgw.api.classic.ClassicDialogXmlCodec;
 import et.restlink.ussdgw.cdr.CdrPhase;
 import et.restlink.ussdgw.cdr.CdrService;
 import et.restlink.ussdgw.cdr.CdrUssdSnippet;
@@ -125,6 +128,108 @@ class AsPullBeginContinueEndAndGateTest {
         var cmd = (Ss7Command.MapProcessUnstructuredSsResponse) ss7.cmds.get(0);
         assertThat(cmd.endDialog()).isFalse();
         assertThat(cmd.text()).contains("Balance menu");
+    }
+
+    @Test
+    @DisplayName("Digit gen=2: JSON echoed gen=1 stamped → claim/bridge accepts (no dropLate)")
+    void jsonEchoedGen1StampedAfterDigitAccepted() {
+        VirtualSession s = awaitingSession("corr-json-stamp", 0);
+        bridge.startAwaitingAs(s);
+        bridge.onAsResponse(new AsResponse("corr-json-stamp", "r1", 1, "Menu", AsAction.CONTINUE, false), 10);
+        VirtualSession live = store.get("corr-json-stamp").orElseThrow();
+        live.nextGeneration();
+        assertThat(live.generation()).isEqualTo(2);
+        bridge.startAwaitingAs(live);
+
+        AsWireFacade facade = new AsWireFacade();
+        AsResponse raw = facade.decodePullResponse("""
+                {"correlationId":"corr-json-stamp","requestId":"r1","generation":1,
+                 "text":"Packages","action":"CONTINUE","async":false}
+                """, AsHttpWireFormat.JSON, "corr-json-stamp");
+        assertThat(raw.generation()).isEqualTo(1);
+        assertThat(store.acceptAsResponse("corr-json-stamp", raw.generation())).isEmpty();
+
+        AsResponse stamped = raw.stampedToSessionGeneration(
+                store.get("corr-json-stamp").orElseThrow().generation());
+        assertThat(stamped.generation()).isEqualTo(2);
+
+        ss7.cmds.clear();
+        bridge.onAsResponse(stamped, 25);
+        VirtualSession after = store.get("corr-json-stamp").orElseThrow();
+        assertThat(after.state()).isEqualTo(VirtualSessionState.ACTIVE);
+        assertThat(after.generation()).isEqualTo(2);
+        assertThat(ss7.cmds).hasSize(1);
+        var cmd = (Ss7Command.MapProcessUnstructuredSsResponse) ss7.cmds.get(0);
+        assertThat(cmd.endDialog()).isFalse();
+        assertThat(cmd.text()).isEqualTo("Packages");
+    }
+
+    @Test
+    @DisplayName("Digit gen=2: JSON missing generation (0) stamped → bridge accepts")
+    void jsonMissingGenStampedAfterDigitAccepted() {
+        VirtualSession s = awaitingSession("corr-json-miss", 0);
+        bridge.startAwaitingAs(s);
+        bridge.onAsResponse(new AsResponse("corr-json-miss", "r1", 1, "Menu", AsAction.CONTINUE, false), 10);
+        VirtualSession live = store.get("corr-json-miss").orElseThrow();
+        live.nextGeneration();
+        bridge.startAwaitingAs(live);
+
+        AsWireFacade facade = new AsWireFacade();
+        AsResponse raw = facade.decodePullResponse("""
+                {"correlationId":"corr-json-miss","text":"More packages","action":"CONTINUE","async":false}
+                """, AsHttpWireFormat.JSON, "corr-json-miss");
+        assertThat(raw.generation()).isLessThanOrEqualTo(0);
+
+        AsResponse stamped = raw.stampedToSessionGeneration(
+                store.get("corr-json-miss").orElseThrow().generation());
+        assertThat(stamped.generation()).isEqualTo(2);
+
+        ss7.cmds.clear();
+        bridge.onAsResponse(stamped, 20);
+        assertThat(ss7.cmds).hasSize(1);
+        assertThat(((Ss7Command.MapProcessUnstructuredSsResponse) ss7.cmds.get(0)).text())
+                .isEqualTo("More packages");
+    }
+
+    @Test
+    @DisplayName("Digit gen=2 + classic XML hardcoded gen=1: stamp → claim accepts (no dropLate)")
+    void classicXmlHardcodedGen1StampedAfterDigitIsAccepted() {
+        VirtualSession s = awaitingSession("corr-xml-stamp", 0);
+        bridge.startAwaitingAs(s);
+        bridge.onAsResponse(new AsResponse("corr-xml-stamp", "r1", 1, "Menu", AsAction.CONTINUE, false), 20);
+
+        VirtualSession live = store.get("corr-xml-stamp").orElseThrow();
+        live.nextGeneration();
+        assertThat(live.generation()).isEqualTo(2);
+        bridge.startAwaitingAs(live);
+
+        AsResponse raw = ClassicDialogXmlCodec.decodeResponse("""
+                <dialog localId="corr-xml-stamp">
+                  <unstructuredSSRequest_Request dataCodingScheme="15" string="1. Gold\\n2. Silver"/>
+                </dialog>
+                """, "corr-xml-stamp");
+        assertThat(raw.generation()).isEqualTo(1); // codec hardcode — would lose claimForAsResponse
+
+        assertThat(store.claimForAsResponse("corr-xml-stamp", raw.generation())).isEmpty();
+        // Restore AWAITING_AS after the read-only reject path (claim empty = no state change).
+        assertThat(store.get("corr-xml-stamp").orElseThrow().state())
+                .isEqualTo(VirtualSessionState.AWAITING_AS);
+
+        AsResponse stamped = raw.stampedToSessionGeneration(
+                store.get("corr-xml-stamp").orElseThrow().generation());
+        assertThat(stamped.generation()).isEqualTo(2);
+        assertThat(store.acceptAsResponse("corr-xml-stamp", stamped.generation())).isPresent();
+
+        ss7.cmds.clear();
+        bridge.onAsResponse(stamped, 30);
+
+        VirtualSession after = store.get("corr-xml-stamp").orElseThrow();
+        assertThat(after.state()).isEqualTo(VirtualSessionState.ACTIVE);
+        assertThat(after.generation()).isEqualTo(2);
+        assertThat(ss7.cmds).hasSize(1);
+        var cmd = (Ss7Command.MapProcessUnstructuredSsResponse) ss7.cmds.get(0);
+        assertThat(cmd.endDialog()).isFalse();
+        assertThat(cmd.text()).contains("Gold");
     }
 
     @Test

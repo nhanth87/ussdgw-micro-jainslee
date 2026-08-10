@@ -6,6 +6,7 @@ import et.restlink.ussdgw.bridge.AdaptiveTimeout;
 import et.restlink.ussdgw.bridge.UssdSagaCoordinator;
 import et.restlink.ussdgw.bridge.VirtualSessionBridge;
 import et.restlink.ussdgw.bridge.VirtualSessionStore;
+import et.restlink.ussdgw.cdr.CdrMenuTape;
 import et.restlink.ussdgw.cdr.CdrRecord;
 import et.restlink.ussdgw.cdr.CdrService;
 import et.restlink.ussdgw.cdr.CdrServiceStatuses;
@@ -1047,10 +1048,12 @@ public class AdminHttpHandler {
                     .append("<div class=\"cdr-detail-panel ink-panel\">");
             appendCdrPrimaryHero(sb, asUssdSnip, primary);
             appendCdrSixHopSpine(sb, dig, r);
+            appendCdrMenuTape(sb, dig.timelineOldestFirst());
             appendCdrSessionKeys(sb, r, dig, asUssdSnip, displayHuman, displayStatus);
             appendCdrAdvancedRaw(sb, r, dig, dig.timelineOldestFirst());
             sb.append("<p class=\"cdr-gap-note\">6-hop spine folds events_json (no new persist). ")
                     .append("AS USSD (~50) is the hero; GATE_ARMED is budget only. ")
+                    .append("Multimenu: MS_DIGIT + CONTINUE gen= on menu tape; AS_DROP = dropped before MAP. ")
                     .append("Missing hops = SKIPPED. Slot 6 RED when AS text existed but MAP ")
                     .append("not sent to UE. Classic gaps: dialog ids · SCCP GT · IMSI/VLR.")
                     .append("</p>");
@@ -1110,9 +1113,39 @@ public class AdminHttpHandler {
         sb.append("</ol></div>");
     }
 
+    /** Visible multimenu path from MS_DIGIT / CONTINUE tape (fold-only). */
+    private static void appendCdrMenuTape(StringBuilder sb, List<CdrRecord> oldestFirst) {
+        CdrMenuTape.Summary menu = CdrMenuTape.fromTimeline(oldestFirst);
+        if (menu.steps().isEmpty()) {
+            return;
+        }
+        sb.append("<div class=\"cdr-digest cdr-menu-tape\" aria-label=\"Multimenu tape\">");
+        sb.append("<p class=\"cdr-digest-title\">Multimenu · digits / CONTINUE</p>");
+        sb.append("<p class=\"cdr-menu-path\" title=\"").append(esc(menu.path())).append("\">")
+                .append(esc(menu.path().isEmpty() ? "—" : menu.path())).append("</p>");
+        sb.append("<p class=\"cdr-menu-meta text-ink-mute\">digits=").append(menu.digitCount())
+                .append(" · continues=").append(menu.continueCount())
+                .append(" · maxGen=").append(menu.maxGen())
+                .append(menu.multimenu() ? " · multimenu" : "")
+                .append("</p>");
+        sb.append("<ol class=\"cdr-menu-steps\">");
+        for (CdrMenuTape.Step step : menu.steps()) {
+            sb.append("<li><span class=\"cdr-menu-kind\">").append(esc(step.kind())).append("</span>");
+            if (step.gen() > 0) {
+                sb.append(" <code class=\"cdr-menu-gen\">gen=").append(step.gen()).append("</code>");
+            }
+            if (step.text() != null && !step.text().isBlank()) {
+                sb.append(" <code class=\"cdr-menu-text\">").append(esc(step.text())).append("</code>");
+            }
+            sb.append("</li>");
+        }
+        sb.append("</ol></div>");
+    }
+
     private static void appendCdrSessionKeys(StringBuilder sb, CdrRecord r,
                                              CdrSessionDigest.Digest dig, String asUssdSnip,
                                              String displayHuman, String displayStatus) {
+        CdrMenuTape.Summary menu = CdrMenuTape.fromTimeline(dig.timelineOldestFirst());
         sb.append("<div class=\"cdr-digest cdr-record-box\" aria-label=\"This CDR record\">");
         sb.append("<p class=\"cdr-digest-title\">This session</p>");
         sb.append("<dl class=\"cdr-detail-grid cdr-session-grid\">");
@@ -1124,6 +1157,12 @@ public class AdminHttpHandler {
         cdrDetailItem(sb, "Short code", dig.shortCode() != null ? dig.shortCode() : r.shortCode);
         cdrDetailItem(sb, "Long / redirect", dig.longOrRedirect());
         cdrDetailItem(sb, "Dialed USSD", dig.dialed());
+        if (menu.multimenu() || menu.digitCount() > 0 || menu.continueCount() > 0) {
+            cdrDetailItem(sb, "Menu path", menu.path().isEmpty() ? null : menu.path());
+            cdrDetailItem(sb, "Menu digits", Integer.toString(menu.digitCount()));
+            cdrDetailItem(sb, "Menu continues", Integer.toString(menu.continueCount()));
+            cdrDetailItem(sb, "Menu max gen", menu.maxGen() > 0 ? Integer.toString(menu.maxGen()) : null);
+        }
         String hopText = dig.detailFields().get("hopOutcome");
         cdrDetailItem(sb, "Hop outcome", hopText);
         String hopGt = dig.detailFields().get("hopGt");

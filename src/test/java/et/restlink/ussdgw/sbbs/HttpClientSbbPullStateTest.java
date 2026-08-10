@@ -223,6 +223,63 @@ class HttpClientSbbPullStateTest {
     }
 
     @Test
+    void classicXmlHardcodedGen1IsStampedToSessionGen2BeforeBridge() {
+        String corr = "c-digit-xml";
+        armSessionGen2(corr);
+        set(services, "wireFormatResolver", new XmlResolver());
+        rebindSbbs();
+
+        submitter.onEvent(pull(corr), aci());
+        String classicMenu = """
+                <dialog localId="%s">
+                  <unstructuredSSRequest_Request dataCodingScheme="15" string="1. Gold\\n2. Silver"/>
+                </dialog>
+                """.formatted(corr);
+        completer.onEvent(ok(corr, classicMenu), aci());
+
+        assertThat(bridge.responses).hasSize(1);
+        assertThat(bridge.responses.get(0).generation()).isEqualTo(2);
+        assertThat(bridge.responses.get(0).text()).contains("Gold");
+        assertThat(registry.size()).isZero();
+    }
+
+    @Test
+    void jsonEchoedGen1IsStampedToSessionGen2BeforeBridge() {
+        String corr = "c-digit-json";
+        armSessionGen2(corr);
+        // JsonResolver already default in setUp
+        rebindSbbs();
+
+        submitter.onEvent(pull(corr), aci());
+        completer.onEvent(ok(corr, """
+                {"correlationId":"%s","requestId":"%s","generation":1,
+                 "text":"1. Gold\\n2. Silver","action":"CONTINUE","async":false}
+                """.formatted(corr, corr)), aci());
+
+        assertThat(bridge.responses).hasSize(1);
+        assertThat(bridge.responses.get(0).generation()).isEqualTo(2);
+        assertThat(bridge.responses.get(0).action().name()).isEqualTo("CONTINUE");
+        assertThat(bridge.responses.get(0).text()).contains("Gold");
+        assertThat(registry.size()).isZero();
+    }
+
+    @Test
+    void jsonMissingGenIsStampedToSessionGen2BeforeBridge() {
+        String corr = "c-digit-json-miss";
+        armSessionGen2(corr);
+        rebindSbbs();
+
+        submitter.onEvent(pull(corr), aci());
+        completer.onEvent(ok(corr, """
+                {"correlationId":"%s","text":"Packages","action":"CONTINUE","async":false}
+                """.formatted(corr)), aci());
+
+        assertThat(bridge.responses).hasSize(1);
+        assertThat(bridge.responses.get(0).generation()).isEqualTo(2);
+        assertThat(bridge.responses.get(0).text()).isEqualTo("Packages");
+    }
+
+    @Test
     void circuitOpenPullLeavesZeroEntries() {
         set(asPull, "failThreshold", 1);
         asPull.recordFailure(URL); // threshold reached on the first failure → OPEN
@@ -234,6 +291,21 @@ class HttpClientSbbPullStateTest {
     }
 
     // -- helpers -----------------------------------------------------------------
+
+    private void armSessionGen2(String corr) {
+        VirtualSession session = new VirtualSession("vs-" + corr, corr, corr,
+                "251911000000", 0, "dlg-" + corr, "*804#");
+        session.nextGeneration(); // → 2 (MS digit)
+        assertThat(session.generation()).isEqualTo(2);
+        set(services, "store", new FixedStore(session));
+    }
+
+    private void rebindSbbs() {
+        submitter = new HttpClientSbb(services);
+        completer = new HttpClientSbb(services);
+        set(submitter, "httpClient", ra);
+        set(completer, "httpClient", ra);
+    }
 
     private com.microjainslee.api.ActivityContextInterface aci() {
         return container.createActivityContext("t-" + System.nanoTime());
@@ -295,12 +367,14 @@ class HttpClientSbbPullStateTest {
     /** Mirrors {@code VirtualSessionBridge}'s EWMA feed so a bad sample is visible. */
     private static final class RecordingBridge extends VirtualSessionBridge {
         final List<Long> latencies = new CopyOnWriteArrayList<>();
+        final List<AsResponse> responses = new CopyOnWriteArrayList<>();
         private final AdaptiveTimeout adaptive;
 
         RecordingBridge(AdaptiveTimeout adaptive) { this.adaptive = adaptive; }
 
         @Override
         public void onAsResponse(AsResponse response, long latencyMs) {
+            responses.add(response);
             latencies.add(latencyMs);
             if (latencyMs > 0) {
                 adaptive.recordLatency(0, latencyMs);
@@ -320,7 +394,24 @@ class HttpClientSbbPullStateTest {
         }
     }
 
+    private static final class FixedStore extends VirtualSessionStore {
+        private final VirtualSession session;
+
+        FixedStore(VirtualSession session) { this.session = session; }
+
+        @Override public Optional<VirtualSession> get(String correlationId) {
+            if (session != null && session.correlationId().equals(correlationId)) {
+                return Optional.of(session);
+            }
+            return Optional.empty();
+        }
+    }
+
     private static final class JsonResolver extends WireFormatResolver {
         @Override public AsHttpWireFormat resolve(String tenantId) { return AsHttpWireFormat.JSON; }
+    }
+
+    private static final class XmlResolver extends WireFormatResolver {
+        @Override public AsHttpWireFormat resolve(String tenantId) { return AsHttpWireFormat.XML; }
     }
 }

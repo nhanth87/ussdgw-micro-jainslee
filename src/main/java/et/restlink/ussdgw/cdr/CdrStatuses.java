@@ -47,6 +47,16 @@ public final class CdrStatuses {
     // ── Common AS / saga (filterable) ───────────────────────────────────────
     public static final String AS_EMPTY_BODY = "AS_EMPTY_BODY";
     public static final String AS_PULL_FAIL = "AS_PULL_FAIL";
+    /**
+     * AS body dropped before MAP emit (gen mismatch / wrong state / no session).
+     * Multimenu prove: after digit, {@code wireGen≠sessionGen} → this status + detail.
+     */
+    public static final String AS_DROP = "AS_DROP";
+    /**
+     * MS unstructuredSS-Response digit → generation bump + AS pull / NI park complete.
+     * Detail carries {@code digit=} + {@code gen=} for N-step menu tape.
+     */
+    public static final String MS_DIGIT = "MS_DIGIT";
 
     /** Admin preset keys → status filter value (trailing {@code *} = prefix). */
     public static final List<StatusPreset> ADMIN_PRESETS = List.of(
@@ -56,7 +66,9 @@ public final class CdrStatuses {
             new StatusPreset("MAP2MAP_*", "MAP2MAP / re-route"),
             new StatusPreset("HLR_REJECT", "HLR hop reject (RE_ROUTE)"),
             new StatusPreset("BRIDGED*", "Bridged (gate fired → UE async-wait)"),
-            new StatusPreset("AS_*", "AS pull fails"),
+            new StatusPreset("AS_*", "AS pull fails / AS_DROP"),
+            new StatusPreset("MS_DIGIT", "MS digit (multimenu)"),
+            new StatusPreset("CONTINUE", "AS→UE continue (menu)"),
             new StatusPreset("GATED_AS*", "Gated AS notify only"));
 
     public record StatusPreset(String value, String label) {}
@@ -103,11 +115,15 @@ public final class CdrStatuses {
                 || u.contains("TIMEOUT")
                 || u.contains("REJECT")
                 || u.equals(AS_EMPTY_BODY)
+                || u.equals(AS_DROP)
                 || u.equals("SRI_NO_MSC")
                 || u.equals("NI_NO_MSC")
                 || u.equals("HLR_REJECT")
                 || u.equals(Map2MapCdr.HOP_ABORT)) {
             return "cdr-status--fail";
+        }
+        if (u.equals(MS_DIGIT)) {
+            return "cdr-status--live";
         }
         // END = AS→UE final reply applied (VirtualSessionBridge), not hop-close.
         if ("COMPLETED".equals(phase) || "SUCCESS".equalsIgnoreCase(status)

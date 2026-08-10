@@ -7,8 +7,10 @@ import et.restlink.ussdgw.api.AsResponse;
 import et.restlink.ussdgw.api.classic.ClassicNiHttpPark;
 import et.restlink.ussdgw.cdr.CdrPhase;
 import et.restlink.ussdgw.cdr.CdrService;
+import et.restlink.ussdgw.cdr.CdrStatuses;
 import et.restlink.ussdgw.cdr.CdrUssdSnippet;
 import et.restlink.ussdgw.config.UssdConfigService;
+import et.restlink.ussdgw.profile.UssdUserProfileStore;
 import et.restlink.ussdgw.service.GatedAsNotifyService;
 import et.restlink.ussdgw.service.MapDialogHelper;
 
@@ -36,6 +38,7 @@ public class VirtualSessionBridge {
     @Inject ClassicNiHttpPark niHttpPark;
     @Inject GatedSessionRegistry gatedSessions;
     @Inject GatedAsNotifyService gatedAsNotify;
+    @Inject UssdUserProfileStore userProfiles;
 
     private volatile Supplier<RaCommandPort> ss7Supplier = () -> null;
 
@@ -264,8 +267,38 @@ public class VirtualSessionBridge {
 
     private void dropLate(String correlationId, AsResponse response) {
         zombieDrop.incrementAndGet();
-        LOG.info("Drop late/zombie AS response corr={} gen={}",
-                correlationId, response == null ? -1 : response.generation());
+        int wireGen = response == null ? -1 : response.generation();
+        Optional<VirtualSession> opt = correlationId == null || correlationId.isBlank()
+                ? Optional.empty() : store.get(correlationId);
+        int sessionGen = opt.map(VirtualSession::generation).orElse(-1);
+        String state = opt.map(s -> s.state() == null ? "NONE" : s.state().name()).orElse("NONE");
+        String reason;
+        if (opt.isEmpty()) {
+            reason = "no-session";
+        } else if (wireGen > 0 && sessionGen > 0 && wireGen != sessionGen) {
+            reason = "genMismatch";
+        } else {
+            reason = "state";
+        }
+        String asSnip = response == null ? "" : CdrUssdSnippet.of(response.text());
+        LOG.info("Drop late/zombie AS response corr={} wireGen={} sessionGen={} state={} reason={} asUssd={}",
+                correlationId, wireGen, sessionGen, state, reason, asSnip);
+        if (correlationId == null || correlationId.isBlank()) {
+            return;
+        }
+        String detail = "service=VirtualSessionBridge|AS_DROP|reason=" + reason
+                + "|wireGen=" + wireGen
+                + "|sessionGen=" + sessionGen
+                + "|state=" + state
+                + (response == null || response.text() == null || response.text().isBlank()
+                ? "" : "|" + CdrUssdSnippet.asUssdDetail(response.text()))
+                + "|note=dropped-before-MAP";
+        if (opt.isPresent()) {
+            cdrWrite(opt.get(), CdrPhase.S1_ACTIVE, CdrStatuses.AS_DROP, detail);
+        } else {
+            cdr.write(correlationId, CdrPhase.S1_ACTIVE, null, null, CdrStatuses.AS_DROP, detail,
+                    0, null, OriginationType.MAP.name(), null, null);
+        }
     }
 
     /**
@@ -315,33 +348,40 @@ public class VirtualSessionBridge {
                     // Do NOT bump generation here — classic oracle bumps only on MS input
                     // (MapUssdParentSbb.onUserContinue). Double-bump would skip AS turns.
                     s.setState(VirtualSessionState.ACTIVE);
+                    store.releaseMsDigitInFlight(s.correlationId());
                 }
                 case ABORT -> {
                     MapDialogHelper.abort(port, s.dialogId());
                     s.setDialogAlive(false);
                     s.setState(VirtualSessionState.ABORTED);
+                    store.clearMsDigitClaim(s.correlationId());
                 }
                 case END -> {
                     MapDialogHelper.replyAndEnd(port, s.dialogId(), s.invokeId(),
                             response.text(), alphabet);
                     s.setDialogAlive(false);
                     s.setState(VirtualSessionState.COMPLETED);
+                    store.clearMsDigitClaim(s.correlationId());
                 }
             }
         } else if (httpNi) {
             if (action == AsAction.ABORT) {
                 s.setDialogAlive(false);
                 s.setState(VirtualSessionState.ABORTED);
+                store.clearMsDigitClaim(s.correlationId());
             } else if (action == AsAction.END) {
                 s.setDialogAlive(false);
                 s.setState(VirtualSessionState.COMPLETED);
+                store.clearMsDigitClaim(s.correlationId());
             } else {
                 s.setState(VirtualSessionState.ACTIVE);
+                store.releaseMsDigitInFlight(s.correlationId());
             }
         } else {
             s.setDialogAlive(false);
             s.setState(action == AsAction.ABORT
                     ? VirtualSessionState.ABORTED : VirtualSessionState.COMPLETED);
+            store.clearMsDigitClaim(s.correlationId());
         }
         persist(s);
         // Status END/CONTINUE/ABORT = AS body applied toward UE (not hop-close).
@@ -355,8 +395,45 @@ public class VirtualSessionBridge {
                 "service=VirtualSessionBridge|"
                         + (httpNi ? "http-ni" : "sync")
                         + "|asAction=" + action.name()
+                        + "|gen=" + s.generation()
+                        + "|menuTurn=" + s.generation()
                         + "|" + CdrUssdSnippet.asUssdDetail(response.text())
                         + "|note=AS→UE");
+        if (action == AsAction.CONTINUE || action == AsAction.END || action == AsAction.ABORT) {
+            recordUserMenuState(s, action.name(), response.text());
+        }
+    }
+
+    /** Best-effort ussdUser multimenu stamp after AS→UE CONTINUE/END/ABORT. Never breaks MAP. */
+    private void recordUserMenuState(VirtualSession s, String asAction, String menuText) {
+        if (s == null || userProfiles == null) {
+            return;
+        }
+        try {
+            Long ewma = observedEwmaMs(s);
+            userProfiles.recordMenuState(s.msisdn(), new UssdUserProfileStore.MenuStateSnapshot(
+                    s.correlationId(),
+                    s.shortCode(),
+                    s.generation(),
+                    null,
+                    menuText,
+                    asAction,
+                    s.dialogId(),
+                    s.gateMs() > 0 ? s.gateMs() : null,
+                    ewma,
+                    s.networkId(),
+                    s.tenantId()));
+            LOG.info(
+                    "bridge ussdUser menu-write corr={} msisdn={} asAction={} gen={} menu={}",
+                    s.correlationId(),
+                    AdaptiveTimeout.normalizeMsisdn(s.msisdn()),
+                    asAction,
+                    s.generation(),
+                    CdrUssdSnippet.of(menuText));
+        } catch (Throwable t) {
+            LOG.info("bridge ussdUser menu-write FAILED corr={} reason={}",
+                    s.correlationId(), t.toString());
+        }
     }
 
     /** Write Profile row; remove when terminal (COMPLETED/ABORTED/FAILED/ZOMBIE). */
