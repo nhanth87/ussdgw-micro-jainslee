@@ -6,6 +6,9 @@ dist/quarkus-run.jar
 dist/app/**/*.jar
 dist/data/
 dist/logs/
+# Written by ./build/package-dist.sh — Digicom bake detail, never on public main
+dist/.baked-db-kind
+dist/configs/*.new
 data/
 logs/
 .idea/

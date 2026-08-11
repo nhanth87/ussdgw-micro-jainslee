@@ -17,6 +17,7 @@
         <maven.compiler.release>25</maven.compiler.release>
         <quarkus.platform.version>3.37.3</quarkus.platform.version>
         <microjainslee.version>1.2.0-SNAPSHOT</microjainslee.version>
+        <sctp.version>2.27.32</sctp.version>
         <surefire.version>3.5.4</surefire.version>
         <quarkus.build.skip>true</quarkus.build.skip>
         <quarkus.package.jar.type>fast-jar</quarkus.package.jar.type>
@@ -48,6 +49,18 @@
         <dependency><groupId>com.fasterxml.jackson.core</groupId><artifactId>jackson-databind</artifactId></dependency>
         <dependency><groupId>com.fasterxml.jackson.dataformat</groupId><artifactId>jackson-dataformat-xml</artifactId></dependency>
         <dependency><groupId>com.microjainslee</groupId><artifactId>ra-jss7</artifactId><version>${microjainslee.version}</version></dependency>
+        <!--
+            Kernel SCTP oracle (org.mobicents.protocols.sctp.netty.NettySctpManagementImpl).
+            ra-jss7 ships only sctp-api/core/backend-fstack, so sctp-impl otherwise resolves to a
+            transitive 1.8.15 that has no netty package and sctp.backend=NETTY_KERNEL dies with
+            ClassNotFoundException. USSDGW runs on hosts with no DPDK-bound NIC, so kernel SCTP
+            is the transport that can actually reach the carrier peers.
+        -->
+        <dependency>
+            <groupId>org.mobicents.protocols.sctp</groupId>
+            <artifactId>sctp-impl</artifactId>
+            <version>${sctp.version}</version>
+        </dependency>
         <dependency><groupId>com.microjainslee</groupId><artifactId>jainslee-cluster</artifactId><version>${microjainslee.version}</version></dependency>
         <dependency><groupId>com.microjainslee</groupId><artifactId>ra-diameter</artifactId><version>${microjainslee.version}</version></dependency>
         <dependency><groupId>com.microjainslee</groupId><artifactId>ra-sip-servlet</artifactId><version>${microjainslee.version}</version></dependency>
