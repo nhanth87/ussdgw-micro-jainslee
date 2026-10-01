@@ -49,9 +49,15 @@
         </Delete>
       </DefaultRolloverStrategy>
     </RollingFile>
+    <!--
+      CDR is a MACHINE LEDGER, not a human log: ussd-cdr.log is the source of truth the admin
+      ledger reads (CdrFileLedger). The timestamp lives in field 0 of each line, so the pattern
+      is bare %m%n — a %d prefix would prepend a second timestamp and break the parser.
+      Do not add level/thread/logger here: CdrFileLedger.parse() would reject the line.
+    -->
     <RollingFile name="CDR" fileName="${LOG_DIR}/ussd-cdr.log"
                  filePattern="${LOG_DIR}/ussd-cdr-%d{yyyy-MM-dd}-%i.log.gz">
-      <PatternLayout pattern="%d{yyyy-MM-dd HH:mm:ss.SSS} %m%n"/>
+      <PatternLayout pattern="%m%n"/>
       <Policies>
         <TimeBasedTriggeringPolicy/>
         <SizeBasedTriggeringPolicy size="${MAX_SIZE}"/>

@@ -75,6 +75,10 @@ public class SbbRegistrationSupport {
     public void bindEventMappings() {
         container.mapEventToSbb(Ss7MapEvent.Service.class, "MapUssdParentSbb");
         container.mapEventToSbb(Ss7MapEvent.Dialog.class, "MapUssdParentSbb");
+        // Every subtype of the sealed Ss7MapEvent needs a mapping. Without Error the MAP
+        // return-error is dropped and the dialog hangs to MAP_TIMEOUT (GMLC 2026-09-30).
+        container.mapEventToSbb(Ss7MapEvent.Error.class, "MapUssdParentSbb");
+        container.mapEventToSbb(Ss7MapEvent.Remote.class, "MapUssdParentSbb");
         container.mapEventToSbb(PullHttpEvent.class, "HttpClientSbb");
         container.mapEventToSbb(GatedAsNotifyEvent.class, "HttpClientSbb");
         container.mapEventToSbb(HttpCallbackCompletedEvent.class, "HttpClientSbb");

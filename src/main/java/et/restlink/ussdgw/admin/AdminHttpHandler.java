@@ -6,6 +6,7 @@ import et.restlink.ussdgw.bridge.AdaptiveTimeout;
 import et.restlink.ussdgw.bridge.UssdSagaCoordinator;
 import et.restlink.ussdgw.bridge.VirtualSessionBridge;
 import et.restlink.ussdgw.bridge.VirtualSessionStore;
+import et.restlink.ussdgw.cdr.CdrFileLedger;
 import et.restlink.ussdgw.cdr.CdrMenuTape;
 import et.restlink.ussdgw.cdr.CdrRecord;
 import et.restlink.ussdgw.cdr.CdrService;
@@ -68,6 +69,7 @@ public class AdminHttpHandler {
     @Inject UssdConfigService config;
     @Inject LinkStatusService linkStatus;
     @Inject CdrService cdr;
+    @Inject CdrFileLedger cdrFileLedger;
     @Inject VirtualSessionBridge bridge;
     @Inject VirtualSessionStore store;
     @Inject AdaptiveTimeout adaptive;
@@ -933,6 +935,13 @@ public class AdminHttpHandler {
             m.put("gated.asPushed", gatedAsNotify.pushed());
             m.put("gated.asSkipped", gatedAsNotify.skipped());
         }
+        if (cdrFileLedger != null) {
+            // File ledger health — the SoT for the CDR page. A non-zero dropped count means
+            // the ring overflowed (file still has every line; only the in-memory view is short).
+            m.put("cdr.file.recentEvents", cdrFileLedger.size());
+            m.put("cdr.file.dropped", cdrFileLedger.droppedCount());
+            m.put("cdr.file.warmed", cdrFileLedger.warmedCount());
+        }
         return HttpReply.json(200, m);
     }
 
@@ -1051,7 +1060,8 @@ public class AdminHttpHandler {
             appendCdrMenuTape(sb, dig.timelineOldestFirst());
             appendCdrSessionKeys(sb, r, dig, asUssdSnip, displayHuman, displayStatus);
             appendCdrAdvancedRaw(sb, r, dig, dig.timelineOldestFirst());
-            sb.append("<p class=\"cdr-gap-note\">6-hop spine folds events_json (no new persist). ")
+            sb.append("<p class=\"cdr-gap-note\">Source: file ledger logs/ussd-cdr.log; ")
+                    .append("6-hop spine folds the event tape (no new persist). ")
                     .append("AS USSD (~50) is the hero; GATE_ARMED is budget only. ")
                     .append("Multimenu: MS_DIGIT + CONTINUE gen= on menu tape; AS_DROP = dropped before MAP. ")
                     .append("Missing hops = SKIPPED. Slot 6 RED when AS text existed but MAP ")

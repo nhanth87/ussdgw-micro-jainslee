@@ -192,31 +192,53 @@ if [[ -f "$SCRIPT_DIR/dist-lib-README.md" ]]; then
   cp -f "$SCRIPT_DIR/dist-lib-README.md" "$DIST_ROOT/lib/README.md"
 fi
 
-# Quarkus Class-Path lists jainslee-api before jainslee-core. The api JAR ships a
-# stub ProfileAccessorInvoker that always throws UnsupportedOperationException;
-# core has the real impl (same FQCN). Without this shadow, Digicom POST /ussd dies
-# in VirtualSessionStore.put / CMP setXxx before NI park (ss7.live can still be true).
-shadow_profile_accessor_invoker() {
+# ADR 0004 (micro-jainslee): the ProfileAccessorInvoker split-package shadow is GONE.
+# It used to ship twice under one FQCN (a throwing stub in jainslee-api, the real body in
+# jainslee-core) and relied on classpath order, which Quarkus fast-jar inverted in prod —
+# so every CMP write died with UnsupportedOperationException and Digicom POST /ussd failed
+# in VirtualSessionStore.put before NI park (while ss7.live still read true).
+#
+# Now jainslee-api owns ONE delegating ProfileAccessorInvoker that resolves a
+# ProfileAccessorBridge, and jainslee-core publishes the implementation through
+# META-INF/services. So there is nothing to shadow — only to VERIFY, because the failure mode
+# is invisible until a profile write throws. Both checks below refuse the package if either
+# half of the bridge is missing.
+verify_profile_accessor_bridge() {
   local api core work
   api="$(find "${DIST_ROOT}/lib/main" -maxdepth 1 -type f -name 'com.microjainslee.jainslee-api-*.jar' | head -1 || true)"
   core="$(find "${DIST_ROOT}/lib/main" -maxdepth 1 -type f -name 'com.microjainslee.jainslee-core-*.jar' | head -1 || true)"
   if [[ -z "$api" || -z "$core" ]]; then
-    echo "error: missing jainslee-api or jainslee-core under lib/main (ProfileAccessorInvoker shadow)" >&2
+    echo "error: missing jainslee-api or jainslee-core under lib/main (ProfileAccessor bridge)" >&2
     exit 1
   fi
   work="$(mktemp -d)"
-  (cd "$work" && jar xf "$core" com/microjainslee/api/ProfileAccessorInvoker.class)
+  # 1) the api delegator must delegate, not throw UOE (that was the original stub)
+  (cd "$work" && jar xf "$api" com/microjainslee/api/ProfileAccessorInvoker.class)
   if ! javap -c -p "$work/com/microjainslee/api/ProfileAccessorInvoker.class" 2>/dev/null \
-      | grep -q 'ProfileFieldStoreLocator'; then
-    echo "error: core ProfileAccessorInvoker missing ProfileFieldStoreLocator (not the real impl?)" >&2
+      | grep -q 'ProfileAccessorBridge'; then
+    echo "error: api ProfileAccessorInvoker does not delegate to ProfileAccessorBridge (stale stub?)" >&2
     rm -rf "$work"
     exit 1
   fi
-  (cd "$work" && jar uf "$api" com/microjainslee/api/ProfileAccessorInvoker.class)
+  # 2) core must publish the SPI file — ServiceLoader only sees it from lib/main packs, never
+  #    from the ROOT app jar under fast-jar layering.
+  #    NOTE: capture the listing once. Under `set -o pipefail` a `unzip | grep -q` pipeline fails
+  #    even on a match, because grep -q exits at the first hit and unzip dies on SIGPIPE.
+  (cd "$work" && unzip -o -q "$core" 'META-INF/services/*' 'com/microjainslee/core/CoreProfileAccessorBridge.class')
+  if [[ ! -f "$work/META-INF/services/com.microjainslee.api.ProfileAccessorBridge" ]]; then
+    echo "error: jainslee-core is missing META-INF/services/com.microjainslee.api.ProfileAccessorBridge" >&2
+    rm -rf "$work"
+    exit 1
+  fi
+  if [[ ! -f "$work/com/microjainslee/core/CoreProfileAccessorBridge.class" ]]; then
+    echo "error: jainslee-core is missing CoreProfileAccessorBridge (SPI points at nothing)" >&2
+    rm -rf "$work"
+    exit 1
+  fi
   rm -rf "$work"
-  echo "  shadowed ProfileAccessorInvoker: $(basename "$core") → $(basename "$api")"
+  echo "  verified ProfileAccessor bridge: api delegator + core SPI (ADR 0004, no shadow needed)"
 }
-shadow_profile_accessor_invoker
+verify_profile_accessor_bridge
 
 src_app_jar="$(find "$QA/app" -maxdepth 1 -type f -name '*.jar' | head -1 || true)"
 if [[ -z "$src_app_jar" ]]; then

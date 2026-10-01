@@ -29,9 +29,17 @@ import org.apache.logging.log4j.Logger;
 import org.eclipse.microprofile.config.inject.ConfigProperty;
 
 /**
- * USSD CDR: file log ({@code USSD_CDR}, append-only) + session ledger upsert via
- * {@link CdrDbFlusher} ({@code ussd_cdr_session}, 1 corr → 1 row).
- * Hot path never blocks on DB when {@code ussd.cdr.db.async=true}.
+ * USSD CDR. The <b>file ledger is the source of truth</b>: every milestone emits one
+ * self-describing line to the {@code USSD_CDR} appender ({@code logs/ussd-cdr.log}) and lands in
+ * {@link CdrFileLedger}, which the admin ledger reads (filter before cap, 1 corr → 1 row).
+ *
+ * <p>The PostgreSQL session ledger ({@code ussd_cdr_session} via {@link CdrDbFlusher}) is an
+ * <b>opt-in legacy mirror</b> — {@code ussd.cdr.db.enabled}, default {@code false}. Tables and
+ * Flyway history are untouched either way, so nothing on a carrier host is dropped or migrated;
+ * re-enabling the mirror just writes the same rows again beside the file.
+ *
+ * <p>Hot path never blocks on disk or DB: file write is a Log4j async append, the ring push is
+ * lock-free, and {@code ussd.cdr.db.async=true} keeps the DB mirror off the MAP thread.
  */
 @ApplicationScoped
 public class CdrService {
@@ -43,11 +51,15 @@ public class CdrService {
     static final int LEGACY_SCAN_MULTIPLIER = 8;
 
     @Inject CdrDbFlusher flusher;
+    @Inject CdrFileLedger ledger;
     @Inject EntityManager em;
     @Inject DataSource dataSource;
 
     @ConfigProperty(name = "ussd.cdr.enabled", defaultValue = "true")
     boolean enabled;
+    /** File ledger is SoT; the PG session ledger is an opt-in legacy mirror. */
+    @ConfigProperty(name = "ussd.cdr.db.enabled", defaultValue = "false")
+    boolean dbEnabled;
     @ConfigProperty(name = "ussd.cdr.db.async", defaultValue = "true")
     boolean asyncDb;
     @ConfigProperty(name = "ussd.cdr.network-id", defaultValue = "0")
@@ -79,9 +91,6 @@ public class CdrService {
         String d = detail == null ? null : (detail.length() > 1000 ? detail.substring(0, 1000) : detail);
         String phaseName = phase == null ? "UNKNOWN" : phase.name();
         String st = status == null ? "UNKNOWN" : status;
-        String csv = formatCsv(correlationId, phaseName, msisdn, shortCode, st, d,
-                networkId, tenantId, gateMs, observedEwmaMs);
-        CDR.info(csv);
 
         Instant now = Instant.now();
         CdrEntity row = new CdrEntity();
@@ -104,9 +113,17 @@ public class CdrService {
         row.hopOutcome = clip(kv.get("hopOutcome"), 32);
         row.refuseReason = clip(kv.get("refuseReason"), 128);
         row.asUssd = clip(kv.get("asUssd"), 256);
-        row.csvLine = csv.length() > 4000 ? csv.substring(0, 4000) : csv;
+        row.csvLine = clip(CdrFileLedger.line(row), 4000);
         row.eventCount = 1;
 
+        // 1) durable file ledger (SoT) + 2) hot read model. Never blocks on disk.
+        CDR.info(row.csvLine);
+        ledger.append(row);
+
+        // 3) opt-in legacy PG mirror — off by default.
+        if (!dbEnabled) {
+            return;
+        }
         try {
             if (asyncDb) {
                 flusher.enqueue(row);
@@ -150,8 +167,10 @@ public class CdrService {
     /**
      * Admin list + optional status filter. Status: exact (case-insensitive) or trailing
      * {@code *} prefix ({@code MAP2MAP_*}, {@code GATED*}) — matches <em>rolled-up</em>
-     * session status (v1; event-status filter later).
-     * Dual-reads legacy {@code ussd_cdr} (DISTINCT newest per corr) when session row missing.
+     * session status.
+     *
+     * <p>Source is the {@link CdrFileLedger} file ledger (filter before cap). The legacy
+     * {@code ussd_cdr} dual-read only runs when the PG mirror is re-enabled.
      */
     @Transactional
     public List<CdrEntity> list(int limit, String tenantId, String msisdn, String correlationId,
@@ -162,10 +181,53 @@ public class CdrService {
         String corrFilter = normalizeCorrFilter(correlationId);
         StatusFilter stFilter = normalizeStatusFilter(status);
 
-        List<CdrEntity> sessions = querySessionLedger(lim, tid, msisdnFilter, corrFilter, stFilter);
+        List<CdrEntity> fromFile = ledger.sessions(lim, e -> matches(e, tid, msisdnFilter,
+                corrFilter, stFilter));
+        if (!dbEnabled) {
+            return fromFile;
+        }
+        List<CdrEntity> fromDb = querySessionLedger(lim, tid, msisdnFilter, corrFilter, stFilter);
         List<CdrEntity> legacy = queryLegacyDistinct(lim * LEGACY_SCAN_MULTIPLIER,
                 tid, msisdnFilter, corrFilter, stFilter);
-        return mergeSessionPreferring(sessions, legacy, lim);
+        return mergeSessionPreferring(fromFile, mergeSessionPreferring(fromDb, legacy, lim), lim);
+    }
+
+    /** Filter predicate over a rolled-up session — never over raw events, never before the cap. */
+    private static boolean matches(CdrEntity s, String tenantId, String msisdn, String corr,
+                                   StatusFilter status) {
+        if (s == null) {
+            return false;
+        }
+        if (tenantId != null && !tenantId.equals(trimOrEmpty(s.tenantId))) {
+            return false;
+        }
+        if (msisdn != null && !msisdn.equals(trimOrEmpty(s.msisdn))) {
+            return false;
+        }
+        if (corr != null && !corr.equals(trimOrEmpty(s.correlationId))) {
+            return false;
+        }
+        if (status != null) {
+            String st = trimOrEmpty(s.status).toUpperCase(Locale.ROOT);
+            if (status.prefix()) {
+                if (!st.startsWith(stripTrailingWildcard(status.pattern()))) {
+                    return false;
+                }
+            } else if (!st.equals(status.pattern())) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private static String trimOrEmpty(String v) {
+        return v == null ? "" : v.trim();
+    }
+
+    /** {@code LIKE} pattern suffix to a literal prefix: {@code MAP2MAP_%} → {@code MAP2MAP_}. */
+    private static String stripTrailingWildcard(String likePattern) {
+        String p = likePattern == null ? "" : likePattern;
+        return p.endsWith("%") ? p.substring(0, p.length() - 1) : p;
     }
 
     private List<CdrEntity> querySessionLedger(int lim, String tid, String msisdnFilter,

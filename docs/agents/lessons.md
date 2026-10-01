@@ -168,3 +168,70 @@ Short memory for Digicom footguns. Prefer this + OTA peer [`lessons.md`](../../.
 - Short-code match is **exact dial string**: `*804#` ≠ `*840#` (authorized Digicom INSERT `*840#` → same webhook 2026-08-08).
 - Quarkus Digicom patterns (thin): build-time `db-kind=postgresql` for ship / restore local h2; CDI `@Scheduled` bridge gate + AdaptiveTimeout park (no `Thread.sleep`); fail-closed NI without MSC; `/admin/status.json` for `ss7.live` — never invent UP from LISTEN.
 - Dated **2026-08-09 compile + Digicom redeploy**: JDK 25 → `db-kind=postgresql` package → restore `h2` → rsync jars/`lib`/`quarkus`/`app/html` only (never `configs/`) → restart → wait `:8088` `/admin/status.json` → prove `ss7.live` / `bridge.asyncGateMs` / jar (`GATE_ARMED`, new classes). **Copy-paste SoT:** [skills.md](skills.md) § Digicom compile + redeploy (do not rediscover host paths).
+- Dated **2026-08-23 sync from gmlc-microjainslee** (Monitor Hub / KPI / fast-jar deploy):
+  - **Rsync `quarkus/` + `lib/` TOGETHER with the app jar — always.** Quarkus fast-jar also loads app classes from `quarkus/transformed-bytecode.jar` + `generated-bytecode.jar`; a stale `quarkus/` shadows the new root jar (old code runs despite fresh jar mtime) or an H2-era `quarkus/` over a PG URL crash-loops with `Driver does not support jdbc:postgresql`. Jar-only rsync = forbidden. Prove boot from **log lines**, never mtime. (GMLC incident 2026-08-23: pack missing → then restart-loop.)
+  - **ServiceLoader cannot see `META-INF/services` inside the ROOT app jar** at boot (fast-jar layering) — only packs in `lib/main` are discovered. App-owned `RaAdminDashboardContributor` packs must be appended explicitly into `AdminDashboardRegistry` (merge TCCL + SPI CL + app CL, dedupe by raName). Reference: gmlc `AdminHttpHandler.buildHub()`.
+  - **Monitor Hub routing law**: route ALL hub paths (`isMonitorHubPath`: `/telemetry/*`, `/api/telemetry/*`, `/api/admin/dashboards`, `/admin/ra/**`, `/api/ra/**`, `/api/autonomous/*`) or RA tabs 404; **`/metrics` is NOT a hub path** — serve `port.scrape()` in-app; anonymous = inert static extensions only (GET/HEAD under `/telemetry/` + `/admin/ra/`), never dotted API paths; hub Overview polls `/admin/monitor-feed` every 1s.
+  - **Hub branding**: jainslee-monitor now takes `MonitorHandler(…, appName)` + `@@APP_NAME@@` token — pass your product name or the shell shows legacy "Digicom-ET USSDGW".
+  - **Protocol-KPI pattern** (reference gmlc `GmlcKpi` + `GmlcKpiContributor`): LongAdder map + `TelemetryPort.customCounter` mirrors (`gmlc_kpi_*` on `/metrics`) + own hub tab polling `/status.html`. Same shape works for USSDGW MAP2MAP/bridge counters if product asks for success/fail KPIs.
+  - Readiness probe nuance: `/admin/status.json` returns **401 anonymous** (HTTP up only); ready = **200 WITH admin key**.
+
+## 2026-10-02 — CDR moved to the file ledger + MAP returnError fixed (ported from gmlc / jain-slee)
+
+**CDR file ledger is now the source of truth.** `logs/ussd-cdr.log` was already written but nothing
+read it. Now `CdrFileLedger` (file = SoT, ring = hot read model) backs `/admin/cdr`.
+
+- **Filter before cap** (gmlc 2026-09-30, verbatim trap): a tenant page went empty because
+  `head(50)` ran *before* the tenant filter. `CdrFileLedger.sessions(limit, keep)` rolls a
+  correlation up and applies the predicate **first**, stopping only when `limit` *complete*
+  correlations have matched. A correlation is complete only when a different one is seen — never
+  roll up half a session or stop before its first event. Test:
+  `CdrFileLedgerTest.tenantFilterRunsBeforeTheRowCap`. Live prove: 61 corrs, oldest (position 1)
+  still returned by `?corr=` and by `?msisdn=` under `limit=50`.
+- **Line format v1** — instant in **field 0**, so the CDR appender pattern is bare `%m%n`. Adding a
+  `%d` prefix would prepend a second timestamp and **every line would fail to parse**. Header line
+  (`# ussdgw-cdr v1 …`) is written at boot so rotation keeps the contract; parsers skip `#`.
+- **Escaping is load-bearing**: `detail` is the pipe-delimited `k=v` digest `CdrSessionDigest` parses
+  and `asUssd` is arbitrary AS text — both may contain `|`. Those fields escape `\|` / `\\`
+  (`splitEscaped`); identifier fields sanitize `|` → `/`. CR/LF → space, always: a raw newline
+  corrupts a line ledger. `parse()` still understands the pre-v1 `%d`-prefixed 10-field line so
+  rolled files written before the upgrade still render.
+- **`ussd.cdr.db.enabled` default `false`** — the PG `ussd_cdr_session` mirror is opt-in. Tables and
+  **Flyway history untouched** (V1–V13, `UssdSchemaInitializer.REQUIRED_TABLES` still lists both
+  tables, so boot stays fail-closed on a missing table). No DROP, no migration, nothing to reverse
+  on Digicom. Re-enable the mirror only if something downstream reads it via SQL.
+- Ring overflow drops **oldest** and counts it — `cdr.file.dropped` in `/admin/status.json` is
+  non-zero ⇒ file still has every line, only the in-memory view is short. `cdr.file.warmed` proves
+  the restart re-read the file (a restart must not show an empty page).
+- `AdminHttpHandler` needed **zero** changes to the CDR page: `CdrService.list/listRecords/timelineFor`
+  kept their signatures, so spine / menu tape / AS-hero all still work off `events_json`.
+
+**MAP returnError was silently dropped** (gmlc 2026-09-30, ported). `Ss7MapEvent` is a **sealed**
+interface with four subtypes — `Service`, `Dialog`, **`Error`**, `Remote`. Only two were mapped in
+`SbbRegistrationSupport` and branched in `MapUssdParentSbb.onEvent`, so a TS 29.002 returnError
+(`absentSubscriber`, `error 52 unauthorizedRequestingNetwork`) **never reached the SBB**: the dialog
+sat until the network deadline and the CDR showed `MAP_TIMEOUT` instead of the real refusal.
+Fix: map + branch `Error` (fail the saga fast, CDR `MAP_RETURN_ERROR`, end MS-facing leg with the
+hard-fail text / abort otherwise) and `Remote` (log honestly, never swallow). Test:
+`MapReturnErrorSbbTest` — including a guard that the permitted subtypes stay 4.
+**Rule: every subtype of a sealed RA event needs a mapping AND a branch. "ignored" in
+`SleeEventTrace` is a smell, not a no-op.**
+
+**`package-dist.sh` ProfileAccessorInvoker shadow is obsolete** (ADR 0004 in micro-jainslee). The
+split-package trick (throwing stub in `jainslee-api`, real body in `jainslee-core`, relying on
+classpath order that fast-jar inverted) is gone — `jainslee-api` now owns ONE delegating invoker
+resolving a `ProfileAccessorBridge`, published by core via `META-INF/services`. The script's old
+check hunted a class that no longer exists and **failed the whole package**. Replaced by
+`verify_profile_accessor_bridge`: asserts the api class delegates (not a UOE stub), that core ships
+the SPI file, and that core ships `CoreProfileAccessorBridge`. Do **not** re-add the shadow.
+Footgun inside that check: under `set -o pipefail`, `unzip -l … | grep -q` **fails even on a
+match** (grep exits at first hit, unzip dies on SIGPIPE) — extract to a temp dir and test the file.
+
+**Lab prove recipe** (dist is baked `h2`, `dist/configs` ships `postgresql`): `run.sh` hardcodes its
+own `-Dquarkus.config.locations` **after** `${JAVA_OPTS}`, so env/`JAVA_OPTS` overrides lose. Copy
+`dist/configs/application.properties` to a scratch dir with `db-kind=h2` + a `jdbc:h2:file:` URL,
+then launch `quarkus-run.jar` directly with `-Dquarkus.config.locations` pointing at it. Never edit
+`dist/configs` to make a local run work.
+
+## Synced from workspace (2026-09-18)
+Cross-project footguns added to workspace [`docs/agents/lessons.md`](../../../../../docs/agents/lessons.md) from the OTA P1 SMSC-GW build — **do not paste, link**: Quarkus `@ConfigProperty(defaultValue="")` boot-breaker → `Optional<String>`; Claude Code worktree-agents branch from a stale base under uncommitted WIP (commit clean base / salvage-and-reapply); **parallel subagents share one session rate-limit** (prefer sequential in-tree); auto-mode classifier blocks remote-shell/prod-DB/inline-credential writes; Iran L2TP ship = **sequential** rsync (parallel deadlocks).

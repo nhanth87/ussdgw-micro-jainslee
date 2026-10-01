@@ -82,6 +82,27 @@ public final class MapUssdParentSbb implements Sbb, SleeEventHandler {
             SleeEventTrace.outSbb("MapUssdParentSbb", event, detail);
             return;
         }
+        if (event instanceof Ss7MapEvent.Error err) {
+            SleeEventTrace.inSbb("MapUssdParentSbb", event,
+                    "error=" + err.errorName() + " dialogId=" + err.dialogId());
+            String detail;
+            try {
+                detail = handleError(err);
+            } catch (Throwable t) {
+                detail = "error=" + t.getClass().getSimpleName() + " " + endDialogOnFailure(err);
+            }
+            SleeEventTrace.outSbb("MapUssdParentSbb", event, detail);
+            return;
+        }
+        if (event instanceof Ss7MapEvent.Remote remote) {
+            // ADR 0007 D2 cross-node summary. Single-node deployments never see it; log honestly
+            // rather than dropping it, so an active/active gap is visible instead of silent.
+            SleeEventTrace.inSbb("MapUssdParentSbb", event,
+                    "remote type=" + remote.typeName() + " dialogId=" + remote.dialogId());
+            SleeEventTrace.outSbb("MapUssdParentSbb", event,
+                    "remote-not-handled type=" + remote.typeName());
+            return;
+        }
         if (!(event instanceof Ss7MapEvent.Service svc)) return;
         SleeEventTrace.inSbb("MapUssdParentSbb", event, "type=" + svc.type());
         String detail;
@@ -91,6 +112,70 @@ public final class MapUssdParentSbb implements Sbb, SleeEventHandler {
             detail = "error=" + t.getClass().getSimpleName() + " " + endDialogOnFailure(svc);
         }
         SleeEventTrace.outSbb("MapUssdParentSbb", event, detail);
+    }
+
+    /**
+     * MAP return-error (TS 29.002 error, e.g. {@code absentSubscriber}, {@code error 52
+     * unauthorizedRequestingNetwork}). Previously this subtype was not dispatched at all: the
+     * dialog sat until the network deadline and the CDR showed {@code MAP_TIMEOUT} instead of
+     * the real refusal (GMLC 2026-09-30 lesson). Every subtype of the sealed {@code Ss7MapEvent}
+     * must have a branch — "ignored" in {@code SleeEventTrace} is a smell.
+     *
+     * <p>Fails the saga fast: CDR the real error, release the pending MAP2MAP hop, end the
+     * MS-facing leg with the hard-fail text, abort anything that is not waiting on a handset.
+     */
+    private String handleError(Ss7MapEvent.Error err) {
+        String name = err.errorName() == null || err.errorName().isBlank()
+                ? "MAP_ERROR" : err.errorName();
+        String dialogId = err.dialogId();
+        // Outbound hop leg: fail the pending MAP2MAP hop (the inbound MO dialog is separate).
+        var m2m = svc().pendingMap2Map().take(dialogId);
+        if (m2m.isPresent()) {
+            String hop = PendingMap2MapRegistry.outboundCorr(m2m.get().req().correlationId());
+            svc().map2MapCompletion().cancelDeferredHopClose(hop);
+            String detail = onMap2MapDialogLost(m2m.get().req(), name,
+                    "mapReturnError " + name);
+            return "map2map-hop-error error=" + name + " " + detail;
+        }
+        Optional<VirtualSession> inbound = dialogId == null || dialogId.isBlank()
+                ? Optional.empty() : svc().store().byDialogId(dialogId);
+        if (inbound.isPresent()) {
+            VirtualSession s = inbound.get();
+            try {
+                svc().cdr().write(s.correlationId(), CdrPhase.FAILED, s.msisdn(), s.shortCode(),
+                        "MAP_RETURN_ERROR",
+                        "error=" + name + " invokeId=" + err.invokeId()
+                                + " detail=" + err.detail(),
+                        s.networkId(), s.tenantId(),
+                        s.originationType() == null ? "MAP" : s.originationType().name(),
+                        null, null);
+            } catch (Throwable ignored) { }
+        }
+        String ended = endDialogOnFailure(err);
+        svc().bridge().onNetworkAbort(dialogId);
+        return "map-return-error error=" + name + " dialogId=" + dialogId + " " + ended;
+    }
+
+    /**
+     * A MAP return-error ends the leg: reply+end when the handset is waiting on this dialog,
+     * otherwise abort (never reply — there is no MS invoke id).
+     */
+    private String endDialogOnFailure(Ss7MapEvent.Error err) {
+        String dialogId = err.dialogId();
+        if (dialogId == null || dialogId.isBlank()) return "no-dialog";
+        try {
+            long invokeId = err.invokeId() == null ? -1L : err.invokeId();
+            if (invokeId >= 0) {
+                MapDialogHelper.replyAndEnd(ss7, dialogId, invokeId, hardFailMessage());
+                return "dialog-ended";
+            }
+            MapDialogHelper.abort(ss7, dialogId);
+            return "dialog-aborted";
+        } catch (Throwable t) {
+            return "dialog-end-failed=" + t.getClass().getSimpleName();
+        } finally {
+            markDialogDead(dialogId);
+        }
     }
 
     /**
