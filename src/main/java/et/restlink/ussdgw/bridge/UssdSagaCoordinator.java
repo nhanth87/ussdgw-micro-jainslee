@@ -11,6 +11,7 @@ import com.microjainslee.api.RaCommandPort;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 
+import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Supplier;
@@ -69,24 +70,42 @@ public class UssdSagaCoordinator {
     }
 
     private void compensate(VirtualSession s, String reason, boolean useWaitMessage) {
+        String corr = s.correlationId();
         LOG.warn("Saga compensate corr={} state={} reason={} shortCode={} hopOutstanding={}",
-                s.correlationId(), s.state(), reason,
+                corr, s.state(), reason,
                 s.shortCode() == null || s.shortCode().isBlank() ? "-" : s.shortCode(),
                 s.map2mapHopOutstanding());
         // MAP2MAP: never hard-end MO while outbound hop is still outstanding (Brook gsm_map
         // view looks like "returnResultLast without hop response" when Abort is filtered out —
         // Abort must clear hopOutstanding first via onMap2MapDialogLost).
-        if (s.map2mapHopOutstanding() && s.originationType() == OriginationType.MAP) {
+        // Re-read: the snapshot may predate a concurrent hop clear.
+        boolean hopOutstanding = s.map2mapHopOutstanding()
+                || store.get(corr).map(VirtualSession::map2mapHopOutstanding).orElse(false);
+        if (hopOutstanding && s.originationType() == OriginationType.MAP) {
             LOG.warn("Saga compensate deferred — MAP2MAP hop still outstanding corr={} reason={}",
-                    s.correlationId(), reason);
-            cdr.write(s.correlationId(), CdrPhase.S1_ACTIVE, s.msisdn(), s.shortCode(),
+                    corr, reason);
+            cdr.write(corr, CdrPhase.S1_ACTIVE, s.msisdn(), s.shortCode(),
                     "MAP2MAP_MO_HOLD",
                     "service=UssdSagaCoordinator|hopOutstanding|reason=" + reason,
                     s.networkId(), s.tenantId(), s.originationType().name(),
                     s.gateMs() > 0 ? s.gateMs() : null, observedEwmaMs(s.networkId()));
             return;
         }
-        if (s.originationType() == OriginationType.MAP && s.dialogAlive()) {
+        // CAS-law: win the terminal transition before any MAP emit — a pull failure
+        // racing the gate must not produce two MAP replies.
+        Optional<VirtualSession> won = store.compareAndTransitionAny(corr,
+                List.of(VirtualSessionState.AWAITING_AS,
+                        VirtualSessionState.ACTIVE,
+                        VirtualSessionState.PUSH_PENDING,
+                        VirtualSessionState.RESPONDING),
+                VirtualSessionState.FAILED);
+        if (won.isEmpty()) {
+            LOG.info("Saga compensate lost CAS (already terminal/owned) corr={} reason={}",
+                    corr, reason);
+            return;
+        }
+        VirtualSession cur = won.get();
+        if (cur.originationType() == OriginationType.MAP && cur.dialogAlive()) {
             RaCommandPort port = ss7();
             if (useWaitMessage) {
                 // Empty/HTTP AS body is a hard AS failure — not AdaptiveTimeout gate expiry.
@@ -94,20 +113,18 @@ public class UssdSagaCoordinator {
                 String text = isHardAsFailure(reason)
                         ? hardFailMessage()
                         : config.asyncWaitMessage();
-                MapDialogHelper.replyAndEnd(port, s.dialogId(), s.invokeId(), text);
+                MapDialogHelper.replyAndEnd(port, cur.dialogId(), cur.invokeId(), text);
             } else {
-                MapDialogHelper.abort(port, s.dialogId());
+                MapDialogHelper.abort(port, cur.dialogId());
             }
-            s.setDialogAlive(false);
+            store.setDialogAlive(corr, false);
         }
-        s.setState(VirtualSessionState.FAILED);
-        store.put(s);
-        store.remove(s.correlationId());
-        Long gate = s.gateMs() > 0 ? s.gateMs() : null;
-        cdr.write(s.correlationId(), CdrPhase.FAILED, s.msisdn(), s.shortCode(),
+        store.remove(corr);
+        Long gate = cur.gateMs() > 0 ? cur.gateMs() : null;
+        cdr.write(corr, CdrPhase.FAILED, cur.msisdn(), cur.shortCode(),
                 reason, "service=UssdSagaCoordinator saga-compensate",
-                s.networkId(), s.tenantId(), s.originationType().name(),
-                gate, observedEwmaMs(s.networkId()));
+                cur.networkId(), cur.tenantId(), cur.originationType().name(),
+                gate, observedEwmaMs(cur.networkId()));
     }
 
     private static boolean isHardAsFailure(String reason) {
@@ -128,7 +145,7 @@ public class UssdSagaCoordinator {
         } catch (RuntimeException ignored) {
             // fall through
         }
-        return "ማው ማውማው ማውማው ማውማው ማው";
+        return et.restlink.ussdgw.config.UssdConfigService.DEFAULT_HARD_FAIL_MESSAGE;
     }
 
     private Long observedEwmaMs(int networkId) {

@@ -42,6 +42,16 @@ public class AsPullStateRegistry {
      * @return the stored state, or empty when the registry is saturated (caller must fail the pull)
      */
     public Optional<AsPullState> open(String correlationId, AsPullTarget target, long nowMs) {
+        return open(correlationId, target, nowMs, 0);
+    }
+
+    /**
+     * Same, capturing the session generation at send time (P2-1 ABA guard): a slow
+     * response stamped to its own turn loses the claim once the session moved on,
+     * instead of being applied to the next turn.
+     */
+    public Optional<AsPullState> open(String correlationId, AsPullTarget target, long nowMs,
+                                      int generation) {
         String key = key(correlationId);
         if (key == null || target == null) {
             return Optional.empty();
@@ -53,7 +63,7 @@ public class AsPullStateRegistry {
                 return Optional.empty();
             }
         }
-        AsPullState state = new AsPullState(key, target, nowMs, 0, nowMs + ttlMs());
+        AsPullState state = new AsPullState(key, target, nowMs, 0, nowMs + ttlMs(), generation);
         inFlight.put(key, state);
         return Optional.of(state);
     }

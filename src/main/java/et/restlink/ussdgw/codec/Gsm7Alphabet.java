@@ -59,6 +59,16 @@ public final class Gsm7Alphabet {
         return n;
     }
 
+    /**
+     * P2-4: septet count for a single character. Returns 1 for basic, 2 for extension,
+     * -1 for non-GSM (not encodable).
+     */
+    public static int septetsFor(char c) {
+        if (inBasic(c)) return 1;
+        if (inExtension(c)) return 2;
+        return -1;
+    }
+
     public static byte basicSeptet(char c) {
         int idx = BASIC.indexOf(c);
         if (idx < 0) throw new IllegalArgumentException("not in GSM basic: U+" + Integer.toHexString(c));

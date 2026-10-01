@@ -101,7 +101,7 @@ public class AdaptiveTimeout {
         if (key == null) {
             return;
         }
-        trimMsisdnIfNeeded();
+        // P2-3: trim moved to scheduler (30s tick) — hot path must not scan 8k entries.
         applySample(perMsisdn.computeIfAbsent(key, k -> new Ewma()), latencyMs, maxSampleMs);
     }
 
@@ -114,7 +114,7 @@ public class AdaptiveTimeout {
         if (key == null || observedMs <= 0L) {
             return false;
         }
-        trimMsisdnIfNeeded();
+        // P2-3: trim moved to scheduler (30s tick) — hot path must not scan 8k entries.
         Ewma e = perMsisdn.computeIfAbsent(key, k -> new Ewma());
         synchronized (e) {
             if (e.seeded && !isStale(e, System.nanoTime())) {
@@ -358,18 +358,26 @@ public class AdaptiveTimeout {
         return weight * e.valueMs + (1 - weight) * configuredGate;
     }
 
-    private void trimMsisdnIfNeeded() {
+    /**
+     * P2-3: trim stale per-MSISDN EWMA entries. Called from the scheduler (30s tick)
+     * instead of the hot path, so recordLatency/seedObserved never scan 8k entries.
+     * Drops unseeded / stale entries first; if still over bound, drops an arbitrary entry.
+     */
+    public int trimMsisdn() {
         if (perMsisdn.size() < MAX_MSISDN_ENTRIES) {
-            return;
+            return 0;
         }
+        int dropped = 0;
         long now = System.nanoTime();
         for (Map.Entry<String, Ewma> e : perMsisdn.entrySet()) {
             Ewma v = e.getValue();
             if (v == null || !v.seeded || isStale(v, now)) {
-                perMsisdn.remove(e.getKey(), v);
+                if (perMsisdn.remove(e.getKey(), v)) {
+                    dropped++;
+                }
             }
             if (perMsisdn.size() < MAX_MSISDN_ENTRIES) {
-                return;
+                return dropped;
             }
         }
         // Still over bound — drop an arbitrary entry (temporary profile; not durable SoT).
@@ -377,7 +385,9 @@ public class AdaptiveTimeout {
         if (it.hasNext()) {
             it.next();
             it.remove();
+            dropped++;
         }
+        return dropped;
     }
 
     /** Digits-only MSISDN key; null when blank / no digits. */

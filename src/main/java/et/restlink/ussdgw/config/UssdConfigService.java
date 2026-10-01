@@ -14,6 +14,14 @@ import java.util.Optional;
  */
 @ApplicationScoped
 public class UssdConfigService {
+    /**
+     * P2-5: default hard-fail message sent to UE when AS pull fails / gate expires / no session.
+     * Extracted to a constant so all 5 classes (UssdSagaCoordinator, BridgeGateScheduler,
+     * MapUssdParentSbb, Map2MapSbb, UssdConfigService) share one source of truth.
+     * Operator can override via {@code ussd.bridge.async-hard-fail-message} config.
+     */
+    public static final String DEFAULT_HARD_FAIL_MESSAGE = "ማው ማውማው ማውማው ማውማው ማው";
+
     @Inject RuntimeConfigStore store;
 
     @ConfigProperty(name = "ussd.admin.api-key", defaultValue = "ussd-admin")
@@ -31,7 +39,7 @@ public class UssdConfigService {
     @ConfigProperty(name = "ussd.bridge.async-wait-message", defaultValue = "Please wait...")
     String asyncWaitMessageProp;
     @ConfigProperty(name = "ussd.bridge.async-hard-fail-message",
-            defaultValue = "ማው ማውማው ማውማው ማውማው ማው")
+            defaultValue = DEFAULT_HARD_FAIL_MESSAGE)
     String asyncHardFailMessageProp;
     @ConfigProperty(name = "ussd.bridge.http-client-enabled", defaultValue = "true")
     boolean httpClientBridgeEnabledProp;
@@ -75,6 +83,12 @@ public class UssdConfigService {
     boolean httpNiAuthRequiredProp = true;
     @ConfigProperty(name = "ussd.http.ni.default-network-id", defaultValue = "0")
     int httpNiDefaultNetworkIdProp;
+    /**
+     * NI Request UI budget (D3 = 120s). Field initialiser mirrors
+     * {@code defaultValue} so a non-CDI instantiation behaves too.
+     */
+    @ConfigProperty(name = "ussd.ni.request-ui-timeout-ms", defaultValue = "120000")
+    long niRequestUiTimeoutMsProp = 120_000L;
 
     @ConfigProperty(name = "ussd.sri.pending-ttl-ms", defaultValue = "30000")
     long sriPendingTtlMsProp = 30_000L;
@@ -251,6 +265,20 @@ public class UssdConfigService {
     /** networkId for NI ingress when the authenticated principal carries none (admin key). */
     public int httpNiDefaultNetworkId() {
         return integer(RuntimeConfigStore.Keys.HTTP_NI_DEFAULT_NETWORK_ID, httpNiDefaultNetworkIdProp);
+    }
+
+    /**
+     * NI Request UI budget (P1-1): how long a park whose outstanding MAP op awaits
+     * UE input may live. Clamped to the dialog timeout so the park never outlives
+     * the MAP leg it is waiting on.
+     */
+    public long niRequestUiTimeoutMs() {
+        long ui = lng(RuntimeConfigStore.Keys.NI_REQUEST_UI_TIMEOUT_MS,
+                niRequestUiTimeoutMsProp);
+        if (ui <= 0) {
+            return dialogTimeoutMs();
+        }
+        return Math.min(ui, dialogTimeoutMs());
     }
 
     /** TTL for a NI push awaiting its own SRI-SM Response before the saga fails. */

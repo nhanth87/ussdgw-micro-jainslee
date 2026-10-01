@@ -98,6 +98,8 @@ public class AdminHttpHandler {
     @Inject PendingMap2MapRegistry pendingMap2Map;
     @Inject GatedAsNotifyService gatedAsNotify;
     @Inject AppTelemetry appTelemetry;
+    @Inject et.restlink.ussdgw.bridge.GatedSessionRegistry gatedSessions;
+    @Inject et.restlink.ussdgw.api.classic.ClassicNiHttpPark niHttpPark;
 
     /**
      * {@code Secure} on the admin session cookie. Defaults to on; the plain-HTTP Digicom lab
@@ -589,6 +591,20 @@ public class AdminHttpHandler {
         if (gatedAsNotify != null) {
             m.put("gated.asPushed", gatedAsNotify.pushed());
             m.put("gated.asSkipped", gatedAsNotify.skipped());
+        }
+        if (gatedSessions != null) {
+            try {
+                m.put("bridge.gated.size", gatedSessions.size());
+            } catch (RuntimeException ignored) {
+                // best-effort telemetry
+            }
+        }
+        if (niHttpPark != null) {
+            try {
+                m.put("ni.park.size", niHttpPark.size());
+            } catch (RuntimeException ignored) {
+                // best-effort telemetry
+            }
         }
         return m;
     }

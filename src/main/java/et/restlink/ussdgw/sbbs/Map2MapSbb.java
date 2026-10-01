@@ -181,7 +181,7 @@ public final class Map2MapSbb implements Sbb, SleeEventHandler {
             String msg = svc().config().asyncHardFailMessage();
             if (msg != null && !msg.isBlank()) return msg;
         } catch (Throwable ignored) { }
-        return "ማው ማውማው ማውማው ማውማው ማው";
+        return et.restlink.ussdgw.config.UssdConfigService.DEFAULT_HARD_FAIL_MESSAGE;
     }
 
     private void writeCdr(Map2MapRequestEvent req, CdrPhase phase, String status, String detail) {
