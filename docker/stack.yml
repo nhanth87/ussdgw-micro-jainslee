@@ -62,7 +62,23 @@ secrets:
 services:
 
   postgres:
-    image: postgres:16@sha256:2c72031ac25606bf94fd2fece7c35efdf263a48b08446950034f0725653f4efc
+    # NOT the stock upstream postgres image. docker/postgres/Dockerfile layers in
+    # two things this service cannot work without:
+    #
+    #   * docker/postgres/initdb/01-ussdgw.sh — creates the `ussdgw` role and the
+    #     dedicated `ussdgw` database. Without it the gateway connects as
+    #     username=ussdgw and PostgreSQL answers
+    #     `FATAL: role "ussdgw" does not exist`, so the gateway cannot start.
+    #
+    #   * postgresql.conf, which pins listen_addresses to 127.0.0.1. The upstream
+    #     image ships listen_addresses = '*' so that -p publishing works; on hostnet
+    #     there is no publishing step to mask it, so 5432 would bind on every
+    #     interface of a carrier host.
+    #
+    # The default names the image docker/build/build-images.sh builds, and that script
+    # asserts both properties inside the image before reporting success. Overriding
+    # POSTGRES_IMAGE back to a bare `postgres:16` reinstates both faults.
+    image: ${POSTGRES_IMAGE:-ussdgw-postgres:latest}
     networks: [hostnet]
     volumes:
       - pgdata:/var/lib/postgresql/data
