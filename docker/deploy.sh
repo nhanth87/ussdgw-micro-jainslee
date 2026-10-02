@@ -239,11 +239,25 @@ if [[ "$MODE_BUILD" == 1 || "$MODE_DEPLOY" == 1 ]]; then
   HEAD_SHA="$(git rev-parse HEAD 2>/dev/null || true)"
   if [[ -z "$BUILT_SHA" ]]; then
     warn "cannot read sources.ussdgw from ussdgw:$TAG — provenance unverified for this run"
-  elif [[ "$BUILT_SHA" != "$HEAD_SHA" && -z "$DIRTY" ]]; then
-    die "image ussdgw:$TAG says it was built from ${BUILT_SHA:0:12} but HEAD is ${HEAD_SHA:0:12}.
-     Never relabel: rebuild, or check out the SHA the image names."
   else
-    info "provenance: ussdgw:$TAG ← ${BUILT_SHA:0:12} (HEAD ${HEAD_SHA:0:12})"
+    # 1. the tag must NAME the commit the image was built from (no relabelling)
+    TAG_SHA="$(git rev-parse --verify -q "${TAG}^{commit}" 2>/dev/null || true)"
+    if [[ -n "$TAG_SHA" && "$TAG_SHA" != "$BUILT_SHA" ]]; then
+      die "ussdgw:$TAG was built from ${BUILT_SHA:0:12} but the tag names ${TAG_SHA:0:12} — a relabelled image.
+     Rebuild, or check out ${BUILT_SHA:0:12} and retag."
+    fi
+    # 2. HEAD may legitimately have moved on since the build (a docs-only merge does not
+    #    change the binary). That is a warning, but only if no application source differs.
+    if [[ "$BUILT_SHA" != "$HEAD_SHA" ]]; then
+      if git diff --quiet "$BUILT_SHA" HEAD -- src pom.xml build/package-dist.sh docker/build 2>/dev/null; then
+        warn "HEAD (${HEAD_SHA:0:12}) is past the built SHA (${BUILT_SHA:0:12}) but no application source differs — docs/config only"
+      else
+        die "HEAD (${HEAD_SHA:0:12}) has application changes that are NOT in ussdgw:$TAG (built ${BUILT_SHA:0:12}).
+     Rebuild (drop --skip-build), or deploy the tag that matches HEAD."
+      fi
+    else
+      info "provenance: ussdgw:$TAG ← ${BUILT_SHA:0:12} == HEAD"
+    fi
   fi
 fi
 
