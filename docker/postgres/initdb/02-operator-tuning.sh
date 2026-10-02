@@ -30,8 +30,12 @@
 # one file to edit. Guarded by a marker so a re-run cannot append it twice.
 set -euo pipefail
 
-TUNING=/etc/postgresql/postgresql.conf
-PGCONF="${PGDATA}/postgresql.conf"
+# Overridable only so the hook can be exercised in isolation; initdb always runs it
+# with no TUNING in the environment, and the default is the file the Dockerfile
+# installs. A stale TUNING exported by a parent shell would otherwise be ignored,
+# which is exactly the kind of silent substitution this hook is meant to rule out.
+TUNING="${TUNING:-/etc/postgresql/postgresql.conf}"
+PGCONF="${PGCONF:-${PGDATA:?PGDATA is not set}/postgresql.conf}"
 MARKER="# >>> ussdgw operator tuning (from $TUNING) >>>"
 
 if [[ ! -r "$TUNING" ]]; then
