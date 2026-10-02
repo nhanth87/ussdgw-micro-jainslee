@@ -64,10 +64,16 @@ ok "creating $DATA_ROOT (uid 10001)"
 mkdir -p "$DATA_ROOT"/{configs,configs/ss7-persist,logs,data,pgdata,nginx/certs,backup}
 chown -R 10001:10001 "$DATA_ROOT"/{configs,logs,data}
 chown -R 999:999 "$DATA_ROOT"/pgdata        # postgres uid in the official image
-chmod 775 "$DATA_ROOT"/{configs,logs,data} "$DATA_ROOT"/pgdata
+chmod 775 "$DATA_ROOT"/{configs,logs,data}
 # The admin UI saves SS7 stack JSON back into configs/ — it must stay writable.
 chmod 775 "$DATA_ROOT/configs" "$DATA_ROOT/configs/ss7-persist"
-ok "directories ready; configs/ is rw (the admin UI writes stack JSON)"
+# pgdata is NOT 775. It holds the database, and the official entrypoint sets the real
+# PGDATA ($DATA_ROOT/pgdata/pgdata) to 0700 itself — initdb refuses a data directory
+# with group or world access. A loose parent does not break initdb, but it does let any
+# local user create files inside the directory tree that holds the USSD database, and
+# "775 because the neighbours are 775" is how a directory ends up world-writable.
+chmod 700 "$DATA_ROOT"/pgdata
+ok "directories ready; configs/ is rw (the admin UI writes stack JSON), pgdata is 700"
 
 # nginx/certs belongs to a DIFFERENT uid than the rest of the tree: the edge proxy
 # runs as 101 (nginx in the official image), not 10001. This directory used to be
