@@ -91,19 +91,35 @@ COPY --chown=10001:10001 dist/run.sh             "$APP_HOME/run.sh"
 COPY --chown=10001:10001 dist/.baked-db-kind      "$APP_HOME/.baked-db-kind"
 COPY --chown=10001:10001 docker/ussdgw/entrypoint.sh "$APP_HOME/entrypoint.sh"
 
+# Liveness probe. Root-owned and world-executable on purpose: the container runs as uid
+# 10001, and HEALTHCHECK executes as that user. docker/stack.yml points at this same path so
+# there is exactly one implementation of the probe — see the script header for why the
+# previous inline `curl -H "X-USSD-Admin-Key: ${USSD_ADMIN_API_KEY:-}"` version killed a
+# healthy gateway every start-period.
+COPY docker/ussdgw/healthcheck.sh /usr/local/bin/ussdgw-healthcheck.sh
+
 # Audit trail inside the image: which SHAs produced this artifact (plan.md §7).
 COPY --chown=10001:10001 out/BUILD-INFO.json      "$APP_HOME/BUILD-INFO.json"
 
-RUN chmod +x "$APP_HOME/run.sh" "$APP_HOME/entrypoint.sh" \
- && test -d "$APP_HOME/lib/main" || { echo "dist incomplete: lib/main missing"; exit 1; } \
- && test -f "$APP_HOME/ussdgw-app.jar" || { echo "dist incomplete: ussdgw-app.jar missing"; exit 1; } \
- && test -f "$APP_HOME/quarkus-run.jar" || { echo "dist incomplete: quarkus-run.jar missing"; exit 1; } \
- && if find "$APP_HOME/app" -name '*.jar' | grep -q .; then \
+# `set -eu` with one statement per line, NOT a long `A && B || msg && C || msg2` chain: in
+# that chain the `||` groups bind left-associatively to whatever precedes them, so an early
+# failure prints a later check's message. A wrong diagnosis is worse than none when the only
+# thing you can see is a build log line.
+RUN set -eu; \
+    chmod +x "$APP_HOME/run.sh" "$APP_HOME/entrypoint.sh"; \
+    chmod 0755 /usr/local/bin/ussdgw-healthcheck.sh \
+      || { echo "cannot chmod the healthcheck probe"; exit 1; }; \
+    sh -n /usr/local/bin/ussdgw-healthcheck.sh \
+      || { echo "ussdgw-healthcheck.sh has a shell syntax error — Swarm would kill a healthy gateway"; exit 1; }; \
+    test -d "$APP_HOME/lib/main" || { echo "dist incomplete: lib/main missing"; exit 1; }; \
+    test -f "$APP_HOME/ussdgw-app.jar" || { echo "dist incomplete: ussdgw-app.jar missing"; exit 1; }; \
+    test -f "$APP_HOME/quarkus-run.jar" || { echo "dist incomplete: quarkus-run.jar missing"; exit 1; }; \
+    if find "$APP_HOME/app" -name '*.jar' | grep -q .; then \
       echo "dist invalid: jars under app/ — app/ is UI-only"; exit 1; \
-    fi \
- && test "$(cat "$APP_HOME/.baked-db-kind")" = postgresql \
-      || { echo "REFUSING: image is not PG-baked ($(cat "$APP_HOME/.baked-db-kind")) — crash-loop on a PG host"; exit 1; } \
- && "$JAVA_HOME/bin/java" -version 2>&1 | grep -q 'version "25' \
+    fi; \
+    test "$(cat "$APP_HOME/.baked-db-kind")" = postgresql \
+      || { echo "REFUSING: image is not PG-baked ($(cat "$APP_HOME/.baked-db-kind")) — crash-loop on a PG host"; exit 1; }; \
+    "$JAVA_HOME/bin/java" -version 2>&1 | grep -q 'version "25' \
       || { echo "refusing: runtime is not Java 25"; exit 1; }
 
 # Exactly ONE version of each in-house artifact may ship.
@@ -134,9 +150,12 @@ EXPOSE 8088/tcp
 # App-ready, not SS7-up: ss7.live may legitimately be false when the peer is down,
 # and a healthcheck that fails on that would restart a perfectly good gateway.
 # start_period is generous because Flyway + profile tables run before the port binds.
+#
+# The probe itself is a script so that docker/stack.yml can point at the very same file.
+# It reads the admin key from the swarm secret and accepts 401 as "alive" — see its header
+# for the crash-loop this replaces.
 HEALTHCHECK --interval=30s --timeout=10s --start-period=120s --retries=3 \
-  CMD curl -fsS -o /dev/null -H "X-USSD-Admin-Key: ${USSD_ADMIN_API_KEY:-}" \
-      http://127.0.0.1:8088/admin/status.json || exit 1
+  CMD ["/usr/local/bin/ussdgw-healthcheck.sh"]
 
 # SIGTERM so tini forwards it to the JVM and Quarkus runs its shutdown hook
 # (drain the CDR queue, end parked MAP dialogs) instead of being SIGKILLed.
