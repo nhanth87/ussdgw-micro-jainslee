@@ -26,7 +26,7 @@ class Gsm7ExtensionShiftingTest {
         assertThat(Gsm7Alphabet.septetLength("}")).isEqualTo(2);
         assertThat(Gsm7Alphabet.septetLength("[")).isEqualTo(2);
         assertThat(Gsm7Alphabet.septetLength("]")).isEqualTo(2);
-        assertThat(Gsm7Alphabet.septetLength("\\"))).isEqualTo(2);
+        assertThat(Gsm7Alphabet.septetLength("\\")).isEqualTo(2);
         assertThat(Gsm7Alphabet.septetLength("|")).isEqualTo(2);
         assertThat(Gsm7Alphabet.septetLength("^")).isEqualTo(2);
         assertThat(Gsm7Alphabet.septetLength("~")).isEqualTo(2);
