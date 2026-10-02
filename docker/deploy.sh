@@ -41,14 +41,17 @@ cd "$REPO_ROOT"
 
 # A fail-fast script that dies without saying why is worse than one that does not
 # fail fast: `set -e` + a non-matching grep inside `$( )` exits before any message
-# (that was a real defect in entrypoint.sh step 4b). So the trap prints the line.
+# (that was a real defect in entrypoint.sh step 4b). So the trap prints the line, and a
+# second EXIT trap removes the config snapshot — which holds a 0600 datasource password.
 trap 'echo "deploy: FAILED at line $LINENO (exit $?)" >&2' ERR
+trap '[[ -n "${SNAP:-}" && -d ${SNAP:-} ]] && rm -rf "$SNAP"; :' EXIT
 
 die()  { echo "deploy: ERROR: $*" >&2; exit 1; }
 info() { echo "deploy: $*"; }
 warn() { echo "deploy: WARN: $*" >&2; }
 step() { echo; echo "=== $* ==="; }
 
+SNAP=""   # read-only snapshot of the live config; empty until one is staged
 MODE_BUILD=1; MODE_TESTS=1; MODE_DEPLOY=1; MODE_CHECK=0; MODE_FORCE_CONFIG=0; MODE_FETCH=0; ALLOW_DIRTY=0
 for arg in "$@"; do
   case "$arg" in
@@ -320,12 +323,57 @@ configs_source() {
   printf '%s' "$src"
 }
 LIVE_CONFIGS="$(configs_source)"; LIVE_CONFIGS="${LIVE_CONFIGS%/}"
+
+# Reading the live config from the host is not always possible. A swarm volume's
+# mountpoint lives under /var/lib/docker/volumes, which is drwx-----x root:root —
+# traversable but not readable by the operator, so install-config reported
+# "no application.properties in …" for a directory that demonstrably has one (the
+# gateway was reading it happily). Do not read what you cannot read, and do not
+# declare absence either: stage a read-only snapshot THROUGH the container that owns
+# the mount, which is the only party that can read it, and validate that.
+SNAP=""
+stage_live_snapshot() {
+  local dir="$1" cid dst
+  [[ -n "$dir" ]] || return 1
+  [[ -r "$dir/application.properties" ]] && return 0        # readable directly: no copy
+  cid="$(docker ps -q --filter "name=${STACK_NAME}_ussdgw" | head -1 || true)"
+  [[ -n "$cid" ]] || { warn "cannot read $dir and no running ${STACK_NAME}_ussdgw container to read it through"; return 1; }
+  SNAP="$(mktemp -d "${TMPDIR:-/tmp}/ussdgw-cfgsnap.XXXXXX")" || return 1
+  chmod 0755 "$SNAP"
+  dst="$SNAP/configs"; mkdir -p "$dst"; chmod 0755 "$dst"
+  # `docker cp` preserves mode but not owner, and application.properties is 0600 by
+  # design (it holds a datasource password), so copy each file to a readable mode in the
+  # snapshot rather than depending on the uid that happens to own it today.
+  local f
+  for f in application.properties ss7-lab.json ss7-lab-sim-pull.json ss7-digicom-balance.json; do
+    docker cp "$cid:/opt/ussdgw/configs/$f" "$dst/$f" >/dev/null 2>&1 || continue
+    chmod u+rw "$dst/$f"
+  done
+  docker cp "$cid:/opt/ussdgw/configs/ss7-persist" "$dst/ss7-persist" >/dev/null 2>&1 || true
+  # Anything else the operator added, that this script has never heard of.
+  local n=0 extra
+  while IFS= read -r extra; do
+    [[ -n "$extra" ]] || continue
+    docker cp "$cid:/opt/ussdgw/configs/$extra" "$dst/$extra" >/dev/null 2>&1 && { chmod -R u+rw "$dst/$extra"; n=$((n+1)); }
+  done < <(docker exec "$cid" sh -c 'ls -1 /opt/ussdgw/configs' 2>/dev/null || true)
+  [[ -f "$dst/application.properties" ]] \
+    || { rm -rf "$SNAP"; SNAP=""; warn "snapshot of the live config is still incomplete — see the errors below"; return 1; }
+  info "staged a read-only snapshot of the live config from container ${cid:0:12} ($n extra file(s)) at $SNAP"
+  return 0
+}
+
+
 if [[ -n "$LIVE_CONFIGS" && "$LIVE_CONFIGS" != "$DEST" ]]; then
   warn "the running gateway mounts configs from $LIVE_CONFIGS, but install-config validates/seeds $DEST"
   warn "-> these are different files. install-config will report on a tree the service never reads."
   if [[ "$MODE_CHECK" == 1 || "$MODE_DEPLOY" == 0 ]]; then
-    info "validating the MOUNTED copy instead: CONFIG_SRC=$LIVE_CONFIGS"
-    CONFIG_SRC="$LIVE_CONFIGS"
+    if stage_live_snapshot "$LIVE_CONFIGS"; then
+      CONFIG_SRC="$SNAP/configs"
+      info "validating the MOUNTED config (snapshot) instead of $DEST"
+    else
+      CONFIG_SRC="$LIVE_CONFIGS"
+      info "validating the MOUNTED copy instead: CONFIG_SRC=$LIVE_CONFIGS"
+    fi
   else
     die "config source mismatch: DEST=$DEST but ${STACK_NAME}_ussdgw mounts $LIVE_CONFIGS.
      Seeding $DEST would produce a config tree the gateway never reads — the silent-failure
@@ -337,25 +385,28 @@ if [[ -n "$LIVE_CONFIGS" && "$LIVE_CONFIGS" != "$DEST" ]]; then
           first — data-affecting, so do it deliberately, not from this script."
   fi
 fi
-# CONFIG_SRC outside DATA_ROOT and outside the live mount means .env still points at a
-# retired install tree; the gate would pass on files the deploy does not use.
-if [[ "$CONFIG_SRC" != "$DEST" && "$CONFIG_SRC" != "$LIVE_CONFIGS" ]]; then
-  warn "CONFIG_SRC=$CONFIG_SRC is neither DEST ($DEST) nor the mounted $LIVE_CONFIGS —"
-  warn "that path is not what this stack reads; expect the findings below to be about the wrong files."
+# CONFIG_SRC that is neither DEST nor the live mount means .env still points at a retired
+# install tree. install-config would validate files the deploy does not use, and say
+# nothing about the ones that matter.
+if [[ -n "$LIVE_CONFIGS" && "$CONFIG_SRC" != "$DEST" && "$CONFIG_SRC" != "$LIVE_CONFIGS" && "$CONFIG_SRC" != "$SNAP/configs" ]]; then
+  warn "docker/.env sets CONFIG_SRC=$CONFIG_SRC, which is neither DEST ($DEST) nor the"
+  warn "mounted $LIVE_CONFIGS. The findings below are about files this stack never reads."
+  warn "Fix docker/.env: CONFIG_SRC=$DEST   (then the gate covers what the service mounts)"
 fi
 
-if [[ "$CONFIG_SRC" == "$DEST" ]]; then
-  info "CONFIG_SRC == DEST ($DEST) — validating the live config in place, not re-seeding"
-  ./docker/install-config.sh --check
-else
-  ./docker/install-config.sh --check
+./docker/install-config.sh --check
+# Seeding DEST only makes sense when DEST is what the service reads. When the live config
+# is a volume, /srv/ussdgw/configs is a second copy that nothing opens — seeding it is
+# work that looks like progress and changes nothing. Say that instead of doing it.
+if [[ "$CONFIG_SRC" != "$DEST" ]]; then
   if [[ "$MODE_FORCE_CONFIG" == 1 ]]; then
-    warn "--force-config: backing up and overwriting $DEST"
-    ./docker/install-config.sh --force
+    die "--force-config writes $DEST, but the gateway mounts $LIVE_CONFIGS — that copy would
+     change nothing. To change the live config, edit it where it is mounted (or fix the
+     stack's mounts to point at $DEST first, then re-run)."
   elif [[ ! -f "$DEST/application.properties" ]]; then
-    ./docker/install-config.sh
+    info "seeding $DEST for the record; the running gateway keeps using $LIVE_CONFIGS"
   else
-    info "$DEST already populated — left untouched (use --force-config to re-seed with a backup)"
+    info "$DEST already populated — left untouched (and not what the gateway reads)"
   fi
 fi
 
