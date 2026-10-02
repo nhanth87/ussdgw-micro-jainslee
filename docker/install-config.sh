@@ -175,9 +175,23 @@ validate "$CONFIG_SRC"
 
 mkdir -p "$DEST"
 
-if [[ -d "$DEST" ]] && [[ -n "$(ls -A "$DEST" 2>/dev/null)" ]]; then
+# "Populated" must mean THE OPERATOR CONFIG IS THERE, not "the directory has any
+# entry at all".
+#
+# It used to test `ls -A "$DEST"` being non-empty. host-prep.sh creates
+# $DEST/ss7-persist before this script ever runs — and the documented order IS
+# `host-prep.sh` then `install-config.sh` — so on every freshly prepared host the
+# directory was never empty, the script decided it had already seeded, printed
+# "destination already populated — leaving it untouched", exited 0 having copied
+# nothing, and the deploy carried on with an EMPTY configs mount. The gateway then
+# died one step later in its own entrypoint with "no application.properties",
+# pointing at the wrong thing entirely.
+#
+# application.properties is the right test: it is the file the entrypoint requires,
+# so it is exactly what decides whether a seed is still needed.
+if [[ -f "$DEST/application.properties" ]]; then
   if [[ "$MODE" == "seed" ]]; then
-    ok "destination already populated — leaving it untouched (operator SoT)"
+    ok "destination already has application.properties — leaving it untouched (operator SoT)"
     echo "install-config: run with --force to overwrite (a timestamped backup is taken first)"
     exit 0
   fi
@@ -185,10 +199,27 @@ if [[ -d "$DEST" ]] && [[ -n "$(ls -A "$DEST" 2>/dev/null)" ]]; then
   cp -a "$DEST" "$bak"
   ok "backed up existing configs to $bak"
   rm -rf "${DEST:?}"/*
+else
+  # Not a seeded config. Say so explicitly — an operator who expected a populated
+  # directory must be able to tell that apart from one that was never seeded.
+  existing="$(ls -A "$DEST" 2>/dev/null | grep -v '^ss7-persist$' | tr '\n' ' ' || true)"
+  if [[ -n "${existing// /}" ]]; then
+    warn "$DEST has entries but no application.properties ($existing)"
+    warn "seeding anyway — that state cannot have come from a successful install"
+  fi
+  ok "destination has no application.properties — seeding"
 fi
 
 cp -a "$CONFIG_SRC"/. "$DEST"/
 mkdir -p "$DEST/ss7-persist"
+
+# Prove the copy landed. `cp -a src/. dest/` exiting 0 is not evidence on its own
+# when the destination already contained a same-named file.
+[[ -f "$DEST/application.properties" ]] \
+  || die "seeding reported success but $DEST/application.properties is missing — check permissions"
+if ! compgen -G "$DEST/ss7-*.json" >/dev/null 2>&1; then
+  warn "no ss7-*.json landed in $DEST — SS7 boot will find no stack config"
+fi
 
 # The admin UI writes stack JSON here — without it, saving from /admin/ss7 fails.
 chmod 775 "$DEST" "$DEST/ss7-persist" 2>/dev/null || warn "could not chmod $DEST"
