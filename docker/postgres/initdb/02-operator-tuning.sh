@@ -134,9 +134,17 @@ fi
        echo "       host's interfaces. Refusing to continue." >&2
        exit 1; }
 
-if ! shared="$(setting_value shared_buffers)"; then
+if ! shared_blcks="$(setting_value shared_buffers)"; then
   echo "ERROR: could not read effective shared_buffers from $PGCONF" >&2
   exit 1
 fi
+# postgres -C reports shared_buffers in 8 kB blocks, so 32768 is 256MB. Say so, or
+# the log reads as a wildly wrong value to anyone comparing it against the file.
+if [[ "$shared_blcks" =~ ^[0-9]+$ ]]; then
+  shared_mb=$(( shared_blcks / 128 ))
+  shared="shared_buffers=${shared_mb}MB (${shared_blcks} x 8kB blocks)"
+else
+  shared="shared_buffers=${shared_blcks}"
+fi
 
-echo "operator tuning: $PGCONF parses; listen_addresses=127.0.0.1, shared_buffers=$shared"
+echo "operator tuning: $PGCONF parses; listen_addresses=127.0.0.1, $shared"
