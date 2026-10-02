@@ -96,7 +96,15 @@ fi
 #
 # Ask the server instead. `postgres -C <name>` reads and parses the configuration and
 # exits non-zero if it does not, so it is a real syntax check.
-if ! parsed="$(postgres -D "$PGCONF" -C listen_addresses 2>&1)"; then
+# -D takes the DATA DIRECTORY; postgres appends postgresql.conf itself. Passing the
+# file path instead produced
+#   could not access the server configuration file ".../postgresql.conf/postgresql.conf"
+#   Not a directory
+# which is a confusing way to say the argument was wrong, and it failed identically
+# for a good config and a corrupt one — the check was answering nothing.
+PGDATA_DIR="$(dirname "$PGCONF")"
+
+if ! parsed="$(postgres -D "$PGDATA_DIR" -C listen_addresses 2>&1)"; then
   echo "ERROR: $PGCONF does not parse — PostgreSQL will refuse to start." >&2
   echo "  postgres says: $parsed" >&2
   echo "  The operator tuning must be a whole number of lines, each newline-terminated." >&2
@@ -110,9 +118,10 @@ parsed="${parsed//[[:space:]]/}"
        echo "       host's interfaces. Refusing to continue." >&2
        exit 1; }
 
-shared="$(postgres -D "$PGCONF" -C shared_buffers 2>&1 || true)"
+if ! shared="$(postgres -D "$PGDATA_DIR" -C shared_buffers 2>&1)"; then
+  echo "ERROR: could not read effective shared_buffers from $PGCONF: $shared" >&2
+  exit 1
+fi
 shared="${shared//[[:space:]]/}"
-[[ -n "$shared" && "$shared" != *"error"* ]] \
-  || { echo "ERROR: could not read effective shared_buffers ($shared)" >&2; exit 1; }
 
 echo "operator tuning: $PGCONF parses; listen_addresses=127.0.0.1, shared_buffers=$shared"
