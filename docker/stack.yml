@@ -268,10 +268,15 @@ services:
     networks: [hostnet]
     volumes:
       - nginx-certs:/etc/nginx/certs
-    # Declarative only. This service is on `hostnet`, and Docker ignores published ports
-    # for a container in host network mode — nginx binds :80/:443 on the host directly.
-    # Kept so the intent is readable and so a future move off hostnet does not silently
-    # lose the entry point; do not read this as evidence of a NAT rule.
+    # NOT purely declarative. Docker does not create a NAT rule for a container in host
+    # network mode — nginx binds :80/:443 on the host directly — but the Swarm SCHEDULER
+    # still reads this block and reserves the host-mode ports. That is not academic: with
+    # `order: start-first` below it is what made every nginx update hang, because the new
+    # task could not be placed while the old one still held 80/443:
+    #     ussdgw_nginx.1  Pending … "no suitable node (host-mode port already in use)"
+    # and `docker stack services` reported 1/1 with the NEW image while the OLD container
+    # kept serving. Kept so the intent is readable and so a future move off hostnet does
+    # not silently lose the entry point; do not read it as evidence of a NAT rule.
     ports:
       - target: 80
         published: 80
@@ -305,7 +310,14 @@ services:
         delay: 5s
         max_attempts: 5
       update_config:
-        order: start-first   # nginx can overlap: the gateway is the single writer
+        # stop-first, NOT start-first — and the reason is the `ports:` block above, not
+        # downtime preference. Swarm reserves host-mode ports for placement, so with
+        # start-first the new nginx task can never be scheduled while the old one holds
+        # 80/443. It sits Pending ("no suitable node (host-mode port already in use)")
+        # indefinitely, the service still reports 1/1 with the new image, and the previous
+        # container keeps serving — an update that looks applied and never happened.
+        # A few seconds of :80/:443 downtime is the cheaper failure.
+        order: stop-first
         parallelism: 1
     logging:
       driver: json-file

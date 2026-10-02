@@ -66,6 +66,19 @@ if hc_out="$(docker run --rm --entrypoint /usr/local/bin/ussdgw-healthcheck.sh "
 fi
 ok "app image's healthcheck probe fails when nothing listens (so 'healthy' still means something)"
 
+# --- the JRE can actually do kernel SCTP ----------------------------------------
+# sctp.backend=NETTY_KERNEL is com.sun.nio.sctp, which lives in the jdk.sctp module — and
+# this runtime is a jlink'd JRE, so a module list that forgot it produces an image whose
+# gateway cannot bind a single SCTP socket. The symptom is indistinguishable from "the
+# carrier peer is down": ss7.live=false, everything else green.
+# Captured into a variable first: under `set -o pipefail` a `docker run | grep -q` guard
+# FAILS ON A MATCH, because grep -q exits early and SIGPIPEs the left side.
+jmods="$(docker run --rm --entrypoint /opt/jre/bin/java "ussdgw:$TAG" --list-modules 2>/dev/null)"
+grep -q '^jdk\.sctp@' <<<"$jmods" \
+  || die "ussdgw:$TAG — the jlink'd JRE has no jdk.sctp module, so NETTY_KERNEL SCTP cannot
+       open a socket. Add jdk.sctp to the jlink module list in docker/ussdgw/Dockerfile."
+ok "JRE carries $(grep -o '^jdk\.sctp@[^ ]*' <<<"$jmods") — NETTY_KERNEL can bind kernel SCTP"
+
 docker build -f docker/nginx/Dockerfile   -t "ussdgw-nginx:$TAG" .
 ok "ussdgw-nginx:$TAG"
 

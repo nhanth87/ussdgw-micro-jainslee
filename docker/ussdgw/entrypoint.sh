@@ -64,6 +64,59 @@ if [[ -n "$ss7_cfg_path" && -f "$ss7_cfg_path" ]]; then
        $bad_channels
        SS7 is SCTP-only (RFC 4666 §3). Fix the stack JSON."
   log "SS7 stack $(basename "$ss7_cfg_path"): all links use channel=sctp ✓"
+
+  # --- 4b. WHICH SCTP implementation will bind the sockets ----------------------
+  # The check above proves the links are not TCP. It says nothing about whether anything
+  # will listen, and that is the half that shipped broken.
+  #
+  # sctp.backend picks the implementation, and SctpBackend.from(null) returns FSTACK_DPDK —
+  # a userspace DPDK stack that needs hugepages plus a native libsctp_fstack.so. A stack
+  # JSON with no "backend" key therefore boots cleanly and logs
+  #
+  #     [ss7-config] SCTP server L1-BP-1404-srv listening 172.16.144.163:2011
+  #     SS7 boot: ss7=wired;sctp=[L1-BP-1404:server:172.16.144.163:2011←10.177.55.241:2501,…]
+  #
+  # while creating ZERO kernel sockets. /proc/net/sctp/eps stays empty, `ss -ln --sctp`
+  # shows nothing, the carrier peer can never reach 2011/2019, and status.json honestly
+  # reports ss7.live=false — every log line says the wire is up and it is not. The sibling
+  # gmlc deployment on this same host, same link names, same ports, has
+  # "backend": "NETTY_KERNEL" in its copy of this file and is the one that holds the
+  # associations. "channel is sctp" was true in both; only the backend differed.
+  ss7_backend="$(grep -oE '"backend"[[:space:]]*:[[:space:]]*"[A-Za-z_-]+"' "$ss7_cfg_path" \
+                 | head -1 | sed -E 's/.*"([A-Za-z_-]+)"[[:space:]]*$/\1/')"
+  ss7_backend_norm="$(tr '[:lower:]-' '[:upper:]_' <<<"${ss7_backend:-FSTACK_DPDK}")"
+  case "$ss7_backend_norm" in
+    NETTY_KERNEL)
+      # Kernel SCTP: the host module is step 1; jdk.sctp is com.sun.nio.sctp, and this JRE
+      # is jlink'd, so a module list that forgot it yields an image that cannot bind a
+      # single socket no matter what the JSON says.
+      jmods="$("$JAVA_HOME/bin/java" --list-modules 2>/dev/null || true)"
+      grep -q '^jdk\.sctp@' <<<"$jmods" \
+        || die "sctp.backend=NETTY_KERNEL but this JRE has no jdk.sctp module — add it to the
+           jlink module list in docker/ussdgw/Dockerfile. Without it every SCTP bind fails."
+      log "SS7 SCTP backend = NETTY_KERNEL (kernel sockets; visible in /proc/net/sctp) ✓"
+      ;;
+    FSTACK_DPDK)
+      # Legitimate only with the native library actually present. Otherwise this is the
+      # deaf-SS7 case above, and refusing to boot beats logging "listening" for nothing.
+      fstack_lib="$(grep -oE '"library"[[:space:]]*:[[:space:]]*"[^"]+"' "$ss7_cfg_path" \
+                    | head -1 | sed -E 's/.*"([^"]+)"[[:space:]]*$/\1/')"
+      if [[ -z "$fstack_lib" || ! -e "$fstack_lib" ]]; then
+        die "sctp.backend resolves to FSTACK_DPDK ($(basename "$ss7_cfg_path") has
+           backend='${ss7_backend:-<absent>}'; SctpBackend.from(null) = FSTACK_DPDK) but the
+           native library is not here: sctp.library='${fstack_lib:-unset}'.
+           The gateway would log 'listening' on every link, report ss7=wired, and bind no
+           socket at all — a deaf SS7 plane that looks healthy.
+           Fix: add  \"backend\": \"NETTY_KERNEL\"  to the sctp block (kernel SCTP — what the
+           gmlc deployment on these same links uses), or mount the fstack native library and
+           set sctp.library to its path."
+      fi
+      log "SS7 SCTP backend = FSTACK_DPDK (userspace; library $fstack_lib)"
+      ;;
+    *)
+      die "unknown sctp.backend '${ss7_backend}' in $(basename "$ss7_cfg_path") — expected NETTY_KERNEL or FSTACK_DPDK"
+      ;;
+  esac
 fi
 
 # --- 5. secrets ---------------------------------------------------------------
