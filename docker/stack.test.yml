@@ -1,0 +1,56 @@
+# TEST profile — low resource, for the Digicom test server and any small host.
+#
+# THIS IS THE DEFAULT. Overlay it on docker/stack.yml:
+#   docker stack deploy -c docker/stack.yml -c docker/stack.test.yml ussdgw
+#
+# WHY IT EXISTS
+# -------------
+# capacity_5k_tps.md describes a 5 000 TPS PRODUCTION profile: ussdgw 16 CPU /
+# 64 GiB, postgres 12 CPU / 32 GiB, on a 128 GiB / 32 CPU host. The Digicom test
+# server has very little RAM and CPU, and running the capacity overlay there is not
+# a graceful downgrade — Swarm schedules against reservations the host cannot
+# honour and the JVM is OOM-killed mid-MAP-dialog.
+#
+# 5k TPS is a production goal, not a test-server goal. This overlay is the correct
+# thing to deploy on the test server. It answers a smoke test, and it does so
+# without fighting the host for memory.
+#
+# `docker/capacity/preflight-capacity.sh 5k` refuses the production overlay on a host
+# below the size floor, so the mistake cannot be made by accident.
+
+version: "3.9"
+
+services:
+
+  ussdgw:
+    environment:
+      # Lab-safe heap (AGENTS.md heap rule): a shared / small test host cannot spare
+      # more. The container limit must exceed Xmx with room for netty direct buffers
+      # and SCTP native memory, or the JVM is OOM-killed.
+      USSD_XMS: ${USSD_XMS:-1g}
+      USSD_XMX: ${USSD_XMX:-4g}
+    deploy:
+      resources:
+        limits:
+          memory: ${USSDGW_MEM_LIMIT:-6g}
+          cpus: "4"
+        reservations:
+          memory: ${USSDGW_MEM_RESERVE:-1g}
+          cpus: "1"
+
+  postgres:
+    deploy:
+      resources:
+        limits:
+          memory: ${PG_MEM_LIMIT:-1g}
+          cpus: "1"
+        reservations:
+          memory: "256M"
+          cpus: "0.5"
+
+  nginx:
+    deploy:
+      resources:
+        limits:
+          memory: "256m"
+          cpus: "0.5"

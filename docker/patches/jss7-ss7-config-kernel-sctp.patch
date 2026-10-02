@@ -1,0 +1,58 @@
+Kernel-SCTP configuration addition for jSS7 ss7-config (adds Ss7Config.Addr.ri).
+
+WHY THIS PATCH EXISTS
+---------------------
+jain-slee's ra-jss7 (pinned at a8d258bbbdbbf20a9dc861795e5f738400e7de82) does not
+compile against the published nhanth87/jss7 j25 branch (pinned at
+d8514680057063c54f2c5bbb2bae475287d15e20). Proven, not guessed:
+
+    ra-jss7 calls:  new Ss7Config.Addr(null, null, "*", null, null, null, null, null)
+    j25's Addr has:  7 components
+    -> javac: "constructor Addr ... cannot be applied to given types;
+               required: Integer,Integer,String,String,String,String,String   (7)
+               found:    <nulltype>,<nulltype>,String,<nulltype>,...          (8 args)"
+
+This patch adds the missing 8th component, `ri` (routing indicator), last in the
+canonical constructor so the existing 8-argument call sites bind correctly.
+
+GROUND TRUTH: the artifact Digicom actually runs. Decompiling
+ss7-config-9.2.8-j25.jar gives
+
+    public final class Ss7Config$Addr extends java.lang.Record {
+      private final Integer pc; Integer ssn; String gt; String gtType;
+      String encoding; String plan; String nature; String ri;
+      public Addr(Integer,Integer,String,String,String,String,String,String);
+
+whereas the pre-patch backup (ss7-config-9.2.8-j25.jar.bak-092725) has only the
+first seven fields. `javap -v` on the running jar confirms the JSON property name
+is exactly "ri".
+
+WHAT THIS PATCH DOES NOT NEED TO CHANGE
+--------------------------------------
+Ss7Config.Sctp already carries the kernel-SCTP knobs on j25 -- backend / mode /
+dataplane / library / inProcess, plus the 5-argument topology-only constructor.
+Those are what select NETTY_KERNEL, the only transport that can reach the carrier
+peers from a host without a DPDK-bound NIC. So this is one field, not a backport.
+
+AUDIT NOTE
+----------
+The running Digicom artifact was built from a locally patched jSS7 tree that was
+never pushed anywhere. That is exactly the provenance gap R3 exists to close: this
+file plus its SHA-256 in docker/sources.lock makes the delta reviewable and
+reproducible instead of implicit.
+
+Upstream fix worth filing: add `ri` to Ss7Config.Addr on the j25 branch, after
+which this patch can be deleted.
+
+--- a/ss7-config/src/main/java/org/restcomm/protocols/ss7/config/Ss7Config.java
++++ b/ss7-config/src/main/java/org/restcomm/protocols/ss7/config/Ss7Config.java
+@@ -200,7 +200,8 @@
+             @JsonProperty("gtType")   String gtType,    // e.g. GT0100      (default GT0100)
+             @JsonProperty("encoding") String encoding,  // odd | even       (default even)
+             @JsonProperty("plan")     String plan,      // isdn | ...        (default isdn)
+-            @JsonProperty("nature")   String nature     // international|... (default international)
++            @JsonProperty("nature")   String nature,    // international|... (default international)
++            @JsonProperty("ri")       String ri         // routing indicator (default "*" = unset)
+     ) { }
+ 
+     // ══════════════════════════════════════════════════════════

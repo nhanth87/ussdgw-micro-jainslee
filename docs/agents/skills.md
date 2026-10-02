@@ -11,6 +11,7 @@ What to load before packaging, admin UI, or AS plane work. Prefer these over re-
 
 | If you touch… | Read first |
 |---------------|------------|
+| Docker / Swarm build + deploy | [docker.md](docker.md) · [docker/README.md](../../docker/README.md) · [plan.md](../../plan.md) |
 | Dist / `package-dist` / Digicom redeploy / `run.sh` | **this file § Dist** (+ Digicom compile + redeploy) · [AGENTS.md](../../AGENTS.md) · [lessons.md](lessons.md) |
 | H2 / PostgreSQL / Flyway | [schema.md](schema.md) |
 | Logging | [logging.md](logging.md) |

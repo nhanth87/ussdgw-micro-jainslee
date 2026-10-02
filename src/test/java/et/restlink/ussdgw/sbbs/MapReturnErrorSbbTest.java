@@ -82,8 +82,9 @@ class MapReturnErrorSbbTest {
 
     @Test
     void everySubtypeOfTheSealedEventHasABranch() {
-        // The regression guard: adding a subtype to ra-jss7 without a branch here is what turned
-        // a real MAP error into MAP_TIMEOUT.
+        // The regression guard: a subtype of the sealed event with no onEvent branch is what
+        // turned a real MAP error into MAP_TIMEOUT. The pin in docker/sources.lock
+        // (jain-slee 31873d44c) declares all four, so all four are required here.
         assertThat(Ss7MapEvent.class.isSealed()).isTrue();
         assertThat(Ss7MapEvent.class.getPermittedSubclasses())
                 .contains(Ss7MapEvent.Service.class, Ss7MapEvent.Dialog.class,

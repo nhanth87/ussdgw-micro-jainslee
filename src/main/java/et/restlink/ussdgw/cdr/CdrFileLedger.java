@@ -79,6 +79,14 @@ public class CdrFileLedger {
     private final AtomicInteger size = new AtomicInteger();
     private final LongAdder dropped = new LongAdder();
     private final LongAdder warmed = new LongAdder();
+    /**
+     * True when the last {@link #sessions} call returned fewer rows than asked for, i.e. the
+     * whole ring was scanned and the window simply does not hold more. The admin page uses
+     * this to say "nothing more in the ledger" instead of implying a filter missed something.
+     */
+    private volatile boolean lastScanExhaustedWindow = true;
+    /** True when the last call had to drop rows because the cap bound the result. */
+    private volatile boolean scanEnded = true;
 
     private final String logDir;
     private final int capacity;
@@ -152,64 +160,70 @@ public class CdrFileLedger {
         }
         Predicate<CdrEntity> filter = keep == null ? e -> true : keep;
 
-        // Walk newest -> oldest. A correlation is COMPLETE once we step onto a different one,
-        // so we never roll up half a session (and never stop before a session's first event).
-        Map<String, List<CdrEntity>> pending = new LinkedHashMap<>();
-        List<CdrEntity> out = new ArrayList<>(Math.min(cap, 64));
-        String currentCorr = null;
-        for (int i = snapshot.size() - 1; i >= 0; i--) {
-            CdrEntity delta = snapshot.get(i);
-            String corr = corrOf(delta);
-            if (!corr.equals(currentCorr)) {
-                if (currentCorr != null) {
-                    complete(currentCorr, pending, filter, cap, out);
-                    if (out.size() >= cap) {
-                        return List.copyOf(out);
-                    }
-                }
-                currentCorr = corr;
+        // C6 (capacity_5k_tps.md): a correlation's events INTERLEAVE under concurrency.
+        //
+        // The obvious implementation — "a correlation is complete once a different one is
+        // seen" — is only correct when its events are contiguous. That holds for one
+        // sequential caller and is false for every real gateway: two sessions in flight
+        // produce A,B,A,B, so each run became its own fragment row, the 6-hop spine lost
+        // its middle, and one session appeared many times on the ledger. So we GROUP over
+        // the whole scanned window and never assume adjacency.
+        //
+        // Grouping first also fixes the filter ordering for free: the predicate runs on a
+        // fully rolled-up session, and "the window is too short to find it" becomes
+        // detectable (scanEnded == false) instead of silently returning a fragment.
+        Map<String, List<CdrEntity>> byCorr = new LinkedHashMap<>();
+        for (CdrEntity delta : snapshot) {
+            byCorr.computeIfAbsent(corrOf(delta), k -> new ArrayList<>(4)).add(delta);
+        }
+
+        // Roll each correlation up ONCE, then order by its newest event. Ordering after the
+        // rollup (not before) is what makes the "newest sessions first" contract hold.
+        List<CdrEntity> sessions = new ArrayList<>(byCorr.size());
+        for (Map.Entry<String, List<CdrEntity>> e : byCorr.entrySet()) {
+            CdrEntity session = rollUp(e.getKey(), e.getValue());
+            if (session != null && filter.test(session)) {
+                sessions.add(session);
             }
-            pending.computeIfAbsent(corr, k -> new ArrayList<>(4)).add(delta);
-            trim(pending, corr);
         }
-        if (currentCorr != null) {
-            complete(currentCorr, pending, filter, cap, out);
+        sessions.sort(Comparator.comparing(CdrFileLedger::newestAt).reversed());
+
+        if (sessions.size() > cap) {
+            scanEnded = true;
+            sessions = sessions.subList(0, cap);
         }
-        return List.copyOf(out);
+        lastScanExhaustedWindow = sessions.size() < cap;
+        return List.copyOf(sessions);
     }
 
     /**
-     * Fold one correlation's events into its session row and keep it when it passes the filter.
-     * {@code pending} holds the correlation's events newest-first; the rollup wants oldest-first
-     * so {@code events_json} / the 6-hop spine / the multimenu tape read in causal order.
+     * Fold one correlation's events into its session row.
+     *
+     * @param eventsOldestFirst as collected from the ring, which is append-ordered, so this
+     *                         is already oldest-first. The rollup wants causal order and the
+     *                         rank tie-break ("last in-flight status wins") depends on it —
+     *                         reversing here silently made GATE_ARMED beat END.
      */
-    private static void complete(String corr, Map<String, List<CdrEntity>> pending,
-                                 Predicate<CdrEntity> keep, int cap, List<CdrEntity> out) {
-        List<CdrEntity> newestFirst = pending.remove(corr);
-        if (newestFirst == null || newestFirst.isEmpty()) {
-            return;
+    private static CdrEntity rollUp(String corr, List<CdrEntity> eventsOldestFirst) {
+        if (eventsOldestFirst == null || eventsOldestFirst.isEmpty()) {
+            return null;
         }
-        List<CdrEntity> oldestFirst = new ArrayList<>(newestFirst);
-        java.util.Collections.reverse(oldestFirst);
-        CdrEntity session = CdrSessionRollup.coalesceByCorrelation(oldestFirst).stream()
+        List<CdrEntity> ordered = eventsOldestFirst;
+        if (ordered.size() > CdrSessionRollup.MAX_EVENTS) {
+            // Keep the TAIL: the most recent milestones, which is what the spine needs.
+            ordered = ordered.subList(ordered.size() - CdrSessionRollup.MAX_EVENTS, ordered.size());
+        }
+        CdrEntity session = CdrSessionRollup.coalesceByCorrelation(ordered).stream()
                 .findFirst()
                 .orElse(null);
-        if (session == null || !keep.test(session)) {
-            return;
+        if (session != null) {
+            session.id = UUID.nameUUIDFromBytes(corr.getBytes(StandardCharsets.UTF_8));
         }
-        session.id = session.id != null ? session.id : UUID.nameUUIDFromBytes(corr.getBytes(StandardCharsets.UTF_8));
-        out.add(session);
+        return session;
     }
 
-    /**
-     * Bound memory: an in-flight session can emit many milestones. Keep the newest
-     * {@link CdrSessionRollup#MAX_EVENTS} so the walk stays O(cap) per request.
-     */
-    private static void trim(Map<String, List<CdrEntity>> pending, String corr) {
-        List<CdrEntity> events = pending.get(corr);
-        if (events != null && events.size() > CdrSessionRollup.MAX_EVENTS) {
-            events.remove(0);
-        }
+    private static Instant newestAt(CdrEntity e) {
+        return e.updatedAt != null ? e.updatedAt : (e.recordedAt != null ? e.recordedAt : Instant.EPOCH);
     }
 
     private List<CdrEntity> snapshot() {
@@ -565,6 +579,16 @@ public class CdrFileLedger {
 
     public long warmedCount() {
         return warmed.sum();
+    }
+
+    /** False when the last query was cut short by the row cap, i.e. more ledger exists. */
+    public boolean lastScanHitCap() {
+        return !scanEnded;
+    }
+
+    /** True when the last query scanned the entire ring and found nothing more. */
+    public boolean lastScanExhaustedWindow() {
+        return lastScanExhaustedWindow;
     }
 
     /** Unused ring handle kept for diagnostics/tests. */

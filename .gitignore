@@ -41,3 +41,14 @@ configs/digicom/
 build/application-digicom.properties
 build/ss7-digicom-balance.json
 build/systemd/install-on-digicom.sh
+
+# Docker / Swarm (plan.md)
+# .env holds site paths and may hold an admin key — never committed.
+docker/.env
+docker/env.digicom
+# Digicom swarm overlay lives only on the private `digicom` branch (never public main).
+docker/stack.digicom.yml
+docker/env.digicom.example
+# Build staging produced by docker run ussdgw-builder build-all.sh
+/srv/ussdgw/
+/srv/ussdgw-build/

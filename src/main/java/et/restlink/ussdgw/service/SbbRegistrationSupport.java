@@ -77,6 +77,10 @@ public class SbbRegistrationSupport {
         container.mapEventToSbb(Ss7MapEvent.Dialog.class, "MapUssdParentSbb");
         // Every subtype of the sealed Ss7MapEvent needs a mapping. Without Error the MAP
         // return-error is dropped and the dialog hangs to MAP_TIMEOUT (GMLC 2026-09-30).
+        // ADR 0007 `Remote` (cross-node summary) is declared as of jain-slee 31873d44c, which is
+        // the pin in docker/sources.lock. It is mapped AND branched in MapUssdParentSbb —
+        // mapping without a branch is precisely the bug that turned a real MAP error into
+        // MAP_TIMEOUT.
         container.mapEventToSbb(Ss7MapEvent.Error.class, "MapUssdParentSbb");
         container.mapEventToSbb(Ss7MapEvent.Remote.class, "MapUssdParentSbb");
         container.mapEventToSbb(PullHttpEvent.class, "HttpClientSbb");

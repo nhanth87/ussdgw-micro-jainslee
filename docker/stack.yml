@@ -1,0 +1,220 @@
+# Digicom-ET USSDGW — Docker Swarm stack (LAB defaults).
+#
+# All three services share the HOST network, and that is not a shortcut:
+#
+#   * The gateway binds SCTP on real host IPs (Digicom: 172.16.144.163:2011/2019).
+#     SCTP multi-homing puts those addresses inside the INIT chunk, so a bridge
+#     network or a swarm ingress mesh hands the peer the wrong source IP. SS7 must
+#     not be load-balanced at all.
+#   * A container on the host network cannot resolve swarm service names, so
+#     postgres and nginx also run here and everything talks over 127.0.0.1.
+#   * Consequence: the stack is SINGLE-NODE. `replicas: 1` plus a node label keeps
+#     the gateway pinned to the node the carrier peers actually whitelist.
+#
+# The Digicom variant (stack.digicom.yml) lives only on the private `digicom`
+# branch — never on public main.
+
+version: "3.9"
+
+networks:
+  hostnet:
+    external: true
+    name: host
+
+volumes:
+  ussdgw-configs:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /srv/ussdgw/configs
+  ussdgw-logs:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /srv/ussdgw/logs
+  ussdgw-data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /srv/ussdgw/data
+  pgdata:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /srv/ussdgw/pgdata
+  nginx-certs:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /srv/ussdgw/nginx/certs
+
+secrets:
+  ussdgw_db_password:
+    external: true
+  ussdgw_admin_key:
+    external: true
+
+services:
+
+  postgres:
+    image: postgres:16@sha256:2c72031ac25606bf94fd2fece7c35efdf263a48b08446950034f0725653f4efc
+    networks: [hostnet]
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    secrets:
+      - source: ussdgw_db_password
+        target: ussdgw_db_password
+        uid: "999"
+        gid: "999"
+        mode: 0400
+    environment:
+      POSTGRES_USER: ussdgw_admin
+      POSTGRES_DB: ussdgw_admin
+      POSTGRES_INITDB_ARGS: "--auth-host=scram-sha-256"
+      USSD_DB_PASSWORD_FILE: /run/secrets/ussdgw_db_password
+      # PGDATA must be the mounted volume root; the image defaults to a subdir that
+      # does not exist on a fresh bind mount.
+      PGDATA: /var/lib/postgresql/data/pgdata
+    # Loopback only (set in postgresql.conf). NOT published: exposing 5432 would put
+    # the USSD database on the network for no benefit.
+    deploy:
+      replicas: 1
+      placement:
+        constraints: [node.labels.ussdgw == true]
+      resources:
+        limits:
+          memory: 1G
+      restart_policy:
+        condition: on-failure
+        delay: 10s
+        max_attempts: 5
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  ussdgw:
+    image: ${USSDGW_IMAGE:-ussdgw:latest}
+    networks: [hostnet]
+    volumes:
+      - ussdgw-configs:/opt/ussdgw/configs
+      - ussdgw-logs:/opt/ussdgw/logs
+      - ussdgw-data:/opt/ussdgw/data
+    secrets:
+      # uid/gid are REQUIRED, not optional. A secret is mounted 0400 owned by root, and
+      # this service runs as uid 10001 — without an explicit uid/gid the gateway cannot
+      # read its own DB password and the entrypoint aborts with
+      # "no database password". Proven by running the image by hand.
+      - source: ussdgw_db_password
+        target: ussdgw_db_password
+        uid: "10001"
+        gid: "10001"
+        mode: 0400
+      - source: ussdgw_admin_key
+        target: ussdgw_admin_key
+        uid: "10001"
+        gid: "10001"
+        mode: 0400
+    environment:
+      USSD_ADMIN_API_KEY_FILE: /run/secrets/ussdgw_admin_key
+      USSD_ADMIN_API_KEY: ${USSD_ADMIN_API_KEY:-ussd-admin}
+      USSD_DB_PASSWORD_FILE: /run/secrets/ussdgw_db_password
+      PG_HOST: 127.0.0.1
+      PG_PORT: "5432"
+      # Heap: lab-safe defaults per AGENTS.md. A shared SS7 host cannot spare 8 GB
+      # to one container. Raise only on a dedicated node.
+      USSD_XMS: ${USSD_XMS:-2g}
+      USSD_XMX: ${USSD_XMX:-4g}
+      TZ: Africa/Addis_Ababa
+    depends_on: [postgres]
+    # Give live MAP dialogs time to end/abort cleanly on SIGTERM instead of being
+    # SIGKILLed mid-dialog. In swarm this is a top-level service key, NOT under
+    # deploy (the schema rejects it there, which is a useful failure).
+    stop_grace_period: 60s
+    deploy:
+      # Exactly one instance: two would fight over the same SCTP endpoints and the
+      # same Point Code, which on a live network means duplicate dialogs.
+      replicas: 1
+      update_config:
+        # stop-first, NOT start-first. Rolling two instances would put two gateways
+        # on the same SCTP endpoints mid-deploy.
+        order: stop-first
+        parallelism: 1
+        delay: 10s
+        failure_action: rollback
+        monitor: 60s
+      rollback_config:
+        order: stop-first
+        parallelism: 1
+        delay: 5s
+      placement:
+        constraints: [node.labels.ussdgw == true]
+      resources:
+        limits:
+          # Xmx + JVM overhead + native (netty direct buffers, SCTP) + headroom.
+          # Setting this too low gets the JVM OOM-killed mid-dialog.
+          memory: ${USSDGW_MEM_LIMIT:-6g}
+      restart_policy:
+        # A crash loop must be visible, not silently retried forever. max_attempts
+        # then on-failure-stop surfaces the failure instead of hiding it.
+        condition: on-failure
+        delay: 10s
+        max_attempts: 5
+      
+    ulimits:
+      nofile:
+        soft: 1048576
+        hard: 1048576
+    # No privileged, no extra capabilities: the host network means SCTP is reachable
+    # without CAP_NET_ADMIN, and the ports are all > 1024.
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "5"
+
+  nginx:
+    image: ${NGINX_IMAGE:-ussdgw-nginx:latest}
+    networks: [hostnet]
+    volumes:
+      - nginx-certs:/etc/nginx/certs
+    ports:
+      - target: 80
+        published: 80
+        protocol: tcp
+        mode: host
+      - target: 443
+        published: 443
+        protocol: tcp
+        mode: host
+    depends_on: [ussdgw]
+    # The image runs as non-root (uid 101) but must bind :80/:443, which are
+    # privileged ports. CAP_NET_BIND_SERVICE is the ONLY capability added anywhere
+    # in this stack — never privileged:true, never CAP_NET_ADMIN or CAP_SYS_ADMIN.
+    cap_add:
+      - NET_BIND_SERVICE
+    deploy:
+      replicas: 1
+      placement:
+        constraints: [node.labels.ussdgw == true]
+      resources:
+        limits:
+          memory: 256m
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+        max_attempts: 5
+      update_config:
+        order: start-first   # nginx can overlap: the gateway is the single writer
+        parallelism: 1
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"

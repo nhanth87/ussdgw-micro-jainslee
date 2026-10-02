@@ -216,4 +216,72 @@ class CdrFileLedgerTest {
         assertEquals(1, l.sessions(50, e -> "MAP2MAP_".equals(e.status) ? false : e.status.startsWith("MAP2MAP_")).size());
         assertEquals(1, l.sessions(50, e -> e.status.startsWith("GATE")).size());
     }
+
+    /**
+     * C6 (capacity_5k_tps.md): events of one correlation INTERLEAVE under concurrency.
+     *
+     * <p>The first implementation treated a correlation as "complete" the moment a different
+     * one was seen. That is only correct when a correlation's events are contiguous, which
+     * holds for a single sequential caller and is false for every real gateway. With two
+     * sessions in flight the tape alternates A,B,A,B — so each run became a fragment row,
+     * the six-hop spine lost its middle, and one session appeared many times on the ledger.
+     *
+     * <p>This test writes the interleaving explicitly, so the bug cannot come back.
+     */
+    @Test
+    void interleavedCorrelationsCollapseToOneRowEach() {
+        CdrFileLedger l = ledger();
+        Instant t = Instant.parse("2026-10-02T09:00:00Z");
+
+        // A and B interleave, which is what two concurrent MO dialogs produce.
+        l.append(event("A", "25191100001", "GATE_ARMED", "acme", t));
+        l.append(event("B", "25191100002", "GATE_ARMED", "acme", t.plusMillis(10)));
+        l.append(event("A", "25191100001", "BRIDGED", "acme", t.plusMillis(20)));
+        l.append(event("B", "25191100002", "BRIDGED", "acme", t.plusMillis(30)));
+        l.append(event("A", "25191100001", "END", "acme", t.plusMillis(40)));
+        l.append(event("B", "25191100002", "END", "acme", t.plusMillis(50)));
+
+        List<CdrEntity> rows = l.sessions(50, e -> true);
+
+        assertEquals(2, rows.size(),
+                "one row per correlation even when events interleave, got: "
+                        + rows.stream().map(e -> e.correlationId).toList());
+        for (CdrEntity row : rows) {
+            assertEquals(Integer.valueOf(3), row.eventCount,
+                    "corr " + row.correlationId + " must carry all 3 of its events, not 1");
+            assertEquals("END", row.status, "the terminal event must win the rollup");
+            List<CdrRecord> timeline = CdrSessionRollup.timelineFromEvents(row);
+            assertEquals("GATE_ARMED", timeline.get(0).status,
+                    "events_json must be causal (oldest first) or the spine is wrong");
+            assertEquals(3, timeline.size());
+        }
+    }
+
+    /** Same trap with three correlations rotating, which is what a busy gateway looks like. */
+    @Test
+    void roundRobinInterleavingStillYieldsOneRowPerCorrelation() {
+        CdrFileLedger l = ledger();
+        Instant t = Instant.parse("2026-10-02T10:00:00Z");
+        String[] corrs = {"A", "B", "C"};
+        for (int i = 0; i < 9; i++) {
+            // Only C ever reaches a terminal status; A and B stay in flight. That asymmetry is
+            // deliberate — it proves the rollup is per-correlation and not "last event wins".
+            String corr = corrs[i % 3];
+            l.append(event(corr, "2519110000" + i, "C".equals(corr) ? "END" : "GATE_ARMED",
+                    "acme", t.plusSeconds(i)));
+        }
+
+        List<CdrEntity> rows = l.sessions(50, e -> true);
+
+        assertEquals(3, rows.size(), "3 correlations -> 3 rows, got: "
+                + rows.stream().map(e -> e.correlationId).toList());
+        for (CdrEntity row : rows) {
+            assertEquals(Integer.valueOf(3), row.eventCount,
+                    "corr " + row.correlationId + " must aggregate its own 3 events, got "
+                            + row.eventCount);
+            String expected = "C".equals(row.correlationId) ? "END" : "GATE_ARMED";
+            assertEquals(expected, row.status,
+                    "corr " + row.correlationId + " rolled up another correlation's status");
+        }
+    }
 }

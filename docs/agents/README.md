@@ -17,5 +17,6 @@ Pattern peer: OTA [`docs/agents/`](../../../../ota-service/ota-sim-push/docs/age
 | USSD 3GPP + NI layering | [../as-contract/ussd-3gpp-notes.md](../as-contract/ussd-3gpp-notes.md) — 22.090 / 23.090 / 29.002 (22.002 ≠ USSD) |
 | AS contract | [../as-contract/](../as-contract/) dual-mode XML default + JSON · [classic-xml.md](../as-contract/classic-xml.md) |
 | Parity | [../parity-matrix.md](../parity-matrix.md) |
+| Docker / Swarm (build from source) | [docker.md](docker.md) footguns · [docker/README.md](../../docker/README.md) operator runbook · [plan.md](../../plan.md) requirements + design |
 | CMP / Profile inventory + gaps | [cmp-inventory.md](cmp-inventory.md) — `ussdTx`/`ussdUser` fields, classic SBB CMP → micro, heap claims, gap register (no cluster design) |
 | Cutover | [../cutover.md](../cutover.md) |

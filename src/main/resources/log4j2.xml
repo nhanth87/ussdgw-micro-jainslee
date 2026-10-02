@@ -3,22 +3,30 @@
   Log4j2 ONLY (see docs/agents/logging.md). Files land under ${ussd.log.dir} = dist/logs/.
   Never quarkus.log.file*, never log4j2-jboss-logmanager, never /tmp.
 
-  Retention: time OR size trigger, capped file count, plus an age sweep. Without a size
-  trigger and a rollover max a single day of ussdgw-slee.log at the 10k TPS target fills
-  the disk and nothing is ever deleted.
+  ROLLOVER: DAILY. filePattern carries %d{yyyy-MM-dd}, so one file per day:
+    ussdgw-2026-10-02.log, ussdgw-2026-10-03.log, ...
+  max=${MAX_FILES} keeps that many daily files (default 120, ~= 4 months headroom).
+
+  Retention + compression are NOT expressible here, and that is deliberate:
+    - a Delete/age action would remove a file Log4j2 may still hold open, and
+    - Log4j2 cannot gzip, so "keep 3 months, compress last week's files" is not
+      something an appender can do.
+  Those are done by the sibling service docker/logs/log-retention.sh: daily files
+  -> .gz exactly once past COMPRESS_AFTER_DAYS=7, deleted past RETENTION_DAYS=90.
+  Run command + verification: docker/logs/Dockerfile.
 
   Tunable at launch (run.sh -D...):
     ussd.log.dir        directory           (default logs)
     ussd.log.max-size   per-file roll size  (default 200MB)
-    ussd.log.max-files  kept per pattern    (default 30)
-    ussd.log.max-age    age sweep           (default 14d)
+    ussd.log.max-files  kept per pattern    (default 120 daily files)
+    ussd.log.max-age    age sweep           (default 120d)
 -->
 <Configuration status="WARN">
   <Properties>
     <Property name="LOG_DIR">${sys:ussd.log.dir:-logs}</Property>
     <Property name="MAX_SIZE">${sys:ussd.log.max-size:-200MB}</Property>
-    <Property name="MAX_FILES">${sys:ussd.log.max-files:-30}</Property>
-    <Property name="MAX_AGE">${sys:ussd.log.max-age:-14d}</Property>
+    <Property name="MAX_FILES">${sys:ussd.log.max-files:-120}</Property>
+    <Property name="MAX_AGE">${sys:ussd.log.max-age:-120d}</Property>
   </Properties>
   <Appenders>
     <RollingFile name="APP" fileName="${LOG_DIR}/ussdgw.log"
@@ -54,6 +62,8 @@
       ledger reads (CdrFileLedger). The timestamp lives in field 0 of each line, so the pattern
       is bare %m%n — a %d prefix would prepend a second timestamp and break the parser.
       Do not add level/thread/logger here: CdrFileLedger.parse() would reject the line.
+      Daily rollover matters MORE here than for the text logs: the admin ledger tails the
+      newest file, so a size-only rollover used to split recent sessions across files.
     -->
     <RollingFile name="CDR" fileName="${LOG_DIR}/ussd-cdr.log"
                  filePattern="${LOG_DIR}/ussd-cdr-%d{yyyy-MM-dd}-%i.log.gz">

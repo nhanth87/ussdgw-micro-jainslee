@@ -95,8 +95,9 @@ public final class MapUssdParentSbb implements Sbb, SleeEventHandler {
             return;
         }
         if (event instanceof Ss7MapEvent.Remote remote) {
-            // ADR 0007 D2 cross-node summary. Single-node deployments never see it; log honestly
-            // rather than dropping it, so an active/active gap is visible instead of silent.
+            // ADR 0007 D2 cross-node summary (present as of jain-slee 31873d44c). A
+            // single-node deployment never sees it, so trace it honestly instead of
+            // swallowing it — an active/active gap must be visible, not silent.
             SleeEventTrace.inSbb("MapUssdParentSbb", event,
                     "remote type=" + remote.typeName() + " dialogId=" + remote.dialogId());
             SleeEventTrace.outSbb("MapUssdParentSbb", event,

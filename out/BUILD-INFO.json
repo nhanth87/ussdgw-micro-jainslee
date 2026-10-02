@@ -1,0 +1,18 @@
+{
+  "builtAt": "2026-10-01T22:55:33Z",
+  "bakedDbKind": "postgresql",
+  "sourceMode": "local",
+  "toolchain": {
+    "jdk": "openjdk version \"25.0.4.1\" 2026-08-18",
+    "mvn": "Apache Maven 3.9.12",
+    "git": "git version 2.53.0",
+    "python3": "Python 3.14.4"
+  },
+  "sources": {
+    "sctp": "18097d68c977951dbe7a402a1d512128effd0c59",
+    "jss7": "d8514680057063c54f2c5bbb2bae475287d15e20",
+    "jain-slee": "a8d258bbbdbbf20a9dc861795e5f738400e7de82",
+    "corsac-diameter": "0bc4629186a7153ab365568c3c8d7e340c77d862",
+    "ussdgw": "1daf80188b42a6b2885d4a8a61d0d4184457e9e7"
+  }
+}

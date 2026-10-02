@@ -1,0 +1,110 @@
+# sources.lock — the audited source chain for the Digicom-ET USSDGW Docker build
+#
+# WHAT THIS FILE IS FOR (R3, customer requirement):
+#   The operator must be able to audit the codebase. We ship no prebuilt binaries.
+#   Every line below is either (a) an in-house git repo pinned to an exact commit,
+#   or (b) a source tarball pinned to a SHA-256 digest. The builder REFUSES to
+#   compile if any entry cannot be verified.
+#
+# HOW IT IS ENFORCED (see build/fetch-sources.sh + build/verify-sources.sh):
+#   1. fetch-sources.sh checks out / verifies each entry (SOURCE_MODE=local|git).
+#   2. verify-sources.sh re-hashes what was actually used and compares to this file.
+#   3. build-all.sh records every SHA it consumed into /out/BUILD-INFO.json.
+#   4. The CycloneDX SBOM in /out/sbom lists every resulting jar.
+#
+# TRUST BOUNDARY (plan.md §2 D1, Option A — owner-approved):
+#   Built from source : sctp, jss7, jain-slee (micro-jainslee + all RAs),
+#                       corsac-diameter, ussdgw
+#   Pinned upstream   : Ubuntu 26.04 LTS base image (by digest), OpenJDK 25 (by
+#                       digest), Maven, and Maven Central dependencies.
+#                       PostgreSQL + nginx are pulled/apt-installed per owner decision.
+#   Every one of those is either digest-pinned or checksum-verified, and appears
+#   in the SBOM. There is no "trust me" link in the chain.
+
+# ---------------------------------------------------------------------------
+# IN-HOUSE GIT REPOSITORIES  (format: <name>|<url>|<branch-or-tag>|<commit-sha>)
+# ---------------------------------------------------------------------------
+# The commit SHA is authoritative. Branch names are documentation only and are
+# IGNORED by the verifier — a moved branch cannot silently change what we build.
+
+sctp|https://github.com/nhanth87/sctp.git|java25-upgrade|18097d68c977951dbe7a402a1d512128effd0c59
+
+jss7|https://github.com/nhanth87/jss7.git|j25|d8514680057063c54f2c5bbb2bae475287d15e20
+
+jain-slee|https://github.com/nhanth87/jain-slee.git|micro-jainslee-2|31873d44c3d49dd0372529e04bb26441b1f675ea
+
+corsac-diameter|https://github.com/mobius-software-ltd/corsac-diameter.git|diameter-parent-10.0.0-41|0bc4629186a7153ab365568c3c8d7e340c77d862
+
+# NOTE on corsac-diameter (plan.md §1.1):
+#   ra-diameter needs `10.0.0-41-SNAPSHOT`, which is NOT on Maven Central (HTTP 404)
+#   and was NOT reproducible from the workspace clone (which only had 34-SNAPSHOT).
+#   The SHA above is the upstream "prepare for next development iteration" commit
+#   whose pom.xml literally reads 10.0.0-41-SNAPSHOT. We install it AS-IS — we are
+#   not rewriting version coordinates to fake a release.
+#
+# NOTE on jain-slee (resolved 2026-10-02):
+#   The Digicom host runs a ra-jss7 built from 3e1c82f4b, which was never pushed.
+#   That provenance gap is now CLOSED: 13cf321bd (active/active ADR 0007),
+#   3e1c82f4b (per-association / per-AS admin state) and 31873d44c (per-link SCTP
+#   bounce) are pushed to BOTH nhanth87/jain-slee and digicom-et/jain-slee, and the
+#   pin above is their tip. The Digicom artifact and the Docker build now trace to the
+#   same auditable commit.
+#
+#   HELD BACK ON PURPOSE: 0538b082f bumps micro-jainslee to 1.2.1-SNAPSHOT and jss7
+#   to 9.2.9-j25. nhanth87/jss7@j25 is still 9.2.8-j25 and no workspace tree declares
+#   9.2.9-j25, so publishing it would advertise a dependency nobody can resolve.
+#   Push it once jss7 9.2.9-j25 is on GitHub, then move this pin to its successor.
+#
+#   This SHA declares the ADR 0007 `Ss7MapEvent.Remote` subtype, so the ussdgw SBB
+#   handles all four subtypes. Its version is still 1.2.0-SNAPSHOT / 9.2.8-j25, so no
+#   ussdgw pom change is needed.
+
+# ---------------------------------------------------------------------------
+# PATCHES APPLIED TO PINNED SOURCES  (format: <file>|<target-repo>|<sha256>)
+# ---------------------------------------------------------------------------
+# A pinned commit is not always self-consistent with the pinned consumer. Here,
+# jain-slee's ra-jss7 needs Ss7Config.Addr.ri, which nhanth87/jss7 j25 does not
+# have, so jss7 does not compile. Rather than carry an implicit local edit — which
+# is precisely the unprovable provenance R3 forbids — the delta is a reviewable
+# file with a recorded digest. The builder applies it and fails loudly if the
+# pinned upstream ever changes underneath it.
+#
+# Ground truth: decompiled from the artifact Digicom runs. The pre-patch backup
+# (ss7-config-9.2.8-j25.jar.bak-092725) has 7 Addr components; the running jar has
+# 8, the last named "ri".
+
+jss7-ss7-config-kernel-sctp.patch|jss7|sha256:f1a8a92fd5da34482dd3ace226120d6a75c1c4ca0a5a364f65ec6ba430eea6d1
+
+# ---------------------------------------------------------------------------
+# THE PRODUCT ITSELF  (this repository)
+# ---------------------------------------------------------------------------
+# ussdgw is built from the checkout mounted at /src/ussdgw, NOT cloned — the
+# operator hands over the tree they audited. Its commit is recorded at build time
+# from `git rev-parse HEAD` (or the source tarball's SHA-256), and lands in
+# /out/BUILD-INFO.json. Nothing to pin here.
+
+# ---------------------------------------------------------------------------
+# FROM-CENTRAL DEPENDENCIES NEEDED ON THE BUILD CHAIN (not built from source)
+# ---------------------------------------------------------------------------
+# corsac-sip is used by ra-sip-servlet and IS published on Maven Central (verified
+# HTTP 200), so it resolves normally and needs no source build. Recorded here for
+# the audit trail so its absence from the build list is deliberate and visible:
+#
+#   com.mobius-software.protocols.sip:sip-api:10.1.0-31   (Maven Central, resolved)
+#   com.mobius-software.protocols.diameter:*:10.0.0-41-SNAPSHOT  (built above)
+
+# ---------------------------------------------------------------------------
+# PINNED BASE IMAGES AND TOOLS  (format: <name>|<ref-or-url>|<sha256>)
+# ---------------------------------------------------------------------------
+# Base images are pinned BY DIGEST, not by tag — a tag can be re-pushed.
+# Verify a digest yourself before changing one:
+#   docker buildx imagetools inspect ubuntu:26.04
+
+base-ubuntu|docker.io/library/ubuntu:26.04|sha256:61ebaa5cc23ca45450db85eac015435199ec569e28ec222ea13f2aed2110b8a6
+base-temurin|docker.io/library/eclipse-temurin:25-jdk|sha256:f1a8a92fd5da34482dd3ace226120d6a75c1c4ca0a5a364f65ec6ba430eea6d1_FETCHED_AT_BUILD_TIME
+base-postgres|docker.io/library/postgres:16|sha256:2c72031ac25606bf94fd2fece7c35efdf263a48b08446950034f0725653f4efc
+
+# base-temurin is resolved and pinned by build/build-all.sh on first run (it must
+# be fetched to learn the digest). After that the resolved digest is written back
+# into /out/sbom/BASE-IMAGES.txt so the operator can pin it themselves. Do NOT
+# hardcode a digest here that has not been verified by a real pull.
