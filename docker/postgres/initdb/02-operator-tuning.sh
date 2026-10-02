@@ -104,24 +104,39 @@ fi
 # for a good config and a corrupt one — the check was answering nothing.
 PGDATA_DIR="$(dirname "$PGCONF")"
 
-if ! parsed="$(postgres -D "$PGDATA_DIR" -C listen_addresses 2>&1)"; then
+# postgres -C writes its LOG lines to stdout as well as its result, e.g.
+#
+#     LOG:  skipping missing configuration file ".../postgresql.auto.conf"
+#     127.0.0.1
+#
+# so the result is the LAST non-empty line, not the whole of stdout. Capturing
+# everything and comparing the lot made a correct configuration read as
+# '2026-10-02T08:23:31.661 GMT [19] LOG: ... 127.0.0.1' and fail the check.
+setting_value() {
+  local out last
+  out="$(postgres -D "$PGDATA_DIR" -C "$1" 2>&1)" || return 1
+  last=""
+  while IFS= read -r line; do
+    [[ -n "${line//[[:space:]]/}" ]] && last="$line"
+  done <<< "$out"
+  printf '%s' "${last//[[:space:]]/}"
+}
+
+if ! parsed="$(setting_value listen_addresses)"; then
   echo "ERROR: $PGCONF does not parse — PostgreSQL will refuse to start." >&2
-  echo "  postgres says: $parsed" >&2
+  echo "  postgres says: $(postgres -D "$PGDATA_DIR" -C listen_addresses 2>&1 | tail -3)" >&2
   echo "  The operator tuning must be a whole number of lines, each newline-terminated." >&2
   exit 1
 fi
-# postgres echoes the effective value; strip surrounding whitespace.
-parsed="${parsed//[[:space:]]/}"
 [[ "$parsed" == "127.0.0.1" ]] \
   || { echo "ERROR: effective listen_addresses is '$parsed', not 127.0.0.1." >&2
        echo "       On hostnet any other value exposes the USSD database on this" >&2
        echo "       host's interfaces. Refusing to continue." >&2
        exit 1; }
 
-if ! shared="$(postgres -D "$PGDATA_DIR" -C shared_buffers 2>&1)"; then
-  echo "ERROR: could not read effective shared_buffers from $PGCONF: $shared" >&2
+if ! shared="$(setting_value shared_buffers)"; then
+  echo "ERROR: could not read effective shared_buffers from $PGCONF" >&2
   exit 1
 fi
-shared="${shared//[[:space:]]/}"
 
 echo "operator tuning: $PGCONF parses; listen_addresses=127.0.0.1, shared_buffers=$shared"
