@@ -16,10 +16,10 @@
 #   Built from source : sctp, jss7, jain-slee (micro-jainslee + all RAs),
 #                       corsac-diameter, ussdgw
 #   Pinned upstream   : Ubuntu 26.04 LTS base image (by digest), OpenJDK 25 (by
-#                       digest), Maven, and Maven Central dependencies.
-#                       PostgreSQL + nginx are pulled/apt-installed per owner decision.
-#   Every one of those is either digest-pinned or checksum-verified, and appears
-#   in the SBOM. There is no "trust me" link in the chain.
+#                       digest), Maven, Maven Central dependencies, PostgreSQL 16
+#                       (by digest) and nginx 1.27-alpine (by digest).
+#   Every one of those is digest-pinned or checksum-verified, and appears in the
+#   SBOM. There is no "trust me" link in the chain.
 
 # ---------------------------------------------------------------------------
 # IN-HOUSE GIT REPOSITORIES  (format: <name>|<url>|<branch-or-tag>|<commit-sha>)
@@ -70,6 +70,18 @@ corsac-diameter|https://github.com/mobius-software-ltd/corsac-diameter.git|diame
 base-ubuntu|docker.io/library/ubuntu:26.04|sha256:61ebaa5cc23ca45450db85eac015435199ec569e28ec222ea13f2aed2110b8a6
 base-temurin|docker.io/library/eclipse-temurin:25-jdk|sha256:f1a8a92fd5da34482dd3ace226120d6a75c1c4ca0a5a364f65ec6ba430eea6d1_FETCHED_AT_BUILD_TIME
 base-postgres|docker.io/library/postgres:16|sha256:2c72031ac25606bf94fd2fece7c35efdf263a48b08446950034f0725653f4efc
+
+# The nginx edge image (owner decision 2026-10-02).
+#
+# This replaced an `apt install nginx` layer on top of base-ubuntu, which could not
+# build: Ubuntu's nginx package never creates a `nginx` user (it uses `www-data`),
+# so `chown -R nginx:nginx` failed with exit code 1. The official image ships the
+# user, the entrypoint and the template engine already, and — unlike an apt package
+# resolved at build time — it is pinned by digest here like every other base.
+#
+# Digest verified with:
+#   docker buildx imagetools inspect nginx:1.27-alpine
+base-nginx|docker.io/library/nginx:1.27-alpine|sha256:65645c7bb6a0661892a8b03b89d0743208a18dd2f3f17a54ef4b76fb8e2f2a10
 
 # base-temurin is resolved and pinned by build/build-all.sh on first run (it must
 # be fetched to learn the digest). After that the resolved digest is written back

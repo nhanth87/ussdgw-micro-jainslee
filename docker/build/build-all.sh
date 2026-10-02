@@ -205,17 +205,26 @@ tar -C "$SRC_USSDGW" --exclude=./target --exclude=./.git -cf - . \
 cd "$WORK_USSDGW"
 
 if [[ "$RUN_TESTS" == "1" ]]; then
-  # Two pre-existing failures are EXPECTED and reported, not hidden:
-  #   GrpcClientSbbPullStateTest.completionOnAnotherInstanceStillSeedsTheAdaptiveGate
-  #   Map2MapBridgeArmTest.fastHopStillRearmsAwaitingAsAndPulls
-  # They reproduce on a clean tree (verified by stashing all changes), so they are
-  # unrelated debt in the AS-pull state registry, not a regression from this build.
+  # A failing test FAILS THE BUILD.
+  #
+  # This block used to print "Two pre-existing failures are EXPECTED", name them,
+  # and `continue` to the packaging step anyway. Those two tests are green now
+  # (669 run / 0 fail), so the allowance was not just stale — it was a blind spot:
+  # with RUN_TESTS=1 set on purpose, a genuinely broken tree still produced an
+  # image. Anyone who ran with tests on believed the tests had gated the build.
+  # They did not.
+  #
+  # If a test fails, stop here. If it is genuinely unrelated debt, land the fix or
+  # land the skip with a reason in the test itself — never by teaching the build to
+  # forgive it.
   if mvn "${MVN_FLAGS[@]}" test >"$LOG_DIR/ussdgw-test.log" 2>&1; then
     echo "-- ussdgw tests: all green"
   else
     echo "-- ussdgw tests: FAILED (see $LOG_DIR/ussdgw-test.log)"
     grep -E '^\[ERROR\]   [A-Za-z]' "$LOG_DIR/ussdgw-test.log" | sed 's/^/     /' || true
-    echo "   NOTE: continuing — known pre-existing failures, listed in docs/agents/lessons.md"
+    grep -E 'Tests run:.*(Failures: [1-9]|Errors: [1-9])' "$LOG_DIR/ussdgw-test.log" | tail -3 | sed 's/^/     /' || true
+    echo "   RUN_TESTS=1 was requested, so this is fatal — no image will be built from a red tree."
+    exit 1
   fi
 fi
 
