@@ -9,6 +9,13 @@ dist/logs/
 # Written by ./build/package-dist.sh — Digicom bake detail, never on public main
 dist/.baked-db-kind
 dist/configs/*.new
+# Container build staging area (docker/build/stage-dist.sh mirrors /srv/ussdgw-build/out
+# here so `docker build` can COPY it). out/BUILD-INFO.json was tracked and carries a
+# `builtAt` timestamp, so every single build rewrote a tracked file: the working tree was
+# dirty immediately after a successful build, deploy.sh then demanded --allow-dirty, and
+# the image tag picked up a `-dirty` suffix that named no commit. A build output belongs
+# to a build, not to the source tree.
+out/
 data/
 logs/
 .idea/
