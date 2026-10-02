@@ -50,6 +50,47 @@ the Docker version and the node label. **A container cannot do any of this** —
 
 ---
 
+## 0. One command (steps 1–6 below, automated)
+
+After `host-prep.sh` and after the operator's `configs/` + TLS certificate are in place,
+the whole chain is a single script:
+
+```bash
+./docker/deploy.sh --check     # dry run: validates host/swarm/SCTP/config/secrets/images, changes nothing
+./docker/deploy.sh             # build from source (WITH tests) → 3 images → config → secrets → deploy → prove.sh
+```
+
+It is fail-closed and idempotent (safe to re-run), and it refuses to continue at each of
+the points where a manual run silently skips something:
+
+| Guard | Why |
+|---|---|
+| refuses `sudo`/root | `run-build.sh` builds as `$(id -u)`; root-owned `out/` cannot be rebuilt by the operator |
+| refuses an uncommitted tree | the tag is the SHA it was built from — `--allow-dirty` tags it `<sha>-dirty` |
+| `RUN_TESTS=1` by default, then **fails on `Tests run: 0`** | the underlying default is 0, so a "passed" build once meant no test ran |
+| asserts `BUILD-INFO.json` `sources.ussdgw` == `HEAD` | an image must never be relabelled to a SHA it was not built from |
+| runs `install-config.sh --check` every time | db-kind / non-SCTP channel / missing `sctp.backend` / dead TLS cert |
+| creates missing secrets, **never rotates existing ones** | a missing external secret is not caught by `stack deploy`; rotating one breaks the initialised database |
+| pins `USSDGW_IMAGE`/`NGINX_IMAGE`/`POSTGRES_IMAGE` to `:$TAG` in the shell **and** in `.env` | so the stack cannot resolve `latest` to an older artifact |
+| after deploy: task state + **spec image ID == running container image ID** | `docker stack services` reported 1/1 with the new image while the task was Pending and the old container kept serving (B24) |
+| ends with `prove.sh` against the running container | a green build proves nothing about the host |
+
+Useful variants:
+
+```bash
+./docker/deploy.sh --skip-build      # reuse images already built for this TAG
+./docker/deploy.sh --build-only      # build + images + asserts, deploy nothing
+./docker/deploy.sh --skip-tests      # faster, and it says out loud that there is no test evidence
+./docker/deploy.sh --fetch-sources   # clone sctp/jss7/jain-slee/corsac-diameter at the pinned SHAs first
+./docker/deploy.sh --force-config    # re-seed configs (timestamped backup first)
+DEPLOY_PROFILE=5k ./docker/deploy.sh # production overlay, gated on capacity/preflight-capacity.sh
+```
+
+Sections 1–6 below are what the script runs, kept as the manual/audit path and as the
+explanation of each step.
+
+---
+
 ## 1. Build
 
 ```bash
