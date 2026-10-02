@@ -94,6 +94,41 @@ baked="$(docker exec "$CONTAINER" cat /opt/ussdgw/.baked-db-kind 2>/dev/null | t
   && ok ".baked-db-kind=postgresql (matches the runtime config)" \
   || bad ".baked-db-kind='$baked' — expected postgresql; an H2 bake crash-loops on PG"
 
+# --- 1b. the RUNNING task is the one the service spec describes ------------------
+head_ "service/task agreement"
+# `docker stack services` prints the spec's image and a replica count that stays 1/1 even
+# while the update itself is stuck. nginx shipped exactly that: a task Pending for sixteen
+# minutes on "no suitable node (host-mode port already in use)" — start-first against a
+# host-mode published port can never be placed — while the service reported
+# `1/1  ussdgw-nginx:<new-sha>` and the container actually serving was the previous image.
+# Compare resolved image IDs, not tags: two tags can name the same or different bits.
+stack_ns="$(docker inspect -f '{{index .Config.Labels "com.docker.stack.namespace"}}' "$CONTAINER" 2>/dev/null)"
+if [[ -z "$stack_ns" ]]; then
+  echo "  note  not a swarm task (no stack label) — skipping the service/task comparison"
+else
+  for svc in $(docker stack services "$stack_ns" --format '{{.Name}}' 2>/dev/null); do
+    spec_img="$(docker service inspect -f '{{.Spec.TaskTemplate.ContainerSpec.Image}}' "$svc" 2>/dev/null)"
+    cid="$(docker ps -q --filter "label=com.docker.swarm.service.name=$svc" 2>/dev/null | head -1)"
+    if [[ -z "$cid" ]]; then
+      bad "$svc has NO running container, though its spec is $spec_img"
+    else
+      run_id="$(docker inspect -f '{{.Image}}' "$cid" 2>/dev/null)"
+      spec_id="$(docker image inspect -f '{{.Id}}' "$spec_img" 2>/dev/null)"
+      if [[ -z "$spec_id" ]]; then
+        bad "$svc spec image '$spec_img' is not present locally — Swarm cannot converge on it"
+      elif [[ "$run_id" == "$spec_id" ]]; then
+        ok "$svc is really running its spec image ($(docker inspect -f '{{.Config.Image}}' "$cid"))"
+      else
+        bad "$svc is running $(docker inspect -f '{{.Config.Image}}' "$cid") but its spec says $spec_img — the update never landed"
+      fi
+    fi
+    pend="$(docker service ps "$svc" --filter 'desired-state=running' --format '{{.CurrentState}} {{.Error}}' 2>/dev/null | grep -ci 'pending' || true)"
+    if [[ "${pend:-0}" != "0" ]]; then
+      bad "$svc has $pend task(s) stuck Pending — read why: docker service ps $svc --no-trunc"
+    fi
+  done
+fi
+
 # --- 2. the expected classes are actually inside the jar ------------------------
 head_ "classes in the running jar"
 # CdrFileLedger is the file-ledger read model; if it is missing the CDR page is
@@ -145,6 +180,44 @@ head_ "preflight"
 docker exec "$CONTAINER" test -e /proc/net/sctp \
   && ok "host SCTP available inside the container" \
   || bad "no /proc/net/sctp — the host kernel has no sctp module (run host-prep.sh)"
+
+# --- 3b. the wire is REALLY listening: kernel sockets, not a log line ------------
+head_ "SCTP endpoints (kernel truth)"
+# `SS7 boot: ss7=wired` and `[ss7-config] SCTP server … listening` are NOT evidence. When
+# sctp.backend resolves to FSTACK_DPDK — which is what SctpBackend.from(null) returns, i.e.
+# what any stack JSON without a "backend" key gets — the userspace stack logs both lines and
+# creates no kernel socket at all. The gateway reports healthy, status.json says
+# ss7.live=false "peer down", and the only honest witness is the kernel's own table.
+eps="$(cat /proc/net/sctp/eps 2>/dev/null || docker exec "$CONTAINER" cat /proc/net/sctp/eps 2>/dev/null || true)"
+if [[ -z "$eps" ]]; then
+  bad "cannot read /proc/net/sctp/eps — the SS7 wire is UNPROVEN (re-run with sudo)"
+else
+  # LPORT is field 6; the first line is the header.
+  have="$(awk 'NR>1 && $6!="" {print $6}' <<<"$eps" | sort -un | tr '\n' ' ')"
+  want="$(docker exec "$CONTAINER" sh -c \
+            'grep -ohE "\"local\"[[:space:]]*:[[:space:]]*\"[0-9.]+:[0-9]+\"" /opt/ussdgw/configs/ss7-*.json 2>/dev/null' \
+          | grep -oE ':[0-9]+"$' | tr -d ':"' | sort -un | tr '\n' ' ')"
+  if [[ -z "$want" ]]; then
+    bad "no local SCTP ports found in the container's ss7-*.json — cannot prove the wire"
+  else
+    missing=""
+    for p in $want; do
+      [[ " $have " == *" $p "* ]] || missing="$missing $p"
+    done
+    if [[ -z "$missing" ]]; then
+      ok "kernel SCTP endpoints listening on:$want"
+      assocs="$(awk 'NR>1 && NF>3' /proc/net/sctp/assocs 2>/dev/null | wc -l || echo 0)"
+      echo "        associations: $assocs (0 = the peer has not connected yet; that is a"
+      echo "        peer/firewall question, not a deaf gateway — the sockets exist)"
+    else
+      bad "NO kernel SCTP endpoint on:$missing  (kernel has:${have:- none})"
+      echo "        sctp.backend in the stack JSON decides which implementation binds these."
+      echo "        Omitted, it is FSTACK_DPDK — userspace DPDK, which logs 'listening' and"
+      echo "        binds nothing without hugepages + libsctp_fstack.so. Set"
+      echo "        \"backend\": \"NETTY_KERNEL\" in the sctp block."
+    fi
+  fi
+fi
 
 java_ver="$(docker exec "$CONTAINER" java -version 2>&1 | head -1)"
 grep -q 'version "25' <<<"$java_ver" \

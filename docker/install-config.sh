@@ -52,7 +52,34 @@ validate() {
     local bad
     bad="$(jq -r '.. | objects | .channel? // empty' "$f" 2>/dev/null | grep -vi '^sctp$' | sort -u || true)"
     [[ -z "$bad" ]] || die "$(basename "$f") has non-SCTP channel(s): $bad (SS7 is SCTP-only)"
-    ok "$(basename "$f") parses, all links channel=sctp"
+
+    # ...and WHICH SCTP implementation binds the sockets. "channel: sctp" is necessary but
+    # nowhere near sufficient: sctp.backend selects the provider, and SctpBackend.from(null)
+    # is FSTACK_DPDK — a userspace DPDK stack needing hugepages and a native
+    # libsctp_fstack.so. Omitting the key does not error. The gateway logs
+    # "SCTP server … listening" and "ss7=wired" and creates no kernel socket, so the carrier
+    # peer never connects and /proc/net/sctp/eps stays empty. That is exactly what shipped,
+    # and the channel check above passed it.
+    local backend lib
+    backend="$(jq -r '.sctp.backend // empty' "$f" 2>/dev/null)"
+    if [[ -z "$backend" ]]; then
+      die "$(basename "$f") has no sctp.backend, so it resolves to FSTACK_DPDK
+       (SctpBackend.from(null)) — a userspace DPDK stack. The gateway would boot, log
+       'listening' on every link and bind nothing: a deaf SS7 plane that looks wired.
+       Fix: add  \"backend\": \"NETTY_KERNEL\"  to the sctp block (kernel SCTP), or set
+       FSTACK_DPDK explicitly together with a sctp.library path that exists."
+    fi
+    case "$(tr '[:lower:]-' '[:upper:]_' <<<"$backend")" in
+      NETTY_KERNEL) ok "$(basename "$f") parses, all links channel=sctp, backend=NETTY_KERNEL (kernel SCTP)" ;;
+      FSTACK_DPDK)
+        lib="$(jq -r '.sctp.library // empty' "$f" 2>/dev/null)"
+        [[ -n "$lib" && -e "$lib" ]] \
+          || die "$(basename "$f") asks for FSTACK_DPDK but sctp.library='${lib:-unset}' does not exist
+       — the gateway would log 'listening' and create no socket. entrypoint.sh re-checks
+       this inside the container, where the path must also be mounted."
+        ok "$(basename "$f") parses, all links channel=sctp, backend=FSTACK_DPDK (library $lib)" ;;
+      *) die "$(basename "$f") sctp.backend='$backend' — expected NETTY_KERNEL or FSTACK_DPDK" ;;
+    esac
   done
 
   # The referenced stack file must exist, or jSS7 NPEs at boot.

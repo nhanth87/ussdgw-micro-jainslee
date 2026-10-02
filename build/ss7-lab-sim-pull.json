@@ -4,6 +4,7 @@
   "sctp": {
     "connectDelay": 10000,
     "workerThreads": 8,
+    "backend": "NETTY_KERNEL",
     "links": [
       {
         "name": "L1-SIM-PULL",
