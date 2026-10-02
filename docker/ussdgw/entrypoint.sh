@@ -39,7 +39,7 @@ baked="$(cat "$APP_HOME/.baked-db-kind" 2>/dev/null || echo missing)"
   || die "no $CONFIG_DIR/application.properties — is the operator configs mount in place?"
 cfg="$CONFIG_DIR/application.properties"
 
-cfg_val() { grep -E "^$1=" "$cfg" 2>/dev/null | head -1 | cut -d= -f2- | tr -d ' '; }
+cfg_val() { grep -E "^$1=" "$cfg" 2>/dev/null | head -1 | cut -d= -f2- | tr -d ' ' || true; }
 
 cfg_kind="$(cfg_val 'quarkus.datasource.db-kind')"
 [[ "$cfg_kind" == "postgresql" ]] \
@@ -55,7 +55,7 @@ esac
 # A tcp channel in the stack JSON looks like it works and silently breaks M3UA.
 ss7_cfg_name="$(cfg_val 'ussd.map.config-file')"
 ss7_cfg_path="$CONFIG_DIR/$(basename "${ss7_cfg_name:-ss7-lab.json}")"
-[[ -f "$ss7_cfg_path" ]] || ss7_cfg_path="$(ls "$CONFIG_DIR"/ss7-*.json 2>/dev/null | head -1)"
+[[ -f "$ss7_cfg_path" ]] || ss7_cfg_path="$(ls "$CONFIG_DIR"/ss7-*.json 2>/dev/null | head -1 || true)"
 if [[ -n "$ss7_cfg_path" && -f "$ss7_cfg_path" ]]; then
   bad_channels="$(grep -oE '"channel"[[:space:]]*:[[:space:]]*"[a-zA-Z]+"' "$ss7_cfg_path" \
                   | grep -viE '"(sctp)"' | sort -u || true)"
@@ -82,8 +82,15 @@ if [[ -n "$ss7_cfg_path" && -f "$ss7_cfg_path" ]]; then
   # gmlc deployment on this same host, same link names, same ports, has
   # "backend": "NETTY_KERNEL" in its copy of this file and is the one that holds the
   # associations. "channel is sctp" was true in both; only the backend differed.
+  # Every command substitution below ends in `|| true`, and that is load-bearing, not
+  # decoration. Under `set -euo pipefail` a grep that matches NOTHING exits 1, the pipeline
+  # fails, the assignment fails, and the script exits — before the `die` that was supposed to
+  # explain anything. The first version of this block did exactly that: a stack JSON without
+  # "backend" (the case it exists to catch) made the container exit 1 printing only
+  # "all links use channel=sctp ✓" and no reason at all. A preflight whose failure mode is
+  # silence is worse than no preflight, because the operator then debugs the wrong thing.
   ss7_backend="$(grep -oE '"backend"[[:space:]]*:[[:space:]]*"[A-Za-z_-]+"' "$ss7_cfg_path" \
-                 | head -1 | sed -E 's/.*"([A-Za-z_-]+)"[[:space:]]*$/\1/')"
+                 | head -1 | sed -E 's/.*"([A-Za-z_-]+)"[[:space:]]*$/\1/' || true)"
   ss7_backend_norm="$(tr '[:lower:]-' '[:upper:]_' <<<"${ss7_backend:-FSTACK_DPDK}")"
   case "$ss7_backend_norm" in
     NETTY_KERNEL)
@@ -100,11 +107,15 @@ if [[ -n "$ss7_cfg_path" && -f "$ss7_cfg_path" ]]; then
       # Legitimate only with the native library actually present. Otherwise this is the
       # deaf-SS7 case above, and refusing to boot beats logging "listening" for nothing.
       fstack_lib="$(grep -oE '"library"[[:space:]]*:[[:space:]]*"[^"]+"' "$ss7_cfg_path" \
-                    | head -1 | sed -E 's/.*"([^"]+)"[[:space:]]*$/\1/')"
+                    | head -1 | sed -E 's/.*"([^"]+)"[[:space:]]*$/\1/' || true)"
       if [[ -z "$fstack_lib" || ! -e "$fstack_lib" ]]; then
-        die "sctp.backend resolves to FSTACK_DPDK ($(basename "$ss7_cfg_path") has
-           backend='${ss7_backend:-<absent>}'; SctpBackend.from(null) = FSTACK_DPDK) but the
-           native library is not here: sctp.library='${fstack_lib:-unset}'.
+        if [[ -z "$ss7_backend" ]]; then
+          why="$(basename "$ss7_cfg_path") has no \"backend\" key, and SctpBackend.from(null)
+           returns FSTACK_DPDK"
+        else
+          why="$(basename "$ss7_cfg_path") explicitly asks for sctp.backend=FSTACK_DPDK"
+        fi
+        die "$why, but the native library is not here: sctp.library='${fstack_lib:-unset}'.
            The gateway would log 'listening' on every link, report ss7=wired, and bind no
            socket at all — a deaf SS7 plane that looks healthy.
            Fix: add  \"backend\": \"NETTY_KERNEL\"  to the sctp block (kernel SCTP — what the
