@@ -13,6 +13,9 @@ set -euo pipefail
 
 CONFIG_SRC="${CONFIG_SRC:-}"
 DEST="${DEST:-/srv/ussdgw/configs}"
+# The uid the gateway container runs as (USER 10001:10001 in docker/ussdgw/Dockerfile).
+# Seeded files must be owned by it, not by whoever ran this script — see the chown below.
+APP_UID="${APP_UID:-10001}"
 MODE="seed"
 case "${1:-}" in
   --force) MODE="force" ;;
@@ -283,6 +286,19 @@ install_one() {
 
 install_one "$CONFIG_SRC/application.properties"
 
+# This file carries the credentials: ussd.admin.api-key, ussd.admin.session-hmac-secret
+# (knowing it forges an ADMIN session cookie without ever logging in), first-run-password
+# and any smpp password. `cp -a` PRESERVES THE SOURCE MODE, and an operator's copy is
+# normally 0644 — so the seeded file inherits world-readable secrets on a carrier host that
+# has other services with local accounts. 0600 keeps it readable by the gateway (uid 10001)
+# and by root, and by nobody else.
+chmod 0600 "$DEST/application.properties" \
+  || die "cannot chmod 0600 $DEST/application.properties — it holds the admin API key and the session HMAC secret"
+perm="$(stat -c '%a' "$DEST/application.properties" 2>/dev/null || stat -f '%Lp' "$DEST/application.properties")"
+[[ "$perm" == "600" ]] \
+  || die "application.properties ended up mode $perm, not 600 — every local user can read the admin credentials"
+ok "application.properties is mode 600 (api-key + session HMAC secret are not world-readable)"
+
 for f in "$CONFIG_SRC"/ss7-*.json; do
   [[ -f "$f" ]] || continue
   install_one "$f"
@@ -329,6 +345,26 @@ fi
 
 # The admin UI writes stack JSON here — without it, saving from /admin/ss7 fails.
 chmod 775 "$DEST" "$DEST/ss7-persist" 2>/dev/null || warn "could not chmod $DEST"
+
+# Own the seeded files as the CONTAINER uid, not as whoever ran this script.
+#
+# `cp -a` preserves ownership too, so seeding from an operator tree owned by their login
+# (uid 1000) leaves every file uid 1000 inside a directory owned by 10001. The gateway can
+# read them, and it can even replace them by write-temp-then-rename because the DIRECTORY
+# is 10001-owned — but it cannot open one for writing. Saving SS7 stack JSON from
+# /admin/ss7, or anything else that rewrites a config file in place, then fails at runtime
+# with a permission error that has nothing to do with the code being debugged.
+if [[ "$(id -u)" == "0" ]]; then
+  chown "$APP_UID:$APP_UID" "$DEST"/*.properties "$DEST"/ss7-*.json 2>/dev/null \
+    || warn "could not chown the seeded files to $APP_UID — check that the container can rewrite them"
+  # Re-apply: chown is fine, but the 0600 on application.properties must survive it.
+  chmod 0600 "$DEST/application.properties" 2>/dev/null || true
+  ok "seeded files owned by $APP_UID:$APP_UID (the container uid)"
+else
+  warn "not running as root — the seeded files keep uid $(id -u), but the container runs as $APP_UID."
+  warn "  it can read them and can replace them via rename, but it CANNOT rewrite one in place."
+  warn "  fix:  sudo chown $APP_UID:$APP_UID $DEST/*.properties $DEST/ss7-*.json"
+fi
 
 ok "installed operator config into $DEST"
 echo "install-config: next — docker stack deploy -c docker/stack.yml <stackname>"

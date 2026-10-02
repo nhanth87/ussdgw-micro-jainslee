@@ -164,9 +164,50 @@ services:
         uid: "10001"
         gid: "10001"
         mode: 0400
+    # LIVENESS ONLY — and the reason this block exists is a gateway that was killed for
+    # being healthy. The image's own HEALTHCHECK sent
+    #
+    #     -H "X-USSD-Admin-Key: ${USSD_ADMIN_API_KEY:-}"
+    #
+    # and got 401 on every single probe, so once start-period elapsed Swarm SIGTERM'd a
+    # gateway that had finished booting, wired SS7 and was serving /admin/status.json:
+    #
+    #     Failed … "task: non-zero exit (143): dockerexec: unhealthy container"
+    #
+    # Two independent reasons that probe could never pass:
+    #   * HEALTHCHECK runs as its own `docker exec`. It sees the image's Config.Env and
+    #     nothing else — in particular nothing entrypoint.sh exports.
+    #   * USSD_ADMIN_API_KEY does not set this deployment's admin key. The key in force is
+    #     ussd.admin.api-key from the mounted configs/application.properties, and the env
+    #     var was inert. Proved on the running container: `ussd-admin` → 401, the
+    #     properties value → 200. So the stack was shipping a lab default that changed
+    #     nothing while the healthcheck trusted it.
+    # The probe now reads the swarm secret file, which holds the same value as the property.
+    #
+    # -K - passes the header through curl's stdin config rather than argv, because
+    # `docker top` on the host shows container argv: a key in argv is a key in the host's
+    # process table.
+    #
+    # 401 is ACCEPTED. Liveness here means "the vert.x RA accepted a connection and routed
+    # it to the admin handler", and a 401 proves exactly that. Whether the operator's key is
+    # right is docker/prove.sh's job. A liveness probe that restarts the gateway over a
+    # credential question turns one config mistake into an outage — and with
+    # max_attempts: 5, into a retired task and a service that is listed but never runs.
+    healthcheck:
+      # Overrides the image's own HEALTHCHECK with the identical probe, so that a
+      # `docker run` and a `docker stack deploy` cannot disagree about what "up" means.
+      test: ["CMD", "/usr/local/bin/ussdgw-healthcheck.sh"]
+      interval: 30s
+      timeout: 10s
+      start_period: 120s
+      retries: 3
     environment:
+      # Read by the healthcheck above. The gateway itself takes the admin key from
+      # ussd.admin.api-key in configs/application.properties — do not add a
+      # USSD_ADMIN_API_KEY here: it does not override that property, it plants the built-in
+      # lab default `ussd-admin` in the deploy path, and if it ever did take effect
+      # DefaultSecrets would refuse to boot (ussd.lab.allow-default-secrets=false).
       USSD_ADMIN_API_KEY_FILE: /run/secrets/ussdgw_admin_key
-      USSD_ADMIN_API_KEY: ${USSD_ADMIN_API_KEY:-ussd-admin}
       USSD_DB_PASSWORD_FILE: /run/secrets/ussdgw_db_password
       PG_HOST: 127.0.0.1
       PG_PORT: "5432"

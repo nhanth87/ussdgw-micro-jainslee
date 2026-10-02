@@ -12,7 +12,7 @@
 set -uo pipefail
 
 CONTAINER="${1:-}"
-KEY="${USSD_ADMIN_API_KEY:-ussd-admin}"
+KEY="${USSD_ADMIN_API_KEY:-}"
 BASE="${PROVE_BASE_URL:-http://127.0.0.1}"
 PASS=0; FAIL=0
 ok()   { echo "  PASS  $*"; PASS=$((PASS+1)); }
@@ -23,6 +23,33 @@ if [[ -z "$CONTAINER" ]]; then
   CONTAINER="$(docker ps -q --filter name=ussdgw_ussdgw | head -1)"
 fi
 [[ -n "$CONTAINER" ]] || { echo "prove: no running ussdgw container — deploy first"; exit 1; }
+
+# Resolve the admin key from the RUNNING container, not from this shell's environment.
+#
+# It used to be `KEY="${USSD_ADMIN_API_KEY:-ussd-admin}"`, and that default is wrong twice
+# over: USSD_ADMIN_API_KEY does not set the key a deployment actually uses (the key in force
+# is ussd.admin.api-key in the mounted configs/application.properties), and `ussd-admin` is
+# the built-in lab default that DefaultSecrets refuses to boot with. So on any real host the
+# three admin checks below returned 401 and prove.sh reported the gateway as broken while it
+# was serving traffic — the same confusion that made Swarm kill a healthy container.
+if [[ -z "$KEY" ]]; then
+  KEY="$(docker exec "$CONTAINER" sh -c \
+          'tr -d "\r\n" < "${USSD_ADMIN_API_KEY_FILE:-/run/secrets/ussdgw_admin_key}"' 2>/dev/null || true)"
+fi
+if [[ -n "$KEY" ]]; then
+  echo "admin key: read from the container's secret file (${#KEY} chars)"
+else
+  KEY="ussd-admin"
+  echo "admin key: no secret mounted — falling back to the lab default; 401s below are expected"
+fi
+
+# Curl the admin API without putting the key in argv. `ps` on this host shows the full
+# command line of every process, and prove.sh is run by hand on a carrier box that has other
+# local accounts — the same reason the in-image probe uses `curl -K -`.
+admin_get() {  # $1 = path under :8088, $2 = output file (or /dev/null)
+  printf 'header = "X-USSD-Admin-Key: %s"\n' "$KEY" \
+    | curl -sS --connect-timeout 3 --max-time 10 -o "$2" -w '%{http_code}' -K - "$BASE:8088$1" 2>/dev/null
+}
 
 echo "container: $(docker inspect -f '{{.Name}} ({{.Image}})' "$CONTAINER")"
 
@@ -126,8 +153,7 @@ grep -q 'version "25' <<<"$java_ver" \
 
 # --- 4. the live surface (status.json alone does NOT prove CDR/UI) --------------
 head_ "live HTTP surface"
-code="$(curl -sS --connect-timeout 3 --max-time 10 -o /tmp/prove-status.json -w '%{http_code}' \
-        -H "X-USSD-Admin-Key: $KEY" "$BASE:8088/admin/status.json" 2>/dev/null)"
+code="$(admin_get /admin/status.json /tmp/prove-status.json)"
 [[ "$code" == "200" ]] \
   && ok "status.json 200 (app ready, not necessarily SS7 up)" \
   || bad "status.json returned $code"
@@ -144,8 +170,7 @@ PY
 fi
 
 # CDR page: the file-ledger surface. This is the surface that regressed before.
-code="$(curl -sS --connect-timeout 3 --max-time 10 -o /tmp/prove-cdr.html -w '%{http_code}' \
-        -H "X-USSD-Admin-Key: $KEY" "$BASE:8088/admin/cdr/partial" 2>/dev/null)"
+code="$(admin_get /admin/cdr/partial /tmp/prove-cdr.html)"
 [[ "$code" == "200" ]] \
   && ok "/admin/cdr/partial 200" \
   || bad "/admin/cdr/partial returned $code"
@@ -161,8 +186,7 @@ else
 fi
 
 # Admin UI shell (a 302 means the session cookie is missing, not a broken page).
-code="$(curl -sS --connect-timeout 3 --max-time 10 -o /dev/null -w '%{http_code}' \
-        -H "X-USSD-Admin-Key: $KEY" "$BASE:8088/admin/cdr" 2>/dev/null)"
+code="$(admin_get /admin/cdr /dev/null)"
 [[ "$code" =~ ^(200|302)$ ]] \
   && ok "admin CDR shell reachable ($code)" \
   || bad "admin CDR shell returned $code"
@@ -181,6 +205,35 @@ docker exec "$CONTAINER" sh -c 'test -f /opt/ussdgw/logs/ussdgw.log' \
 docker exec "$CONTAINER" sh -c 'test -d /opt/ussdgw/configs/ss7-persist' \
   && ok "configs/ss7-persist exists and is writable (admin UI saves stack JSON)" \
   || bad "ss7-persist missing — the SS7 admin save will fail"
+
+# --- 6. the liveness probe: the other half of the proof -------------------------
+head_ "healthcheck"
+# docker/build/build-images.sh proves the probe FAILS when nothing is listening. This is
+# the half it cannot prove: that it PASSES on a running gateway. A probe with only one of
+# the two is worthless — one that cannot fail reports a dead gateway as healthy, and one
+# that cannot pass SIGTERMs a live one every start-period, which is what shipped:
+#     Failed … "task: non-zero exit (143): dockerexec: unhealthy container"
+# five times, then Swarm retired the task while `docker stack services` still listed it.
+hc="$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$CONTAINER" 2>/dev/null)"
+case "$hc" in
+  healthy)
+    ok "container health = healthy — Swarm will not restart it" ;;
+  starting)
+    bad "container health = starting (still inside start_period) — re-run once it settles; if it never leaves 'starting' the probe is timing out" ;;
+  none)
+    bad "the running container has NO healthcheck — Swarm cannot distinguish a hung gateway from a live one" ;;
+  *)
+    bad "container health = $hc — Swarm is restarting or has retired this task"
+    docker inspect -f '{{range .State.Health.Log}}    exit={{.ExitCode}} {{.Output}}{{end}}' "$CONTAINER" 2>/dev/null | tail -3
+    ;;
+esac
+
+# The probe deliberately accepts 401, because liveness must never restart a gateway over a
+# credential question. So the credential question is asked here, where a failure is a
+# finding instead of an outage: does the operator's key actually authenticate?
+docker exec "$CONTAINER" sh -c 'test -x /usr/local/bin/ussdgw-healthcheck.sh' 2>/dev/null \
+  && ok "probe script present and executable in the image" \
+  || bad "/usr/local/bin/ussdgw-healthcheck.sh missing — the stack healthcheck points at nothing"
 
 echo
 echo "=== prove.sh: $PASS passed, $FAIL failed ==="

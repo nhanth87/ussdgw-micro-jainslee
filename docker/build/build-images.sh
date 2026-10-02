@@ -49,6 +49,23 @@ echo "build-images: tag = $TAG"
 docker build -f docker/ussdgw/Dockerfile  -t "ussdgw:$TAG" .
 ok "ussdgw:$TAG"
 
+# --- fail closed on the app image's liveness probe -------------------------------
+# Run the probe in the built image with NOTHING listening on 8088. It must refuse.
+#
+# A probe that cannot fail is worse than no probe: Swarm then reports "healthy" for a dead
+# gateway. This one has already broken in the other direction — it failed for a gateway that
+# had booted, wired SS7 and was serving traffic, because it authenticated with
+# $USSD_ADMIN_API_KEY, which never set the admin key in force (that comes from
+# ussd.admin.api-key in the mounted configs). Swarm SIGTERM'd it every start-period:
+# `exit (143): dockerexec: unhealthy container`, five times, then the task was retired and
+# `docker stack services` kept listing a service that no longer ran.
+if hc_out="$(docker run --rm --entrypoint /usr/local/bin/ussdgw-healthcheck.sh "ussdgw:$TAG" 2>&1)"; then
+  die "ussdgw:$TAG — the healthcheck probe PASSED with nothing listening on 8088.
+       A probe that cannot fail makes Swarm report 'healthy' for a dead gateway.
+       Output was: $hc_out"
+fi
+ok "app image's healthcheck probe fails when nothing listens (so 'healthy' still means something)"
+
 docker build -f docker/nginx/Dockerfile   -t "ussdgw-nginx:$TAG" .
 ok "ussdgw-nginx:$TAG"
 
