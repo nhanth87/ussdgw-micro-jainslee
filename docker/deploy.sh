@@ -136,7 +136,19 @@ fi
 for d in configs logs data pgdata; do
   [[ -d "$DATA_ROOT/$d" ]] || die "$DATA_ROOT/$d missing — run: sudo ./docker/host-prep.sh"
 done
-[[ -d "$DATA_ROOT/nginx/certs" ]] || warn "$DATA_ROOT/nginx/certs missing — nginx :443 will not start"
+# Same three states as the cert check itself: absent, unreadable, or fine. `[[ -d ]]` is a
+# stat, so on the Digicom host (/srv/ussdgw/nginx is drwxr-x--- messagebus) this printed
+# "missing" for a directory nginx was serving :443 from.
+if [[ ! -d "$DATA_ROOT/nginx/certs" ]]; then
+  if stat -c %a "$DATA_ROOT/nginx/certs" >/dev/null 2>&1; then :; else
+    if stat -c %a "$DATA_ROOT/nginx" >/dev/null 2>&1; then
+      warn "cannot read $DATA_ROOT/nginx/certs as $(id -un) — UNVERIFIED, not missing (nginx serves from a"
+      warn "  swarm volume anyway; the cert check below validates the mounted copy)"
+    else
+      warn "$DATA_ROOT/nginx/certs unreadable as $(id -un) — UNVERIFIED, not missing"
+    fi
+  fi
+fi
 info "kernel SCTP present; $DATA_ROOT/{configs,logs,data,pgdata} present"
 
 # Log4j2 writes to $DATA_ROOT/logs (ussd.log.dir). If a log is not appearing there,
@@ -324,6 +336,20 @@ configs_source() {
 }
 LIVE_CONFIGS="$(configs_source)"; LIVE_CONFIGS="${LIVE_CONFIGS%/}"
 
+# Same question for the certificate edge: which path does the nginx container serve from?
+certs_source() {
+  local src="" mp
+  if docker service inspect "${STACK_NAME}_nginx" >/dev/null 2>&1; then
+    src="$(docker service inspect "${STACK_NAME}_nginx" \
+      --format '{{range .Spec.TaskTemplate.ContainerSpec.Mounts}}{{if eq .Target "/etc/nginx/certs"}}{{.Source}}{{end}}{{end}}' 2>/dev/null || true)"
+  fi
+  if [[ -n "$src" && "$src" != /* ]]; then
+    mp="$(docker volume inspect "$src" --format '{{.Mountpoint}}' 2>/dev/null || true)"
+    [[ -n "$mp" ]] && src="$mp"
+  fi
+  printf '%s' "${src:-${CERT_DIR:-$DATA_ROOT/nginx/certs}}"
+}
+
 # Reading the live config from the host is not always possible. A swarm volume's
 # mountpoint lives under /var/lib/docker/volumes, which is drwx-----x root:root —
 # traversable but not readable by the operator, so install-config reported
@@ -392,6 +418,31 @@ if [[ -n "$LIVE_CONFIGS" && "$CONFIG_SRC" != "$DEST" && "$CONFIG_SRC" != "$LIVE_
   warn "docker/.env sets CONFIG_SRC=$CONFIG_SRC, which is neither DEST ($DEST) nor the"
   warn "mounted $LIVE_CONFIGS. The findings below are about files this stack never reads."
   warn "Fix docker/.env: CONFIG_SRC=$DEST   (then the gate covers what the service mounts)"
+fi
+
+# The certificate nginx serves comes from ITS mount, which on this host is also a swarm
+# volume under an un-traversable parent. Validate a snapshot taken through the nginx
+# container, for the same reason the config is snapshotted: the host path cannot be
+# stat'ed, and reporting that as "no TLS certificate" is a false negative on a live :443.
+LIVE_CERTS="$(certs_source)"; LIVE_CERTS="${LIVE_CERTS%/}"
+if ! stat -c %a "$LIVE_CERTS/fullchain.pem" >/dev/null 2>&1; then
+  NCID="$(docker ps -q --filter "name=${STACK_NAME}_nginx" | head -1 || true)"
+  if [[ -n "$SNAP" && -n "$NCID" ]]; then
+    mkdir -p "$SNAP/certs"
+    for cf in fullchain.pem privkey.pem; do
+      docker cp "$NCID:/etc/nginx/certs/$cf" "$SNAP/certs/$cf" >/dev/null 2>&1 || continue
+      chmod u+rw "$SNAP/certs/$cf"
+    done
+  fi
+  if [[ -f "${SNAP:-}/certs/fullchain.pem" ]]; then
+    info "staged the served certificate from nginx container ${NCID:0:12} ($LIVE_CERTS is not inspectable as $(id -un))"
+    export CERT_DIR="$SNAP/certs"
+  elif [[ -n "$LIVE_CERTS" && "$LIVE_CERTS" != "${CERT_DIR:-}" ]]; then
+    warn "cannot inspect $LIVE_CERTS as $(id -un) and no nginx container to read it through —"
+    warn "the certificate check below is UNVERIFIED, not passed"
+  fi
+else
+  info "certificate path $LIVE_CERTS is inspectable"
 fi
 
 ./docker/install-config.sh --check
