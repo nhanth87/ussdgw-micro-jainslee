@@ -23,6 +23,28 @@ if [[ -z "$CONTAINER" ]]; then
 fi
 [[ -n "$CONTAINER" ]] || { echo "prove: no running ussdgw container — deploy first"; exit 1; }
 
+# Every scratch file lives in a private directory that is removed on exit. Fixed paths in
+# /tmp were worse than no scratch space at all: these files are written by a redirect, so
+# when an earlier run created them as root they stayed root-owned and read-only, and a later
+# run as the operator failed to overwrite them with
+#   ./docker/prove.sh: line 187: /tmp/prove-appjar.txt: Permission denied
+# — silently, because the redirect had `2>/dev/null || true`. The grep then read the STALE
+# file and reported PASS. On the Digicom host three checks were passing on artifacts
+# captured three hours earlier by a sudo run, proving nothing about the running container.
+# A check that cannot write its evidence must not claim to have any.
+TMPD="$(mktemp -d "${TMPDIR:-/tmp}/prove.XXXXXX")" || { echo "prove: cannot create a temp dir"; exit 1; }
+chmod 0700 "$TMPD"
+cleanup_prove() { rm -rf "$TMPD"; }
+trap 'cleanup_prove' EXIT
+# Copy a file out of the container, and FAIL LOUDLY when the copy produced nothing. Every
+# caller writes to "$TMPD/...", which is ours alone, so a permission error here can only
+# mean the container could not produce the file — and that is a finding, not a pass.
+fetch() {  # $1 = path in container, $2 = local file; returns non-zero when empty
+  : > "$2" || return 1
+  docker exec "$CONTAINER" sh -c "$1" > "$2" 2>/dev/null || true
+  [[ -s "$2" ]]
+}
+
 # Resolve the admin key from the RUNNING container, not from this shell's environment, and
 # do not guess: a wrong key turns every admin check into a 401, which reads as "the gateway is
 # broken" when it is serving traffic. That misread is what made Swarm kill a healthy container
@@ -116,8 +138,8 @@ if info="$(docker exec "$CONTAINER" cat /opt/ussdgw/BUILD-INFO.json 2>/dev/null)
   # Validate via a FILE, never through a pipeline. Under `set -o pipefail` an
   # `echo | python3 -c` dies with SIGPIPE the moment python stops reading, which
   # reports a perfectly valid BUILD-INFO as a failure.
-  printf '%s\n' "$info" > /tmp/prove-build-info.json
-  if summary="$(python3 - /tmp/prove-build-info.json <<'PY' 2>&1
+  printf '%s\n' "$info" > "$TMPD/build-info.json"
+  if summary="$(python3 - "$TMPD/build-info.json" <<'PY' 2>&1
 import json, sys
 d = json.load(open(sys.argv[1]))
 print("  sources:")
@@ -184,32 +206,40 @@ head_ "classes in the running jar"
 # List the jar ONCE into a file. Same trap as above: `docker exec ... | grep -q`
 # under `set -o pipefail` fails on a MATCH because grep -q exits at the first hit
 # and docker exec is killed by SIGPIPE. That produced a false "wrong artifact".
-docker exec "$CONTAINER" unzip -l /opt/ussdgw/ussdgw-app.jar > /tmp/prove-appjar.txt 2>/dev/null || true
-if [ ! -s /tmp/prove-appjar.txt ]; then
-  docker exec "$CONTAINER" sh -c 'jar tf /opt/ussdgw/ussdgw-app.jar' > /tmp/prove-appjar.txt 2>/dev/null || true
-fi
-if grep -q 'cdr/CdrFileLedger\.class' /tmp/prove-appjar.txt 2>/dev/null; then
-  ok "CdrFileLedger present in ussdgw-app.jar (file-ledger read model)"
+APPJAR="$TMPD/appjar.txt"
+if fetch 'unzip -l /opt/ussdgw/ussdgw-app.jar' "$APPJAR" \
+   || fetch 'jar tf /opt/ussdgw/ussdgw-app.jar' "$APPJAR"; then
+  if grep -q 'cdr/CdrFileLedger\.class' "$APPJAR"; then
+    ok "CdrFileLedger present in ussdgw-app.jar (file-ledger read model)"
+  else
+    bad "CdrFileLedger NOT in ussdgw-app.jar - wrong artifact deployed"
+  fi
+  if grep -q 'et/restlink/ussdgw/sbbs/MapUssdParentSbb.class' "$APPJAR"; then
+    ok "MapUssdParentSbb listed in ussdgw-app.jar"
+  else
+    bad "MapUssdParentSbb NOT in ussdgw-app.jar - wrong artifact deployed"
+  fi
 else
-  bad "CdrFileLedger NOT in ussdgw-app.jar - wrong artifact deployed"
+  bad "could not list ussdgw-app.jar inside the container — the artifact checks below did NOT run"
 fi
 # The MAP returnError branch must be inside the running SBB class, not just in git.
-docker exec "$CONTAINER" sh -c \
-  'unzip -p /opt/ussdgw/ussdgw-app.jar et/restlink/ussdgw/sbbs/MapUssdParentSbb.class' \
-  > /tmp/prove-sbb.bin 2>/dev/null || true
-if grep -aq 'MAP_RETURN_ERROR' /tmp/prove-sbb.bin 2>/dev/null; then
-  ok "MapUssdParentSbb carries the MAP_RETURN_ERROR branch"
+SBB="$TMPD/sbb.bin"
+if fetch 'unzip -p /opt/ussdgw/ussdgw-app.jar et/restlink/ussdgw/sbbs/MapUssdParentSbb.class' "$SBB"; then
+  if grep -aq 'MAP_RETURN_ERROR' "$SBB"; then
+    ok "MapUssdParentSbb carries the MAP_RETURN_ERROR branch"
+  else
+    bad "MAP_RETURN_ERROR not in the running MapUssdParentSbb - stale artifact"
+  fi
 else
-  bad "MAP_RETURN_ERROR not in the running MapUssdParentSbb - stale artifact"
+  bad "could not read MapUssdParentSbb.class out of the running jar - not a PASS"
 fi
-# The MAP returnError branch must be in the running SBB.
-docker exec "$CONTAINER" sh -c \
-  'unzip -l /opt/ussdgw/lib/main/com.microjainslee.ra-jss7-*.jar 2>/dev/null | grep -c Ss7MapEvent' \
-  > /tmp/probe-jss7.txt 2>/dev/null || true
-if [ -s /tmp/probe-jss7.txt ] && [ "$(tr -d '[:space:]' < /tmp/probe-jss7.txt)" != "0" ]; then
+# The sealed event type must be in the RA jar the runtime actually loads.
+JSS7="$TMPD/jss7.txt"
+if fetch 'unzip -l /opt/ussdgw/lib/main/com.microjainslee.ra-jss7-*.jar 2>/dev/null | grep -c Ss7MapEvent' "$JSS7" \
+   && [[ "$(tr -d '[:space:]' < "$JSS7")" != "0" ]]; then
   ok "ra-jss7 present with the sealed Ss7MapEvent"
 else
-  echo "  SKIP  could not inspect ra-jss7 in the runtime image"
+  bad "ra-jss7 missing or has no Ss7MapEvent in the runtime image"
 fi
 
 # The running process really uses this jar, not a stale one from a previous deploy.
@@ -320,15 +350,17 @@ grep -q 'version "25' <<<"$java_ver" \
 
 # --- 4. the live surface (status.json alone does NOT prove CDR/UI) --------------
 head_ "live HTTP surface"
-code="$(admin_get /admin/status.json /tmp/prove-status.json)"
+code="$(admin_get /admin/status.json "$TMPD/status.json")"
 [[ "$code" == "200" ]] \
   && ok "status.json 200 (app ready, not necessarily SS7 up)" \
   || bad "status.json returned $code"
 
-if [[ -s /tmp/prove-status.json ]]; then
-  python3 - <<'PY' && ok "status.json parses; key values below" || bad "status.json is not valid JSON"
-import json
-d = json.load(open("/tmp/prove-status.json"))
+if [[ -s "$TMPD/status.json" ]]; then
+  # Read the file by path. Pasting the shell variable into python source would turn any
+  # space or quote in the path into a syntax error, which reads as "not valid JSON".
+  python3 - "$TMPD/status.json" <<'PY' && ok "status.json parses; key values below" || bad "status.json is not valid JSON"
+import json, sys
+d = json.load(open(sys.argv[1]))
 print(f"    ss7.live            = {d.get('ss7.live')}   <- link truth, may honestly be false")
 print(f"    cdr.file.recentEvents = {d.get('cdr.file.recentEvents')}")
 print(f"    cdr.file.warmed     = {d.get('cdr.file.warmed')}")
@@ -337,15 +369,15 @@ PY
 fi
 
 # CDR page: the file-ledger surface. This is the surface that regressed before.
-code="$(admin_get /admin/cdr/partial /tmp/prove-cdr.html)"
+code="$(admin_get /admin/cdr/partial "$TMPD/cdr.html")"
 [[ "$code" == "200" ]] \
   && ok "/admin/cdr/partial 200" \
   || bad "/admin/cdr/partial returned $code"
 
-if grep -q 'cdr-ledger-row' /tmp/prove-cdr.html 2>/dev/null; then
-  rows="$(grep -c 'cdr-ledger-row' /tmp/prove-cdr.html)"
+if grep -q 'cdr-ledger-row' "$TMPD/cdr.html" 2>/dev/null; then
+  rows="$(grep -c 'cdr-ledger-row' "$TMPD/cdr.html")"
   ok "CDR ledger serves $rows row(s) from the file ledger"
-  grep -q 'cdr-hop-list\|cdr-spine' /tmp/prove-cdr.html \
+  grep -q 'cdr-hop-list\|cdr-spine' "$TMPD/cdr.html" \
     && ok "6-hop spine markup present" \
     || echo "  note  no spine markup (expected when no session is expanded)"
 else
