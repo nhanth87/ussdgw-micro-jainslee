@@ -152,20 +152,68 @@ first; it is not a Docker problem.
 
 ---
 
-## 2. Runtime image
+## 2. Runtime images
 
 ```bash
 TAG=$(git rev-parse --short HEAD)
-./docker/build/stage-dist.sh                             # mirror the packaged tree in
-docker build -f docker/ussdgw/Dockerfile -t "ussdgw:$TAG" .
-docker build -f docker/nginx/Dockerfile  -t "ussdgw-nginx:$TAG" .
+./docker/build/stage-dist.sh      # mirror the packaged tree in (required first)
+./docker/build/build-images.sh    # all three images, one tag, with asserts
 ```
 
-Tag with the git SHA — that is your rollback key.
+That is the whole step. `build-images.sh` builds `ussdgw`, `ussdgw-nginx` **and**
+`ussdgw-postgres`, then asks the postgres image whether it is correct instead of
+trusting the build log: the initdb hook must be readable by the postgres user, and
+`postgresql.conf` must pin loopback.
 
-`stage-dist.sh` must run first: the Dockerfile copies `dist/` and `out/BUILD-INFO.json` from
-the **working tree**, while the build writes to `/srv/ussdgw-build/out`. It is a mirror
-(`rm -rf dist/` then copy), never a merge — see § 1.
+**Do not skip the postgres image.** `docker/stack.yml` must never resolve this service
+to a bare upstream `postgres:16` — see [B17](#b17-why-the-postgres-image-is-built-not-pulled)
+below. The two raw `docker build` lines the script wraps are kept only for reference.
+
+Tag with the git SHA — that is your rollback key. `BUILD-INFO.json` inside the image
+records the SHA it was actually built from; if that differs from the tag, the tag is
+lying, and `ussdgw:<sha>` / `ussdgw-nginx:<sha>` / `ussdgw-postgres:<sha>` are
+**byte-identical in payload** for commits that touched no `COPY`-ed path, so re-tagging
+to the current commit is safe — but say so in the commit rather than implying a rebuild.
+
+`stage-dist.sh` must run first: the Dockerfiles copy `dist/` and `out/BUILD-INFO.json`
+from the **working tree**, while the build writes to `/srv/ussdgw-build/out`. It is a
+mirror (`rm -rf dist/` then copy), never a merge — see § 1.
+
+### B17 — why the postgres image is built, not pulled
+
+`docker/stack.yml` used to point this service straight at stock
+`postgres:16@<digest>`, while `docker/postgres/Dockerfile` — which layers in
+`docker/postgres/initdb/` and the loopback-only `postgresql.conf` — was built by nothing
+and referenced by nothing. The documented deploy therefore produced a database that
+could not serve the gateway:
+
+1. `initdb/01-ussdgw.sh` creates the `ussdgw` role and the dedicated `ussdgw` database.
+   Without it the gateway connects as `username=ussdgw` and PostgreSQL answers
+   `FATAL: role "ussdgw" does not exist` — it cannot start at all.
+2. Upstream ships `listen_addresses = '*'` so that `-p` publishing works, and every
+   service here is on **hostnet**, where there is no publishing step to mask it. 5432
+   binds on every interface of a carrier host.
+
+### B18 — the operator tuning must be applied, not merely installed
+
+`docker/postgres/postgresql.conf` is **not** read by the official image. It reads
+`$PGDATA/postgresql.conf` and nothing else; grepping its entrypoint for
+`/etc/postgresql` returns nothing. So the file the Dockerfile installs — and the
+`listen_addresses` line it appends there — is **never opened**, and the server runs on
+shipped defaults (`listen_addresses = *`, `shared_buffers = 128MB`).
+
+`initdb/02-operator-tuning.sh` closes the loop: it appends the tuning to
+`$PGDATA/postgresql.conf` (later assignments win) so
+`/etc/postgresql/postgresql.conf` stays the single authored source and there is exactly
+one file to edit. It then **validates by parsing** —
+`postgres -D <datadir> -C listen_addresses` — and refuses to continue unless the
+effective value is `127.0.0.1`.
+
+Validate configuration files by asking the consumer what it derived
+(`postgres -C`, `nginx -T`, `java -XshowSettings`), never with `test -f` and never with
+a regex: a merged line such as `log_statement = 'ddl'listen_addresses = '127.0.0.1'`
+still matches `^[[:space:]]*listen_addresses[[:space:]]*=`, so a grep-based assert
+reported success against a file PostgreSQL had already refused to parse.
 
 The nginx image **proves its own configuration at build time**. It writes a throwaway
 self-signed pair to the exact paths `ussdgw.conf` references, runs `nginx -t`, then deletes

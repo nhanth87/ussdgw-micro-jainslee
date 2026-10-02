@@ -233,5 +233,290 @@ own `-Dquarkus.config.locations` **after** `${JAVA_OPTS}`, so env/`JAVA_OPTS` ov
 then launch `quarkus-run.jar` directly with `-Dquarkus.config.locations` pointing at it. Never edit
 `dist/configs` to make a local run work.
 
+## 2026-10-02 — Containerised deploy: 12 defects that all failed *silently*
+
+Deploying USSDGW as a Docker Swarm stack built from source on the Digicom test host
+(`digicom-nb`, `ubuntu`, 15 GB / 4 CPU). The container path had never been run end to
+end. Every one of these produced a deployment that **looked healthy while nothing
+served traffic** — the family of bug this file exists to prevent. Most are
+**product-neutral** and apply equally to OTA, Elisa, IMSI and silent-auth.
+
+### The rule that catches all of them
+
+> **A check that cannot fail is not a check.** Every one of these shipped with a
+> guard, an assert, a comment or a doc that claimed to prevent it, and the guard
+> itself was the bug. When you write an assertion, ask *what value would make this
+> fail* and then go produce that value and watch it fail.
+
+### Provenance: the tag is not the build
+
+| Defect | Symptom | Rule |
+|---|---|---|
+| `.dockerignore` in `docker/`, not the context root | Docker read **no** ignore file: 431 MB context + 2.9 GB `.git`, plus `build/digicom-secrets-*.txt` and every `ss7-digicom*.json` | `.dockerignore` is read at **`<context-root>/.dockerignore`** or `<dockerfile-dir>/.dockerignore` — for `docker build -f docker/x/Dockerfile .` that is the **repo root** only. Verify by the **context size** in the build log, not by reading the file. |
+| The ignore file also excluded `dist/lib`, `dist/quarkus`, `dist/*.jar` | Enabling it as written would break the build | A `.dockerignore` must be checked against the **actual `COPY` lines** of every Dockerfile. Inert-then-wrong is worse than absent. |
+| `ussdgw-builder:probe` consumed by `docker/ussdgw/Dockerfile:14` with no producer | `pull access denied` at the runtime build | An image tag referenced by a `FROM` must be **published by a script in the tree**. Grep for tags, then grep for who creates them. |
+| `cp -a out/dist/. dist/` (merge, not mirror) | image with **both** `jainslee-core 1.2.0` and `1.2.1` — classpath conflict resolved at runtime by whichever class sorts first | Stage with `rm -rf dist/` first. Assert **one version per artifact** (`sed -nE 's/^(.*)-([0-9][^-]*(-SNAPSHOT)?)\.jar$/\1 \2/p' \| sort \| uniq -d`). |
+| `src` mounted `:ro` unconditionally | `SOURCE_MODE=git` impossible — the documented alternative was the only working path | Writable only in the mode that writes. |
+| `RUN_TESTS=1` printed "two pre-existing failures are EXPECTED" and continued | packaged a **red** tree into a shippable image | A build flag that says *run tests* must **fail the build** on failure. |
+
+### Diagnostics that disable their own diagnostics
+
+> **Watch for `exec` redirections in a fail-fast script.** `exec` with no command
+> changes the shell *permanently*.
+
+```bash
+exec 3>&- 2>/dev/null || true   # BUG: exec 2>/dev/null is permanent
+```
+
+From that line on, every `die()` and every `log()` in the script — **and the JVM's own
+stderr**, which `run.sh` inherits — went to `/dev/null`. An unwritable mount produced:
+
+```
+[entrypoint] PostgreSQL reachable at … → Exited (1)          (no reason at all)
+```
+
+After the fix:
+
+```
+[entrypoint] FATAL: /opt/ussdgw/configs is not writable — the mount must be rw …
+```
+
+Worst possible shape, because `restart_policy: max_attempts: 5` then retired the task:
+`docker stack services` still listed the service, `:8088` never bound, `docker logs`
+had nothing. To close fd 3 without touching stderr: `exec 3>&- || true`.
+
+### Asserts that passed on corrupt input
+
+The postgres tuning hook asserted the loopback pin and **reported success against a
+file PostgreSQL had already refused to parse**:
+
+```
+log_statement = 'ddl'listen_addresses = '127.0.0.1'     # merged: no trailing newline
+LOG:  syntax error … line 848, near token "listen_addresses"
+FATAL:  configuration file "…/postgresql.conf" contains errors
+```
+
+The assert was `grep -qE "^[[:space:]]*listen_addresses[[:space:]]*=[[:space:]]*'127\.0\.0\.1'"`.
+The merged line **still matches** — it has the key, whitespace and an equals sign.
+**A regex cannot distinguish a valid assignment from a corrupted one.** Validate by
+**parsing**: `postgres -D <datadir> -C <setting>` reads the config and exits non-zero
+if it does not.
+
+Related, all from the same hook:
+
+| Trap | Detail |
+|---|---|
+| `postgres -D` takes a **data directory** | Passing the config *file* → `…/postgresql.conf/postgresql.conf: Not a directory`, which failed identically for a good and a corrupt file — a check that could only ever look broken. |
+| `postgres -C` writes LOG lines to **stdout** too | `LOG: skipping missing configuration file …` then the value. Take the **last non-empty line**. |
+| `postgres -C shared_buffers` reports **8 kB blocks** | 256MB prints as `32768`. Say `256MB (32768 x 8kB blocks)`. |
+| `listen_addresses = 127.0.0.1` unquoted is **invalid** | Parsed as `127 . 0 . 1` → `near token ".0"`. Quote the value. |
+| `grep` emits its **last line without a newline** | Same defect one level down. Use `awk '…' \| while read -r; do printf '%s\n' "$line"; done`. |
+| Test executability against what the entrypoint does | The official postgres entrypoint **sources** a non-executable `.sh` (`if [ -x "$f" ]; then "$f"; else . "$f"; fi`). `test -x` rejected a working image; use `test -r` **as the postgres user**. |
+
+### Config that is installed and never read
+
+**B18, and the most serious of the set.** `docker/postgres/Dockerfile` copied the
+operator's tuning to `/etc/postgresql/postgresql.conf` and appended a
+`listen_addresses` line to that same file. The official image reads
+**`$PGDATA/postgresql.conf` and nothing else** — grepping its entrypoint for
+`/etc/postgresql` returns nothing. The server ran on its shipped defaults:
+
+```
+show listen_addresses;  ->  *          show shared_buffers;  ->  128MB   (not 256MB)
+```
+
+On `hostnet` there is no `-p` publishing step to mask that. Proven on the carrier host
+with `ss -lnt` while the image ran under `--network host`:
+
+```
+LISTEN 0 200  0.0.0.0:5433  0.0.0.0:*        <- before
+LISTEN 0 200   127.0.0.1:5433  0.0.0.0:*    <- after
+172.16.144.163:5433  reachable   /  after:  no
+192.168.0.70:5433     reachable   /  after:  no
+```
+
+The USSD database on every interface of a host that also holds live M3UA associations.
+`pg_hba.conf` asked for `scram-sha-256` — but that is the second line of defence, and
+**`pg_hba.conf` was being overridden by the very same dead file**.
+
+> **Prove a config file is *read*, not merely *present*.** `test -f` and even a
+> `docker exec … cat` prove the file exists. Ask the consumer for the value it
+> derived: `show listen_addresses`, `nginx -T`, `java -XshowSettings`.
+
+The fix keeps **one authored source** (`/etc/postgresql/postgresql.conf`) and has an
+initdb hook append it to `$PGDATA/postgresql.conf`, where later assignments win. One
+file to edit; no second copy to drift.
+
+### Services that point at an image nothing builds
+
+`docker/stack.yml` used the **stock upstream** `postgres:16@<digest>` while
+`docker/postgres/Dockerfile` — the file carrying the initdb hook and the loopback pin
+— was built by no script and referenced by nothing. Two consequences, neither visible
+until the gateway was already deployed:
+
+1. `01-ussdgw.sh` is what creates the `ussdgw` role + database. Without it the app
+   connects as `username=ussdgw` and gets `FATAL: role "ussdgw" does not exist`.
+2. Upstream ships `listen_addresses = '*'` so `-p` works.
+
+> **For every `image:` in a stack file, find what builds it.** If the answer is
+> "nothing in this repo", the deploy uses a different image than the one the
+> Dockerfiles describe. `docker build-images.sh` now builds all three and **asserts
+> the properties inside the built image** rather than trusting the build log.
+
+### `set -e` scripts that hide their own failure
+
+```bash
+cp -a "$CONFIG_SRC"/. "$DEST"/     # ~30 × "Permission denied", then carried on
+```
+
+The documented order is `host-prep.sh` (creates `/srv/ussdgw/configs` as **10001**, so
+the container can write stack JSON back) then `install-config.sh` (run by `app`, uid
+1000). The destination is never writable by the installing user. Check **once, up
+front**, and name the remedy — `sudo ./docker/install-config.sh --force`.
+
+### Seeding: a whitelist, not `cp -a src/.`
+
+`cp -a "$CONFIG_SRC"/. "$DEST"/` copied whatever the operator kept beside the live
+config: 10 `application.properties.bak-*` copies, 4 historic `ss7-*.bak*`, a
+`bak-sysctl-*` dir, and **4 `ss7-persist.quarantine-*` dirs**. The quarantine dirs are
+separated from the live tree **precisely because their SIM persist XML is corrupt**
+(a `<1>` key is exactly what the AGENTS law forbids a booting gateway from loading);
+copying them back undoes the quarantine. The destination ended up with eleven files
+named `application.properties`, so "which one is live?" became a guess.
+
+Seed only what the gateway reads — `application.properties`, `ss7-*.json`, and an
+**empty** `ss7-persist` (a fresh gateway must not inherit association state). **Refuse
+to continue if quarantined material is present.**
+
+### "Already done" heuristics that fire on empty
+
+```bash
+if [[ -n "$(ls -A "$DEST")" ]]; then echo "already populated — leaving untouched"; exit 0; fi
+```
+
+`host-prep.sh` creates `$DEST/ss7-persist` first, and it is the **documented order**, so
+on every freshly prepared host the directory was never empty. The script exited 0
+having copied nothing, and the deploy continued with an empty mount; the gateway then
+died one step later with "no application.properties" — reading like a mount or
+permission fault rather than a seed step that silently did nothing.
+
+> **Decide "already done" from the artefact the consumer requires**
+> (`[[ -f "$DEST/application.properties" ]]`), never from "the directory is non-empty".
+> And assert the copy landed — `cp` exiting 0 is not evidence when the destination
+> already held a same-named file.
+
+### Counting that can only read zero
+
+Reporting `skipped N backup/quarantine file(s)` from inside the copy loop: `*.bak`
+never ends in `.json` so it never matched the glob, and `application.properties.bak-*`
+was never a candidate. The counter **could only ever print 0**, which reads as "nothing
+was skipped" — worse than not reporting. Enumerate the source instead. (First attempt
+counted dirs with `[[ -d "$e" ]]` where `$e` was a *basename*, so every directory
+read as a file: `0 dir(s)` against 3.)
+
+### nginx: verify the image runs, not that it builds
+
+| Defect | Symptom |
+|---|---|
+| `upstream ussdgw_app` in **both** `nginx.conf` and `conf.d/ussdgw.conf` | `[emerg] duplicate upstream "ussdgw_app"` — the container could not start. Missed because `prove.sh` only *noted* "nginx not answering on :80 (expected if not deployed yet)". |
+| `FROM ubuntu` + `apt install nginx` + `chown nginx:nginx` | Ubuntu's nginx package has **no** `nginx` user. Now `nginx:1.27-alpine` **digest-pinned** in `sources.lock`. |
+| Build-time `nginx -t` left a root-owned `/tmp/nginx.pid` in the image | `/tmp` is sticky, so a uid-101 master can neither write nor unlink it → `[emerg] open() "/tmp/nginx.pid" failed (13: Permission denied)` on **first real run**, long after the green build. Delete the pair and the pid file, and **assert they are gone**. |
+| `user nginx;` under a non-root master | Ignored, with a warning. Remove it; workers are already nginx via `USER nginx`. |
+| `/var/run/nginx.pid` | root-owned — uid 101 cannot create it. `pid /tmp/nginx.pid`. |
+| `worker_rlimit_nofile` 4096 < `worker_connections` 2048 vs service soft limit | nginx warns and continues. Set the limit, `worker_rlimit_nofile` and the service `ulimits.nofile` **together**. |
+| Comment claimed `listen 443 ssl` is conditional | It is **unconditional**. `install-config.sh --check` now verifies the cert exists, is **readable by uid 101**, is unexpired (>24 h) and is chain-complete before deploy. |
+| `host-prep.sh` `mkdir`'d `nginx/certs` and left it `root:root` | Works only if the operator remembers `install -o 101`. Now owned `101:101` mode 750. `chmod 644` the key is never acceptable. |
+
+> **A container bind mount keeps the *host's* ownership.** The image's uid does not
+> rewrite it. `chown` the host path to the container's uid, or the process that
+> matters cannot read it.
+>
+> **Build-time self-tests leak into runtime.** A `nginx -t` that writes `/tmp/nginx.pid`
+> bakes a file the non-root runtime cannot use. Clean up, and assert the cleanup.
+
+### Proving a local bind beats proving a config
+
+`nginx -t` and a green build both passed while the container died on first run. What
+actually proved it: `docker run` with the certs chowned to 101, then
+`Server: nginx`, `/healthz` **200**, `/admin/status.json` **200 through the proxy**,
+TLS 200, no `warn`/`emerg` at start.
+
+Likewise, when a local test showed `/healthz` → 404, the response was
+`Content-Length: 19` + `X-Content-Type-Options: nosniff` = Go's `404 page not found`
+from a **pre-existing service already on `127.0.0.1:80`**, not nginx. Confirming
+`Server: nginx` from *inside* the container's own netns settled it in one command.
+
+> **When a probe disagrees with the code, find out who is answering before changing
+> the code.** `Server:`, `Content-Length:` and a second listener are cheaper than a
+> fix built on the wrong assumption.
+
+### Two false proofs of my own, worth recording
+
+1. **`ss -lnt | grep 5432` "proved" loopback-only** — but 5432 was the **host's own
+   PostgreSQL** (still running, per plan), which also binds `127.0.0.1:5432`. I had
+   observed the wrong process. Re-ran on a **free port (5433)** with a
+   `docker ps`/`ss` baseline taken first, and checked the container still existed
+   before reading its log (I had `docker rm -f`'d it in the same command).
+2. **A test run whose `TUNING` env var could not override the hook's hard-coded
+   assignment**, executed `postgres -C` as root, and used `listen_addresses = 127.0.0.1`
+   unquoted — an **invalid** config. It "proved" the hook rejects bad input while
+   actually proving the fixture, not the code. Check that a test can reach the code
+   path, and check the **test input is valid**, before believing a green test.
+
+> **Establish the baseline before you measure.** Take the `ss` / `docker ps` snapshot
+> first, use a port nothing else holds, and read logs **before** removing the
+> container. A "pass" on the wrong process or the wrong fixture is worse than no
+> result, because it ends the investigation.
+
+### `set -o pipefail` + `grep -q`
+
+Under `pipefail`, `docker exec … \| grep -q` **fails on a match** (SIGPIPE). Validate
+through a file (`printf … > /tmp/x; python3 /tmp/x`), never a pipeline. Same trap as
+`unzip -p … \| grep -q` in `prove.sh`.
+
+### Port conflicts — rollback must be ordered
+
+After stopping `gmlc`: 2011/2019 and 8088 free; **5432 still held by host PG**, **80/443
+still held by host nginx**. So rollback is **four ordered commands** — stop the stack
+*before* starting host PG, or the container holds 5432 and host PG fails to start:
+
+```bash
+docker stack rm ussdgw
+sudo systemctl start postgresql
+sudo systemctl start nginx
+sudo systemctl start gmlc
+```
+
+Fail-closed guard before deploying — the container holds these ports, and
+`restart_policy: max_attempts: 5` makes a bad nginx config vanish **silently**:
+
+```bash
+ss -ln | grep -E ':(80|443|5432|8088)\b' && { echo "port bận — dừng"; exit 1; }
+ss -ln --sctp; cat /proc/net/sctp/assocs
+```
+
+### Weak credentials, found while reading (do not fix unilaterally)
+
+The operator's live `application.properties` carried a **6-character** database
+password. For the **new, empty** container database I generated a 28-character
+password, set the swarm secret, and **commented the hard-coded lines out of the seeded
+config** so the secret is the single source (Quarkus env ordinal 300 outranks the file
+at 250). An operator's existing credentials are **not** to be changed without asking —
+but a database being created from scratch has no existing consumer, and leaving a
+6-character password on a carrier host is not a defensible default. A stale literal in
+the config is also a **silent fallback** if the secret ever fails to load.
+
+Also: `/srv/ussdgw/nginx/certs/fullchain.pem` holds **one** certificate. Fine if the CA
+issued no intermediate; `install-config.sh` warns rather than assuming.
+
+### Deploy key, not a token
+
+GitHub access from the host used a **deploy key** (`~/.ssh/digicom_deploy`, ed25519,
+registered on `digicom-et/ussdgw-micro-jainslee` as key id 165131997, `read_only`).
+Only the `.pub` ever left the host. A classic `gho_…` OAuth token has **full write to
+every repo** the user can reach — far too much exposure to park on a carrier-adjacent
+host. `~/.gitconfig` on that host said `Jenny Assistant <jenny@assistant.ai>`; corrected
+to `Tran Nhan <nhanth87@gmail.com>` so the first commit is attributable.
+
 ## Synced from workspace (2026-09-18)
 Cross-project footguns added to workspace [`docs/agents/lessons.md`](../../../../../docs/agents/lessons.md) from the OTA P1 SMSC-GW build — **do not paste, link**: Quarkus `@ConfigProperty(defaultValue="")` boot-breaker → `Optional<String>`; Claude Code worktree-agents branch from a stale base under uncommitted WIP (commit clean base / salvage-and-reapply); **parallel subagents share one session rate-limit** (prefer sequential in-tree); auto-mode classifier blocks remote-shell/prod-DB/inline-credential writes; Iran L2TP ship = **sequential** rsync (parallel deadlocks).
