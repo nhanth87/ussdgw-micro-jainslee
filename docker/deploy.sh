@@ -141,8 +141,9 @@ info "kernel SCTP present; $DATA_ROOT/{configs,logs,data,pgdata} present"
 # than a missing one, because "tail -f" on it returns nothing and reads as "no traffic".
 for svc in "${STACK_NAME}_ussdgw" "${STACK_NAME}_nginx" "${STACK_NAME}_postgres"; do
   docker service inspect "$svc" >/dev/null 2>&1 || continue
-  docker service inspect "$svc" --format '{{range .Spec.TaskTemplate.ContainerSpec.Mounts}}{{.Type}} {{.Source}} -> {{.Target}};{{end}}' 2>/dev/null | tr ';' '\n'
-done | sed 's/^/deploy: mount: /'
+  docker service inspect "$svc" \
+    --format '{{range .Spec.TaskTemplate.ContainerSpec.Mounts}}{{if .Source}}{{.Type}} {{.Source}} -> {{.Target}};{{end}}{{end}}' 2>/dev/null | tr ';' '\n'
+done | grep . | sed 's/^/deploy: mount: /'
 
 # Ports. Only a *first* deploy needs them free: an update of our own stack is expected
 # to hold them. Fail-closed, because a host postgres/nginx left running means the
@@ -299,14 +300,24 @@ export CONFIG_SRC DEST
 # inspects a directory nothing reads is the "config present ≠ config read" lesson one
 # level up: here it would have blocked a good deploy and passed a broken one.
 configs_source() {
+  local src=""
   if docker service inspect "${STACK_NAME}_ussdgw" >/dev/null 2>&1; then
-    docker service inspect "${STACK_NAME}_ussdgw" \
-      --format '{{range .Spec.TaskTemplate.ContainerSpec.Mounts}}{{if eq .Target "/opt/ussdgw/configs"}}{{.Source}}{{end}}{{end}}' 2>/dev/null || true
+    src="$(docker service inspect "${STACK_NAME}_ussdgw" \
+      --format '{{range .Spec.TaskTemplate.ContainerSpec.Mounts}}{{if eq .Target "/opt/ussdgw/configs"}}{{.Source}}{{end}}{{end}}' 2>/dev/null || true)"
   else
-    # Not deployed yet: the volume name stack.yml will create, which for a `driver: local`
-    # volume without an explicit `device` lives under /var/lib/docker/volumes.
-    printf '%s' "/var/lib/docker/volumes/${STACK_NAME}_ussdgw-configs/_data"
+    src="${STACK_NAME}_ussdgw-configs"
   fi
+  [[ -n "$src" ]] || { echo ""; return; }
+  # For a named local volume the spec's Source is the VOLUME NAME, not a host path. The
+  # only way to learn where those bytes actually live on this node is the daemon, so ask
+  # it — guessing /var/lib/docker/volumes/<name>/_data works on default storage drivers
+  # and silently points at nothing on anything that configures a different root.
+  if [[ "$src" != /* ]]; then
+    local mp
+    mp="$(docker volume inspect "$src" --format '{{.Mountpoint}}' 2>/dev/null || true)"
+    [[ -n "$mp" ]] && src="$mp"
+  fi
+  printf '%s' "$src"
 }
 LIVE_CONFIGS="$(configs_source)"; LIVE_CONFIGS="${LIVE_CONFIGS%/}"
 if [[ -n "$LIVE_CONFIGS" && "$LIVE_CONFIGS" != "$DEST" ]]; then
