@@ -136,6 +136,14 @@ done
 [[ -d "$DATA_ROOT/nginx/certs" ]] || warn "$DATA_ROOT/nginx/certs missing — nginx :443 will not start"
 info "kernel SCTP present; $DATA_ROOT/{configs,logs,data,pgdata} present"
 
+# Log4j2 writes to $DATA_ROOT/logs (ussd.log.dir). If a log is not appearing there,
+# check this before anything else: a file that exists but is never written to is worse
+# than a missing one, because "tail -f" on it returns nothing and reads as "no traffic".
+for svc in "${STACK_NAME}_ussdgw" "${STACK_NAME}_nginx" "${STACK_NAME}_postgres"; do
+  docker service inspect "$svc" >/dev/null 2>&1 || continue
+  docker service inspect "$svc" --format '{{range .Spec.TaskTemplate.ContainerSpec.Mounts}}{{.Type}} {{.Source}} -> {{.Target}};{{end}}' 2>/dev/null | tr ';' '\n'
+done | sed 's/^/deploy: mount: /'
+
 # Ports. Only a *first* deploy needs them free: an update of our own stack is expected
 # to hold them. Fail-closed, because a host postgres/nginx left running means the
 # container's bind mounts collide and restart_policy retires the task silently.
@@ -275,6 +283,56 @@ step "3/6 operator config → $DEST"
 # back into configs/, so "refreshing" would destroy live edits. Its validate() is the gate
 # that refuses an H2 db-kind, a non-SCTP channel, a missing sctp.backend and a dead TLS cert.
 export CONFIG_SRC DEST
+
+# WHICH directory does the gateway actually read? This is the question the whole
+# config step turns on, and on the Digicom host the answer was NOT the one install-config
+# was pointed at — two separate copies of the config existed:
+#
+#   docker/.env          CONFIG_SRC=/home/app/ota-push-services/…/configs   (the old
+#                        systemd tree, still carrying an ss7-digicom-balance.json with no
+#                        sctp.backend — the FSTACK_DPDK deafness)
+#   install-config DEST  /srv/ussdgw/configs                                (edited to
+#                        NETTY_KERNEL, byte-identical content)
+#   the running service  mounts the swarm VOLUME ussdgw_ussdgw-configs
+#
+# The gate validated the first two and never asked about the third. A validation that
+# inspects a directory nothing reads is the "config present ≠ config read" lesson one
+# level up: here it would have blocked a good deploy and passed a broken one.
+configs_source() {
+  if docker service inspect "${STACK_NAME}_ussdgw" >/dev/null 2>&1; then
+    docker service inspect "${STACK_NAME}_ussdgw" \
+      --format '{{range .Spec.TaskTemplate.ContainerSpec.Mounts}}{{if eq .Target "/opt/ussdgw/configs"}}{{.Source}}{{end}}{{end}}' 2>/dev/null || true
+  else
+    # Not deployed yet: the volume name stack.yml will create, which for a `driver: local`
+    # volume without an explicit `device` lives under /var/lib/docker/volumes.
+    printf '%s' "/var/lib/docker/volumes/${STACK_NAME}_ussdgw-configs/_data"
+  fi
+}
+LIVE_CONFIGS="$(configs_source)"; LIVE_CONFIGS="${LIVE_CONFIGS%/}"
+if [[ -n "$LIVE_CONFIGS" && "$LIVE_CONFIGS" != "$DEST" ]]; then
+  warn "the running gateway mounts configs from $LIVE_CONFIGS, but install-config validates/seeds $DEST"
+  warn "-> these are different files. install-config will report on a tree the service never reads."
+  if [[ "$MODE_CHECK" == 1 || "$MODE_DEPLOY" == 0 ]]; then
+    info "validating the MOUNTED copy instead: CONFIG_SRC=$LIVE_CONFIGS"
+    CONFIG_SRC="$LIVE_CONFIGS"
+  else
+    die "config source mismatch: DEST=$DEST but ${STACK_NAME}_ussdgw mounts $LIVE_CONFIGS.
+     Seeding $DEST would produce a config tree the gateway never reads — the silent-failure
+     shape this script exists to prevent. Pick one and state it:
+       a) keep the current topology and validate/seed the mounted path:
+            CONFIG_SRC=$LIVE_CONFIGS ./docker/deploy.sh
+       b) move the stack onto the bind mounts stack.yml declares (/srv/ussdgw/...), which
+          means copying the live volume contents to /srv/ussdgw/{configs,logs,data,pgdata}
+          first — data-affecting, so do it deliberately, not from this script."
+  fi
+fi
+# CONFIG_SRC outside DATA_ROOT and outside the live mount means .env still points at a
+# retired install tree; the gate would pass on files the deploy does not use.
+if [[ "$CONFIG_SRC" != "$DEST" && "$CONFIG_SRC" != "$LIVE_CONFIGS" ]]; then
+  warn "CONFIG_SRC=$CONFIG_SRC is neither DEST ($DEST) nor the mounted $LIVE_CONFIGS —"
+  warn "that path is not what this stack reads; expect the findings below to be about the wrong files."
+fi
+
 if [[ "$CONFIG_SRC" == "$DEST" ]]; then
   info "CONFIG_SRC == DEST ($DEST) — validating the live config in place, not re-seeding"
   ./docker/install-config.sh --check
