@@ -12,7 +12,6 @@
 set -uo pipefail
 
 CONTAINER="${1:-}"
-KEY="${USSD_ADMIN_API_KEY:-}"
 BASE="${PROVE_BASE_URL:-http://127.0.0.1}"
 PASS=0; FAIL=0
 ok()   { echo "  PASS  $*"; PASS=$((PASS+1)); }
@@ -24,24 +23,66 @@ if [[ -z "$CONTAINER" ]]; then
 fi
 [[ -n "$CONTAINER" ]] || { echo "prove: no running ussdgw container — deploy first"; exit 1; }
 
-# Resolve the admin key from the RUNNING container, not from this shell's environment.
+# Resolve the admin key from the RUNNING container, not from this shell's environment, and
+# do not guess: a wrong key turns every admin check into a 401, which reads as "the gateway is
+# broken" when it is serving traffic. That misread is what made Swarm kill a healthy container
+# earlier today. Three things went wrong, all silently:
 #
-# It used to be `KEY="${USSD_ADMIN_API_KEY:-ussd-admin}"`, and that default is wrong twice
-# over: USSD_ADMIN_API_KEY does not set the key a deployment actually uses (the key in force
-# is ussd.admin.api-key in the mounted configs/application.properties), and `ussd-admin` is
-# the built-in lab default that DefaultSecrets refuses to boot with. So on any real host the
-# three admin checks below returned 401 and prove.sh reported the gateway as broken while it
-# was serving traffic — the same confusion that made Swarm kill a healthy container.
-if [[ -z "$KEY" ]]; then
-  KEY="$(docker exec "$CONTAINER" sh -c \
-          'tr -d "\r\n" < "${USSD_ADMIN_API_KEY_FILE:-/run/secrets/ussdgw_admin_key}"' 2>/dev/null || true)"
-fi
+#   1. the default was the built-in lab key `ussd-admin`, which no real deployment uses;
+#   2. the key in force is `ussd.admin.api-key` in the mounted config when the deployment is
+#      configured by file rather than by secret;
+#   3. reading the secret needs the right uid. `docker exec` runs as the image's USER (10001)
+#      and the secret is mounted 0400 root:root, so the read failed, `2>/dev/null` swallowed
+#      the reason, and the script fell through to (1). That is the path that produced three
+#      bogus FAILs on the Digicom host on a gateway with two live carrier associations.
+#
+# Two ways this went wrong on a real host, both silently:
+#   1. the fallback `KEY="ussd-admin"` is the built-in lab default, which a real deployment
+#      never uses — so every admin check below returned 401 and proved.sh reported a healthy,
+#      traffic-serving gateway as broken;
+#   2. reading the secret needs the right uid. `docker exec` runs as the image's USER
+#      (10001), and the secret is mounted 0400 root:root, so the read fails — the 2>/dev/null
+#      swallowed it and the script fell through to the lab default. The key was right there in
+#      the mounted configs, which the container CAN read.
+# So: try in order, then PROVE the key works before trusting any 401.
+resolve_key() {
+  local out
+  # 1. explicit override from the caller
+  [[ -n "${USSD_ADMIN_API_KEY:-}" ]] && { printf '%s' "$USSD_ADMIN_API_KEY"; return; }
+  # 2. the secret, as the container's own uid, then as root (docker's own privilege, not ours)
+  for u in "" "0"; do
+    out="$(docker exec ${u:+-u "$u"} "$CONTAINER" sh -c \
+      'tr -d "\r\n" < "${USSD_ADMIN_API_KEY_FILE:-/run/secrets/ussdgw_admin_key}"' 2>/dev/null || true)"
+    [[ -n "$out" ]] && { printf '%s' "$out"; return; }
+  done
+  # 3. ussd.admin.api-key from the config the container actually mounted — this is the key in
+  #    force when the app is configured by file rather than by secret
+  out="$(docker exec "$CONTAINER" sh -c \
+    'sed -n "s/^ussd\.admin\.api-key=//p" /opt/ussdgw/configs/application.properties 2>/dev/null | head -1' \
+    2>/dev/null | tr -d '\r\n[:space:]' || true)"
+  [[ -n "$out" ]] && { printf '%s' "$out"; return; }
+  printf ''
+}
+KEY="$(resolve_key)"
+KEY_SOURCE=""
 if [[ -n "$KEY" ]]; then
-  echo "admin key: read from the container's secret file (${#KEY} chars)"
+  # Do not hand the key to the checks until something has accepted it. A wrong key turns
+  # every admin check into a 401 and reads as "the gateway is broken".
+  if [[ "$(curl -sS --connect-timeout 3 --max-time 10 -o /dev/null -w '%{http_code}' \
+             -H "X-USSD-Admin-Key: $KEY" "$BASE:8088/admin/status.json" 2>/dev/null)" == 200 ]]; then
+    KEY_SOURCE="accepted by the running gateway (${#KEY} chars)"
+  else
+    echo "admin key: resolved ${#KEY} chars but the gateway REJECTED it (non-200 on /admin/status.json)."
+    echo "  Every admin check below would report a 401 that says nothing about the gateway."
+    echo "  Set USSD_ADMIN_API_KEY to the key in force and re-run."
+    exit 1
+  fi
 else
-  KEY="ussd-admin"
-  echo "admin key: no secret mounted — falling back to the lab default; 401s below are expected"
+  echo "admin key: could not resolve one from the secret or the mounted config."
+  echo "  Not falling back to a default — a 401 from a guessed key is not a finding."
+  exit 1
 fi
+echo "admin key: $KEY_SOURCE"
 
 # Curl the admin API without putting the key in argv. `ps` on this host shows the full
 # command line of every process, and prove.sh is run by hand on a carrier box that has other
