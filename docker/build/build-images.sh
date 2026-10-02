@@ -57,14 +57,25 @@ ok "ussdgw-postgres:$TAG"
 
 # --- fail closed on the postgres image ------------------------------------------
 # Do not trust that the build did what the Dockerfile says. Ask the image.
-if ! docker run --rm --entrypoint sh "ussdgw-postgres:$TAG" \
-     -c 'test -x /docker-entrypoint-initdb.d/01-ussdgw.sh' 2>/dev/null; then
-  die "ussdgw-postgres:$TAG has no initdb hook — the \`ussdgw\` role and database would
-       never be created and the gateway would fail to start with
-       'FATAL: role \"ussdgw\" does not exist'.
-       Something in the build dropped /docker-entrypoint-initdb.d/."
+#
+# The check is for the hook being PRESENT AND READABLE, not executable. The official
+# postgres entrypoint sources a non-executable .sh rather than skipping it:
+#
+#     *.sh)
+#         if [ -x "$f" ]; then "$f"
+#         else              . "$f"      # <- our case
+#         fi
+#
+# so demanding +x rejected a perfectly good image. What must hold is that the file
+# survived the build context and stayed readable by the postgres user.
+if ! docker run --rm --user postgres --entrypoint sh "ussdgw-postgres:$TAG" \
+     -c 'test -r /docker-entrypoint-initdb.d/01-ussdgw.sh' 2>/dev/null; then
+  die "ussdgw-postgres:$TAG cannot read /docker-entrypoint-initdb.d/01-ussdgw.sh — the
+       \`ussdgw\` role and database would never be created and the gateway would fail to
+       start with 'FATAL: role \"ussdgw\" does not exist'.
+       Something in the build dropped /docker-entrypoint-initdb.d/ or its permissions."
 fi
-ok "postgres image carries docker-entrypoint-initdb.d/01-ussdgw.sh"
+ok "postgres image carries a readable docker-entrypoint-initdb.d/01-ussdgw.sh"
 
 # And the loopback pin, which is the only thing standing between a carrier host's
 # LAN and the USSD database.
