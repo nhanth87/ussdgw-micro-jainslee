@@ -106,6 +106,26 @@ RUN chmod +x "$APP_HOME/run.sh" "$APP_HOME/entrypoint.sh" \
  && "$JAVA_HOME/bin/java" -version 2>&1 | grep -q 'version "25' \
       || { echo "refusing: runtime is not Java 25"; exit 1; }
 
+# Exactly ONE version of each in-house artifact may ship.
+#
+# A build that mixes jainslee-core 1.2.0 with 1.2.1 (or ss7-config 9.2.8 with 9.2.9) puts two
+# copies of the same classes on the classpath and the winner is decided by file ordering, not
+# by Maven. That is the stale-artifact class of bug AGENTS.md warns about, and it produces
+# "works on my machine, wrong jar on the host" symptoms that no test catches.
+#
+# It is easy to hit by accident: staging the built dist with `cp -a built/dist/. dist/`
+# MERGES into a dist/ that still holds the previous build's jars. Mirror, don't merge.
+RUN set -eu; \
+    dupes="$(ls "$APP_HOME/lib/main" | sed -nE 's/^(.*)-([0-9][^-]*(-SNAPSHOT)?)\.jar$/\1 \2/p' \
+             | sort | awk '{c[$1]=c[$1]" "$2} END{for(k in c){n=split(c[k],a," "); if(n>1) print k":"c[k]}}')"; \
+    if [ -n "$dupes" ]; then \
+      echo "ERROR: two versions of the same artifact in lib/main:"; \
+      echo "$dupes" | sed 's/^/       /'; \
+      echo "Stage the dist with a MIRROR copy, not 'cp -a built/dist/. dist/'."; \
+      exit 1; \
+    fi; \
+    echo "-- lib/main has exactly one version per artifact ✓"
+
 USER 10001:10001
 WORKDIR $APP_HOME
 

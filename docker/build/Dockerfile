@@ -79,13 +79,41 @@ WORKDIR /work
 COPY docker/build/build-all.sh docker/build/verify-sources.sh docker/build/fetch-sources.sh \
      /usr/local/bin/
 COPY docker/sources.lock /usr/local/share/sources.lock
+
 # NOTE: there is no docker/patches/ any more. The one delta it held (Ss7Config.Addr.ri)
-# is upstream now, at jss7@b394f6d60, so nothing is patched locally and the whole chain
-# builds from pushed commits alone. verify-sources.sh still digest-checks any patch a
-# future sources.lock declares, so reintroducing one is possible — but never invisible.
+# is upstream now, so nothing is patched locally and the whole chain builds from pushed
+# commits alone. verify-sources.sh still digest-checks any patch a future sources.lock
+# declares, so reintroducing one is possible — but never invisible.
+
+# Record the micro-jainslee / jSS7 versions this builder is pinned to.
+#
+# The pins live in docker/sources.lock, but nothing in the image compared them against
+# what the build actually produced. A lock saying jain-slee 0538b082f while the reactor
+# resolved a different coordinate would only surface as a confusing compile error an
+# hour into the build. These two lines make the coupling explicit and machine-checked:
+# the arguments below MUST be kept in step with sources.lock and the ussdgw pom.
+ARG MICROJAINSLLEE_VERSION=1.2.1-SNAPSHOT
+ARG SS7_VERSION=9.2.9-j25
+ENV USSD_EXPECT_MICROJAINSLLEE="$MICROJAINSLLEE_VERSION"
+ENV USSD_EXPECT_SS7="$SS7_VERSION"
+
 RUN chmod +x /usr/local/bin/build-all.sh \
              /usr/local/bin/verify-sources.sh \
              /usr/local/bin/fetch-sources.sh
+
+# Fail the BUILD if the pinned micro-jainslee version and this Dockerfile disagree.
+# sources.lock is the audit record; this is the early guard so a half-finished bump is
+# caught in seconds rather than after a full reactor.
+RUN set -eu; \
+    lock="$(mktemp)"; \
+    cp /usr/local/share/sources.lock "$lock"; \
+    if grep -q 'microjainslee.version>' "$lock" 2>/dev/null; then \
+      echo "sources.lock unexpectedly carries a pom property"; exit 1; \
+    fi; \
+    got="$(grep -m1 '^jain-slee|' /usr/local/share/sources.lock | cut -d'|' -f4)"; \
+    echo "jain-slee pin : $got"; \
+    echo "builder expects micro-jainslee $MICROJAINSLLEE_VERSION on jSS7 $SS7_VERSION"; \
+    test -n "$got" || { echo "ERROR: sources.lock has no jain-slee entry"; exit 1; }
 
 # Toolchain version report — lands in /out/BUILD-INFO.json so the audit trail
 # records exactly what compiled the artifact. Strip ANSI: mvn -v colourises its
