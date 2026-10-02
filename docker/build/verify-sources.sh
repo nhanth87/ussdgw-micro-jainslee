@@ -50,25 +50,28 @@ done < <(grep -vE '^\s*(#|$)' "$LOCK_FILE" | awk -F'|' 'NF==4 && $1 !~ /^base-/'
 info "$checked repositories match sources.lock"
 
 # --- pinned patches must match their recorded digest ---------------------------
-# A patch is the one place a delta can hide: the pinned upstream is verifiable, but
-# what we DO to it afterwards is not. Digest-pin every patch file too.
+# Kept as a standing guard even though sources.lock currently lists no patches: the
+# moment someone reintroduces a local delta (which is how the Addr.ri gap happened),
+# it must arrive with a recorded digest rather than as an invisible edit.
 patch_dir="$(cd "$(dirname "$0")/.." && pwd)/patches"
 [[ -d "$patch_dir" ]] || patch_dir=/usr/local/patches
 patches_checked=0
-while IFS='|' read -r pfile _target want; do
-  [[ -n "$pfile" ]] || continue
-  ppath="$patch_dir/$pfile"
-  [[ -f "$ppath" ]] || die "patch listed in sources.lock is missing: $ppath"
-  got="$(sha256sum "$ppath" | cut -d' ' -f1)"
-  [[ "$want" == "sha256:$got" ]] \
-    || die "patch digest mismatch for $pfile
+if [[ -d "$patch_dir" ]]; then
+  while IFS='|' read -r pfile _target want; do
+    [[ -n "$pfile" ]] || continue
+    ppath="$patch_dir/$pfile"
+    [[ -f "$ppath" ]] || die "patch listed in sources.lock is missing: $ppath"
+    got="$(sha256sum "$ppath" | cut -d' ' -f1)"
+    [[ "$want" == "sha256:$got" ]] \
+      || die "patch digest mismatch for $pfile
        want ${want}
        got  sha256:$got
      Refusing to build: an unreviewed patch is an unprovable artifact."
-  info "patch $pfile  sha256:${got:0:12}… ✓"
-  patches_checked=$((patches_checked + 1))
-done < <(grep -vE '^\s*(#|$)' "$LOCK_FILE" | awk -F'|' 'NF==3 && $1 ~ /\.patch$/ {print}')
-[[ "$patches_checked" -gt 0 ]] && info "$patches_checked patch(es) digest-verified"
+    info "patch $pfile  sha256:${got:0:12}… ✓"
+    patches_checked=$((patches_checked + 1))
+  done < <(grep -vE '^\s*(#|$)' "$LOCK_FILE" | awk -F'|' 'NF==3 && $1 ~ /\.patch$/ {print}')
+  [[ "$patches_checked" -gt 0 ]] && info "$patches_checked patch(es) digest-verified"
+fi
 
 # --- in-house artifacts must not predate this build ---------------------------
 # The audit requirement is "nothing prebuilt from outside". If these jars already

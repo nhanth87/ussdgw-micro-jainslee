@@ -95,9 +95,10 @@ public final class MapUssdParentSbb implements Sbb, SleeEventHandler {
             return;
         }
         if (event instanceof Ss7MapEvent.Remote remote) {
-            // ADR 0007 D2 cross-node summary (present as of jain-slee 31873d44c). A
-            // single-node deployment never sees it, so trace it honestly instead of
-            // swallowing it — an active/active gap must be visible, not silent.
+            // ADR 0007 D2 cross-node summary. A single-node deployment never sees it, so
+            // trace it honestly instead of swallowing it — an active/active gap must be
+            // visible, not silent. The pin in docker/sources.lock (jain-slee 31873d44c)
+            // declares this subtype, so it must be branched like every other one.
             SleeEventTrace.inSbb("MapUssdParentSbb", event,
                     "remote type=" + remote.typeName() + " dialogId=" + remote.dialogId());
             SleeEventTrace.outSbb("MapUssdParentSbb", event,

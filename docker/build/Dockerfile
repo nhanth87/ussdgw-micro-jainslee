@@ -79,9 +79,10 @@ WORKDIR /work
 COPY docker/build/build-all.sh docker/build/verify-sources.sh docker/build/fetch-sources.sh \
      /usr/local/bin/
 COPY docker/sources.lock /usr/local/share/sources.lock
-# Patches are part of the audited input, so they ship with the image and are
-# digest-verified by verify-sources.sh before anything is compiled.
-COPY docker/patches/ /usr/local/patches/
+# NOTE: there is no docker/patches/ any more. The one delta it held (Ss7Config.Addr.ri)
+# is upstream now, at jss7@b394f6d60, so nothing is patched locally and the whole chain
+# builds from pushed commits alone. verify-sources.sh still digest-checks any patch a
+# future sources.lock declares, so reintroducing one is possible — but never invisible.
 RUN chmod +x /usr/local/bin/build-all.sh \
              /usr/local/bin/verify-sources.sh \
              /usr/local/bin/fetch-sources.sh

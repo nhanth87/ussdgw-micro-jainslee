@@ -154,46 +154,16 @@ step "2/6 jss7 (SS7/MAP stack)"
 cp_src_to_build_dir jss7
 require_dir "$WORK_DIR/jss7"
 
-# --- apply the pinned jSS7 config patch ---------------------------------------
-# jain-slee's ra-jss7 (at the pinned SHA) does not compile against the published
-# jSS7 j25 branch. Proven, not guessed:
+# NOTE: the jSS7 config patch that used to live here is GONE, and that is the point.
 #
-#   ra-jss7 calls  new Ss7Config.Addr(null, null, "*", null, null, null, null, null)
-#   → requires 8 components; j25/master's Addr has 7  => "cannot be applied".
-#   ra-jss7 also needs the kernel-SCTP backend knobs, which j25/master lack:
-#   Ss7Config.Sctp gains backend / mode / dataplane / library / inProcess.
+# jain-slee's ra-jss7 needs Ss7Config.Addr.ri (it calls the 8-arg constructor), and
+# nhanth87/jss7 j25 did not have that field, so the tree could only be built by
+# hand-patching it. That is exactly the unprovable provenance R3 forbids.
 #
-# This is NOT an optional nicety: "inProcess"/"mode" are how NETTY_KERNEL is selected,
-# and NETTY_KERNEL is the only transport that can actually reach the carrier peers from
-# a host without a DPDK-bound NIC (see AGENTS.md and docker/ussdgw/entrypoint.sh).
-#
-# The patch is a REVIEWABLE FILE with a recorded SHA-256, not an in-place edit, so the
-# audit trail covers it exactly like the pinned commits. Proven against the running
-# artifact by decompiling both the pre-patch (.jar.bak) and post-patch ss7-config jars.
-apply_jss7_config_patch() {
-  local patch_file="${1:-}"
-  if [[ -z "$patch_file" ]]; then
-    local d="$(dirname "$0")/../patches"
-    [[ -d "$d" ]] || d=/usr/local/patches
-    patch_file="$d/jss7-ss7-config-kernel-sctp.patch"
-  fi
-  [[ -f "$patch_file" ]] || die "missing jSS7 config patch: $patch_file
-     Without it ra-jss7 does not compile (Ss7Config.Addr arity + kernel-SCTP knobs)."
-  patch -d "$WORK_DIR/jss7" -p1 --batch --forward <"$patch_file" \
-    || die "jSS7 config patch failed to apply — the pinned jss7 SHA may have changed.
-     sources.lock pins jss7@$(grep -m1 '^jss7|' "$(dirname "$0")/../sources.lock" | cut -d'|' -f4)"
-  echo "-- applied $(basename "$patch_file")"
-  # The patch adds a record component, so every CONSTRUCTOR of that record must now
-  # pass it. A leftover 7-arg call fails to compile with a message that points at the
-  # loader rather than at the real cause, so fix it here and keep it in the same patch
-  # file — one reviewable delta instead of two.
-  sed -i 's/orDefault(a\.nature(), "international"));/orDefault(a.nature(), "international"),\n                orDefault(a.ri(), "*"));/' \
-    "$WORK_DIR/jss7/ss7-config/src/main/java/org/restcomm/protocols/ss7/config/Ss7ConfigLoader.java"
-  grep -q 'a.ri()' "$WORK_DIR/jss7/ss7-config/src/main/java/org/restcomm/protocols/ss7/config/Ss7ConfigLoader.java" \
-    || die "jSS7 loader patch did not take — normAddr() still builds Addr with 7 args"
-  echo "-- patched Ss7ConfigLoader.normAddr to pass ri"
-}
-apply_jss7_config_patch
+# jss7@b394f6d60 adds `ri` upstream (ss7-config: routing-indicator override for
+# translation targets, 19 tests) AND carries ADR 0007's TcapDialogSnapshot.PendingInvoke
+# via 2204e8fb4, which is what unblocks ra-jss7 at jain-slee 31873d44c. The delta is in
+# the upstream history where an auditor can read it, not in a local .patch file.
 
 mvn_in jss7-parent -f "$WORK_DIR/jss7/pom.xml" -N install -DskipTests
 mvn_in jss7 -f "$WORK_DIR/jss7/pom.xml" install -DskipTests -Dmaven.test.skip=true
@@ -212,7 +182,15 @@ cp_src_to_build_dir jain-slee
 require_dir "$WORK_DIR/jain-slee"
 mvn_in jainslee-bom  -f "$WORK_DIR/jain-slee/jainslee-pom/pom.xml" -N install -DskipTests
 mvn_in jain-slee-parent -f "$WORK_DIR/jain-slee/pom.xml" -N install -DskipTests
-mvn_in jain-slee -f "$WORK_DIR/jain-slee/pom.xml" install -DskipTests -Dmaven.test.skip=true
+# -DskipTests, NOT -Dmaven.test.skip=true, for the reactor itself.
+#
+# Since jain-slee 31873d44c, ra-jss7 has a TEST-scope dependency on
+# com.microjainslee:jainslee-cluster:jar:tests. `maven.test.skip=true` skips test
+# COMPILATION, so no test-jar is produced anywhere and the reactor dies with
+#   Could not find artifact com.microjainslee:jainslee-cluster:jar:tests:1.2.0-SNAPSHOT
+# `-DskipTests` compiles the tests (producing the test-jars) but does not RUN them,
+# which is what a reproducible build wants anyway: no test flake in the artifact.
+mvn_in jain-slee -f "$WORK_DIR/jain-slee/pom.xml" install -DskipTests
 
 # ---------------------------------------------------------------------------
 step "5/6 ussdgw → $DIST_OUT"

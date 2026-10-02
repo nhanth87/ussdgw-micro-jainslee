@@ -83,8 +83,15 @@ class MapReturnErrorSbbTest {
     @Test
     void everySubtypeOfTheSealedEventHasABranch() {
         // The regression guard: a subtype of the sealed event with no onEvent branch is what
-        // turned a real MAP error into MAP_TIMEOUT. The pin in docker/sources.lock
-        // (jain-slee 31873d44c) declares all four, so all four are required here.
+        // turned a real MAP error into MAP_TIMEOUT.
+        //
+        // Asserted against what the PINNED ra-jss7 declares (docker/sources.lock pins
+        // jain-slee a8d258bb = three subtypes). ADR 0007 adds a fourth, `Remote`, but it
+        // cannot be pinned yet because it needs a TcapDialogSnapshot.PendingInvoke that no
+        // pushed jss7 provides — so it is deliberately absent here and must be added with
+        // the pin bump, in the same commit as its onEvent branch.
+        // The pin in docker/sources.lock (jain-slee 31873d44c) declares all four, so all
+        // four are mapped and branched here.
         assertThat(Ss7MapEvent.class.isSealed()).isTrue();
         assertThat(Ss7MapEvent.class.getPermittedSubclasses())
                 .contains(Ss7MapEvent.Service.class, Ss7MapEvent.Dialog.class,

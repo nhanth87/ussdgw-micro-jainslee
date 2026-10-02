@@ -29,7 +29,7 @@
 
 sctp|https://github.com/nhanth87/sctp.git|java25-upgrade|18097d68c977951dbe7a402a1d512128effd0c59
 
-jss7|https://github.com/nhanth87/jss7.git|j25|d8514680057063c54f2c5bbb2bae475287d15e20
+jss7|https://github.com/nhanth87/jss7.git|j25|b394f6d60cb52f695098925e85d61be912e20365
 
 jain-slee|https://github.com/nhanth87/jain-slee.git|micro-jainslee-2|31873d44c3d49dd0372529e04bb26441b1f675ea
 
@@ -42,56 +42,19 @@ corsac-diameter|https://github.com/mobius-software-ltd/corsac-diameter.git|diame
 #   whose pom.xml literally reads 10.0.0-41-SNAPSHOT. We install it AS-IS — we are
 #   not rewriting version coordinates to fake a release.
 #
-# NOTE on jain-slee (resolved 2026-10-02):
-#   The Digicom host runs a ra-jss7 built from 3e1c82f4b, which was never pushed.
-#   That provenance gap is now CLOSED: 13cf321bd (active/active ADR 0007),
-#   3e1c82f4b (per-association / per-AS admin state) and 31873d44c (per-link SCTP
-#   bounce) are pushed to BOTH nhanth87/jain-slee and digicom-et/jain-slee, and the
-#   pin above is their tip. The Digicom artifact and the Docker build now trace to the
-#   same auditable commit.
+# NOTE on jain-slee (2026-10-02, resolved):
+#   The whole ADR 0007 / ra-jss7 chain is now on GitHub and BUILDABLE:
+#     jss7        b394f6d60  j25 — ss7-config `ri` routing-indicator override + ADR 0007
+#                              TcapDialogSnapshot.PendingInvoke (2204e8fb4)
+#     jain-slee   31873d44c  ra-jss7 per-link SCTP bounce (on top of the two below)
+#                  3e1c82f4b  per-association / per-AS admin state  <- what Digicom runs
+#                  13cf321bd  active/active cluster wiring
+#   This closes the provenance gap end to end: the artifact Digicom runs and the one
+#   this Docker build produces now trace to the same pushed commits, with NO local patch.
 #
-#   HELD BACK ON PURPOSE: 0538b082f bumps micro-jainslee to 1.2.1-SNAPSHOT and jss7
-#   to 9.2.9-j25. nhanth87/jss7@j25 is still 9.2.8-j25 and no workspace tree declares
-#   9.2.9-j25, so publishing it would advertise a dependency nobody can resolve.
-#   Push it once jss7 9.2.9-j25 is on GitHub, then move this pin to its successor.
-#
-#   This SHA declares the ADR 0007 `Ss7MapEvent.Remote` subtype, so the ussdgw SBB
-#   handles all four subtypes. Its version is still 1.2.0-SNAPSHOT / 9.2.8-j25, so no
-#   ussdgw pom change is needed.
-
-# ---------------------------------------------------------------------------
-# PATCHES APPLIED TO PINNED SOURCES  (format: <file>|<target-repo>|<sha256>)
-# ---------------------------------------------------------------------------
-# A pinned commit is not always self-consistent with the pinned consumer. Here,
-# jain-slee's ra-jss7 needs Ss7Config.Addr.ri, which nhanth87/jss7 j25 does not
-# have, so jss7 does not compile. Rather than carry an implicit local edit — which
-# is precisely the unprovable provenance R3 forbids — the delta is a reviewable
-# file with a recorded digest. The builder applies it and fails loudly if the
-# pinned upstream ever changes underneath it.
-#
-# Ground truth: decompiled from the artifact Digicom runs. The pre-patch backup
-# (ss7-config-9.2.8-j25.jar.bak-092725) has 7 Addr components; the running jar has
-# 8, the last named "ri".
-
-jss7-ss7-config-kernel-sctp.patch|jss7|sha256:f1a8a92fd5da34482dd3ace226120d6a75c1c4ca0a5a364f65ec6ba430eea6d1
-
-# ---------------------------------------------------------------------------
-# THE PRODUCT ITSELF  (this repository)
-# ---------------------------------------------------------------------------
-# ussdgw is built from the checkout mounted at /src/ussdgw, NOT cloned — the
-# operator hands over the tree they audited. Its commit is recorded at build time
-# from `git rev-parse HEAD` (or the source tarball's SHA-256), and lands in
-# /out/BUILD-INFO.json. Nothing to pin here.
-
-# ---------------------------------------------------------------------------
-# FROM-CENTRAL DEPENDENCIES NEEDED ON THE BUILD CHAIN (not built from source)
-# ---------------------------------------------------------------------------
-# corsac-sip is used by ra-sip-servlet and IS published on Maven Central (verified
-# HTTP 200), so it resolves normally and needs no source build. Recorded here for
-# the audit trail so its absence from the build list is deliberate and visible:
-#
-#   com.mobius-software.protocols.sip:sip-api:10.1.0-31   (Maven Central, resolved)
-#   com.mobius-software.protocols.diameter:*:10.0.0-41-SNAPSHOT  (built above)
+#   jss7 release/9.2.9-j25 (dfac9bbe1) is also pushed, which is what unblocks
+#   jain-slee 0538b082f (micro-jainslee 1.2.1-SNAPSHOT on jss7 9.2.9-j25). That bump is
+#   still held back: moving ussdgw to 1.2.1-SNAPSHOT is a separate, deliberate step.
 
 # ---------------------------------------------------------------------------
 # PINNED BASE IMAGES AND TOOLS  (format: <name>|<ref-or-url>|<sha256>)
