@@ -49,6 +49,19 @@ services:
           cpus: "0.5"
 
   nginx:
+    # nginx.conf asks for `worker_rlimit_nofile 8192` and `worker_connections 4096`.
+    # docker/stack.yml sets ulimits only on the `ussdgw` service, so nginx inherited the
+    # container default soft limit of 1024 and capped the connections it would actually
+    # accept — while warning about it and carrying on:
+    #
+    #     [warn] 4096 worker_connections exceed open file resource limit: 2048
+    #
+    # Set here so the three numbers — worker hard limit, worker_connections and the
+    # service soft limit — agree. 8192/8192 is ample for a 256 MB proxy.
+    ulimits:
+      nofile:
+        soft: 8192
+        hard: 8192
     deploy:
       resources:
         limits:

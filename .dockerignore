@@ -1,0 +1,84 @@
+# Docker build context for the ussdgw images.
+#
+# WHY THIS FILE IS AT THE REPOSITORY ROOT
+# ---------------------------------------
+# Docker reads exactly ONE ignore file per build, and it is chosen by path — not
+# by search: `<context-root>/.dockerignore`, or `<dockerfile-path>.dockerignore`.
+# Every image here is built from the repository root with
+# `docker build -f docker/<x>/Dockerfile .`, so the only file Docker will ever
+# consult is THIS one. The previous `docker/.dockerignore` matched neither rule
+# and was therefore completely inert: the daemon received a 431 MB context plus
+# a 2.9 GB `.git`, together with `build/digicom-secrets-*.txt` and every
+# `ss7-digicom*.json`. `docker/.dockerignore` has been deleted rather than
+# renamed: its contents contradicted the Dockerfiles (it excluded `dist/lib/`,
+# `dist/quarkus/`, `dist/app/`, `dist/.baked-db-kind` and `dist/*.jar`, which are
+# precisely what `docker/ussdgw/Dockerfile` COPYs), so enabling it as-is would
+# have failed the build instead of shrinking it.
+#
+# THE RULE FOR THIS FILE
+# ----------------------
+# Ignore everything except what a Dockerfile actually COPYs. `docker/ussdgw/
+# Dockerfile` copies dist/{ussdgw-app.jar,quarkus-run.jar,lib,quarkus,app/
+# html,run.sh,.baked-db-kind} and out/BUILD-INFO.json; `docker/build/Dockerfile`
+# copies docker/build and docker/sources.lock; `docker/nginx/Dockerfile` copies
+# docker/nginx/*.conf. Every ignore block below is verified against those COPY
+# instructions — if you add a COPY, re-check this file in the same commit.
+
+# --- Git and editor noise (2.9 GB of history, never needed in a layer) -------
+.git/
+.gitattributes
+.github/
+*.iml
+.idea/
+.vscode/
+.cursor/
+.worktrees/
+
+# --- Maven / build outputs that are not the shipped dist --------------------
+# NOTE: `dist/` is deliberately NOT ignored: it is the runtime image's payload.
+# The maven reactor's own output tree is `target/`, not `dist/`.
+target/
+**/target/
+*.tar
+*.tar.gz
+*.zip
+
+# --- Secrets and operator state — must never enter a layer -----------------
+# `.env` holds rendered secrets; the digicom overlay config holds carrier
+# secrets (DIAL string, AS URLs, admin keys). Only `dist/configs/` is baked,
+# and only its lab-safe subset, via `docker/ussdgw/Dockerfile`.
+.env
+.env.*
+*.pem
+*.key
+*.p12
+*.jks
+build/digicom-secrets-*.txt
+build/.digicom-rotate.env
+build/application-digicom.properties
+build/systemd/
+configs/digicom/
+ss7-digicom-balance.json
+ss7-digicom*.json
+build/ss7-digicom-balance.json
+
+# --- Runtime state (recreated on every boot; never from a build) -------------
+data/
+logs/
+docker/logs/
+dist/data/
+dist/logs/
+*.log
+*.pcap
+*.mv
+
+# --- Lab tooling, docs and tests the images do not need --------------------
+# `dist/app/html/` IS needed (the operator UI) and is not matched by these.
+docs/
+plan.md
+tools/
+docker/capacity/
+docker/README.md
+# Sources are bind-mounted at build time by docker/build/run-build.sh, never
+# baked, so a Dockerfile never needs the Java sources themselves.
+src/

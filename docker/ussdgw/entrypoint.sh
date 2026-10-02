@@ -94,7 +94,20 @@ until (exec 3<>"/dev/tcp/$PG_HOST/$PG_PORT") 2>/dev/null; do
   (( waited % 10 == 0 )) && log "waiting for PostgreSQL at $PG_HOST:$PG_PORT … ${waited}s"
   sleep 10
 done
-exec 3>&- 2>/dev/null || true
+# Close only the probe fd. This line used to be `exec 3>&- 2>/dev/null || true`, and
+# `exec 2>/dev/null` is PERMANENT: from that point on every stderr write in this
+# script went to /dev/null, which included
+#
+#   * the `die` in step 7 for an unwritable configs/logs/data mount,
+#   * every `log` after it, and
+#   * the JVM's own stderr, because run.sh inherits the muted descriptor.
+#
+# So the checks whose entire purpose is to say WHY the container refused to start
+# were the only thing that could not say anything. The symptom on a real host is the
+# worst shape a failure can take: the container exits 1 with a blank reason, and
+# `restart_policy: max_attempts: 5` then retires the task — `docker stack services`
+# still reports the service, :8088 never binds, and `docker logs` has nothing.
+exec 3>&- || true
 log "PostgreSQL reachable at $PG_HOST:$PG_PORT (after ${waited}0s)"
 
 # --- 7. writable runtime dirs -------------------------------------------------

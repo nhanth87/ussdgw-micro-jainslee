@@ -66,6 +66,82 @@ validate() {
     warn "ussd.lab.allow-default-secrets=true — lab only. Secrets are NOT fail-closed."
   fi
 
+  # --- TLS certificate for the nginx edge ---------------------------------------
+  # docker/nginx/ussdgw.conf has an UNCONDITIONAL `listen 443 ssl` server block, so
+  # nginx does not start at all without these two files:
+  #
+  #     [emerg] cannot load certificate "/etc/nginx/certs/fullchain.pem":
+  #             BIO_new_file() failed (SSL: …No such file or directory)
+  #
+  # A comment in that file used to claim the block was conditional and that "no cert
+  # means no :443 server block". It was not, and that false claim is how an HTTP-only
+  # first deployment was expected to succeed and would not have.
+  #
+  # docker/nginx/Dockerfile proves the REST of the config parses, at build time, with a
+  # throwaway self-signed pair. It cannot check the operator's real certificate, so
+  # this is the half that has to happen on the host.
+  #
+  # The container runs as uid 101 (nginx) and docker/stack.yml bind-mounts
+  # /srv/ussdgw/nginx/certs, so ownership on the HOST decides whether nginx can read
+  # the key. A root-owned 0600 key produces:
+  #
+  #     [emerg] cannot load certificate key "/etc/nginx/certs/privkey.pem":
+  #             BIO_new_file() failed (SSL: …Permission denied)
+  #
+  # which is a start failure with the service then disappearing under
+  # `restart_policy: max_attempts: 5` — no :80, no admin UI, and the stack looks fine.
+  local cdir="${CERT_DIR:-/srv/ussdgw/nginx/certs}"
+  local cert="$cdir/fullchain.pem" key="$cdir/privkey.pem"
+  if [[ -f "$cert" && -f "$key" ]]; then
+    # Readable by uid 101? Compare against the key, which is the sensitive one.
+    local kuid kperm readable=no
+    kuid="$(stat -c %u "$key" 2>/dev/null || echo -1)"
+    kperm="$(stat -c %a "$key" 2>/dev/null || echo 000)"
+    # group/other bit, or owned by nginx (101), or owned by the operator who runs the
+    # stack as root — the first two are what actually matter for uid 101.
+    if (( kuid == 101 )) || [[ "$kperm" =~ [0-7][0-7][0-46-7] ]] \
+       || (( kuid == 0 && $EUID == 0 )); then
+      readable=yes
+    fi
+    if [[ "$readable" == yes ]]; then
+      ok "TLS certificate present: $cert (key mode $kperm, uid $kuid)"
+    else
+      die "TLS key $key is mode $kperm owned by uid $kuid — nginx runs as uid 101 and cannot read it.
+     Fix on the host:  sudo install -m 0640 -o 101 -g 101 <key> $key"
+    fi
+
+    # Expired or not yet valid is worse than missing: it serves a red browser warning
+    # on the operator-facing admin UI rather than a container that refuses to start.
+    if command -v openssl >/dev/null 2>&1; then
+      local not_after
+      not_after="$(openssl x509 -noout -enddate -in "$cert" 2>/dev/null | cut -d= -f2- || true)"
+      [[ -n "$not_after" ]] || die "openssl cannot parse $cert — not a PEM certificate"
+      if openssl x509 -noout -checkend 86400 -in "$cert" >/dev/null 2>&1; then
+        ok "TLS certificate valid for >24h (expires $not_after)"
+      else
+        die "TLS certificate expired or expires within 24h (notAfter=$not_after)"
+      fi
+      # A single-leaf cert served as fullchain.pem yields an incomplete chain warning.
+      local chain
+      chain="$(grep -c 'BEGIN CERTIFICATE' "$cert" || true)"
+      if (( chain > 1 )); then
+        ok "certificate chain has $chain certificates"
+      else
+        warn "$cert holds ONE certificate — if the CA issued an intermediate, concatenate it
+     (leaf first, then intermediates) or clients will report an incomplete chain."
+      fi
+    else
+      warn "openssl not installed — skipping certificate expiry and chain checks"
+    fi
+  else
+    die "no TLS certificate at $cert / $key — the nginx :443 server block is unconditional and
+     nginx will not start without them.
+     Seed them on the host, e.g.:
+       sudo install -m 0644 -o 101 -g 101 <fullchain.pem> $cert
+       sudo install -m 0640 -o 101 -g 101 <privkey.pem>  $key
+     (Override the directory with CERT_DIR=… if it differs from the stack's bind mount.)"
+  fi
+
   # MO SSN 147 lesson: some peers address the gateway as gsmSCF.
   for f in "$dir"/ss7-*.json; do
     [[ -f "$f" ]] || continue

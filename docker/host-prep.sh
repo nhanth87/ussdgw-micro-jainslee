@@ -69,6 +69,23 @@ chmod 775 "$DATA_ROOT"/{configs,logs,data} "$DATA_ROOT"/pgdata
 chmod 775 "$DATA_ROOT/configs" "$DATA_ROOT/configs/ss7-persist"
 ok "directories ready; configs/ is rw (the admin UI writes stack JSON)"
 
+# nginx/certs belongs to a DIFFERENT uid than the rest of the tree: the edge proxy
+# runs as 101 (nginx in the official image), not 10001. This directory used to be
+# created by mkdir and left root:root 755, which looks fine and works only if the
+# operator happens to remember `install -o 101`. Forget it and the stack deploys,
+# the task fails, restart_policy retires it after 5 attempts, and nginx logs:
+#
+#     [emerg] cannot load certificate key "/etc/nginx/certs/privkey.pem":
+#             BIO_new_file() failed (SSL: …Permission denied)
+#
+# which is silent at the stack level: `docker stack services` still lists nginx and
+# :80 simply never binds. Owned here so the correct setup is the default one.
+NGINX_UID=101
+NGINX_GID=101
+chown "$NGINX_UID:$NGINX_GID" "$DATA_ROOT"/nginx "$DATA_ROOT"/nginx/certs
+chmod 750 "$DATA_ROOT"/nginx "$DATA_ROOT"/nginx/certs
+ok "nginx/certs owned by $NGINX_UID:$NGINX_GID mode 750 (the proxy user, not the app user)"
+
 # --- 4. time ---------------------------------------------------------------------
 # MAP timers, the AdaptiveTimeout gate and CDR timestamps all assume a sane clock.
 if command -v timedatectl >/dev/null 2>&1; then
