@@ -292,13 +292,36 @@ somewhere other than `/srv/ussdgw/nginx/certs`.
 
 ## 4. Secrets
 
+Three, all declared `external: true` in `docker/stack.yml`, so all three must exist
+**before** `docker stack deploy`:
+
 ```bash
 printf '%s' "$(openssl rand -base64 32)" | docker secret create ussdgw_db_password -
-printf '%s' "<your-admin-key>"        | docker secret create ussdgw_admin_key -
+printf '%s' "$(openssl rand -base64 32)" | docker secret create ussdgw_pg_super_password -
+printf '%s' "<your-admin-key>"           | docker secret create ussdgw_admin_key -
 ```
 
+| Secret | Consumer | Role |
+|--------|----------|------|
+| `ussdgw_db_password` | gateway JDBC + `initdb/01-ussdgw.sh` | application role **`ussdgw`** |
+| `ussdgw_pg_super_password` | `POSTGRES_PASSWORD_FILE` | postgres **superuser** `ussdgw_admin` |
+| `ussdgw_admin_key` | admin UI / API | `X-USSD-Admin-Key` |
+
+Keep the two database credentials **separate**. The gateway only ever needs the `ussdgw`
+role; sharing one secret would make a leaked JDBC password equal to DDL and
+role-administration on the host.
+
+A missing secret is **not** caught by `docker stack deploy` — the deploy succeeds, the
+container exits 1 because `/run/secrets/<name>` is absent, and after
+`restart_policy: max_attempts: 5` Swarm retires the task while `docker stack services`
+still lists it. Postgres fails with
+`Error: Database is uninitialized and superuser password is not specified`, which is how
+B19 shipped: the stack had set `POSTGRES_USER`/`POSTGRES_DB` and never a password.
+`./docker/install-config.sh --check` verifies all three exist before anything is stopped.
+
 Never put these in `docker/stack.yml` or `.env` — both are readable via
-`docker service inspect` and end up in shell history.
+`docker service inspect` and end up in shell history. For the same reason postgres reads
+`POSTGRES_PASSWORD_FILE`, not `POSTGRES_PASSWORD`.
 
 ---
 

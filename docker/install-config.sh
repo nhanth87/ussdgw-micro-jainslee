@@ -156,6 +156,32 @@ validate() {
   warn "remember: every tenant network_id must equal the SCCP networkId it routes on"
   warn "  (live Digicom traffic is typically networkId=0 only; a mismatch gives 'no matching Rule')"
 
+  # --- swarm secrets the stack declares as `external: true` -----------------------
+  # A missing secret is not caught by `docker stack deploy`: the deploy SUCCEEDS, the
+  # task is created, and then the container exits 1 because /run/secrets/<name> is not
+  # there. With restart_policy: max_attempts: 5 the task is retired, `docker stack
+  # services` keeps listing the service, and nothing ever binds. Checking here turns
+  # that into a message before anything is stopped or started.
+  if command -v docker >/dev/null 2>&1 \
+     && [[ "$(docker info --format '{{.Swarm.LocalNodeState}}' 2>/dev/null)" == "active" ]]; then
+    local s
+    for s in ussdgw_db_password ussdgw_admin_key ussdgw_pg_super_password; do
+      if docker secret inspect "$s" >/dev/null 2>&1; then
+        ok "swarm secret present: $s"
+      else
+        errors=$((errors + 1))
+        echo "ERROR: swarm secret '$s' does not exist, but docker/stack.yml declares it" >&2
+        echo "       external: true. The deploy would succeed and the container would then" >&2
+        echo "       exit 1 — five times, after which Swarm retires the task and the" >&2
+        echo "       service silently stops existing while still being listed." >&2
+        echo "       Create it, e.g.:" >&2
+        echo "         openssl rand -base64 24 | tr -d '\\n=' | docker secret create $s -" >&2
+      fi
+    done
+  else
+    warn "docker swarm not active here — cannot verify the external secrets the stack needs"
+  fi
+
   return $errors
 }
 
