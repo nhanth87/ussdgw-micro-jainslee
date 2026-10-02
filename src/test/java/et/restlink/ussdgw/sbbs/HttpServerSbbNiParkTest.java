@@ -41,6 +41,18 @@ class HttpServerSbbNiParkTest {
             </dialog>
             """;
 
+    /**
+     * One-shot Notify push: no UE input expected, so the park keeps the AS
+     * ceiling (P1-1 leaves Request menus on the UI budget instead).
+     */
+    private static final String XML_NI_NOTIFY = """
+            <dialog localId="ni-park-1" networkId="0">
+              <unstructuredSSNotify_Request dataCodingScheme="15" string="One shot">
+                <msisdn nai="international_number" npi="ISDN" number="251911230398"/>
+              </unstructuredSSNotify_Request>
+            </dialog>
+            """;
+
     private MicroSleeContainer container;
     private RecordingStore store;
     private CapturingHttp http;
@@ -134,7 +146,7 @@ class HttpServerSbbNiParkTest {
         set(config, "store", kv);
         set(park, "config", config);
 
-        assertThatCode(() -> post("sess-gate", XML_NI)).doesNotThrowAnyException();
+        assertThatCode(() -> post("sess-gate", XML_NI_NOTIFY)).doesNotThrowAnyException();
         assertThat(park.findByCorr("ni-park-1")).isPresent();
         assertThat(http.commands).isEmpty(); // parked until gate
 

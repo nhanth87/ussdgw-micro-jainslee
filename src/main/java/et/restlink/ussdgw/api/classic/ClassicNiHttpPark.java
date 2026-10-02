@@ -1,5 +1,6 @@
 package et.restlink.ussdgw.api.classic;
 
+import et.restlink.ussdgw.access.OriginationType;
 import et.restlink.ussdgw.api.AsAction;
 import et.restlink.ussdgw.api.AsHttpWireFormat;
 import et.restlink.ussdgw.api.AsResponse;
@@ -8,11 +9,13 @@ import et.restlink.ussdgw.bridge.AdaptiveTimeout;
 import et.restlink.ussdgw.bridge.GatedSessionMeta;
 import et.restlink.ussdgw.bridge.GatedSessionRegistry;
 import et.restlink.ussdgw.bridge.VirtualSession;
+import et.restlink.ussdgw.bridge.VirtualSessionState;
 import et.restlink.ussdgw.bridge.VirtualSessionStore;
 import et.restlink.ussdgw.cdr.CdrPhase;
 import et.restlink.ussdgw.cdr.CdrService;
 import et.restlink.ussdgw.config.UssdConfigService;
 import et.restlink.ussdgw.service.GatedAsNotifyService;
+import et.restlink.ussdgw.service.MapDialogHelper;
 
 import com.microjainslee.api.RaCommandPort;
 import com.microjainslee.ra.httpserver.command.HttpServerCommand;
@@ -22,6 +25,7 @@ import jakarta.annotation.PreDestroy;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
@@ -52,6 +56,11 @@ public class ClassicNiHttpPark {
         private final int networkId;
         private final long parkedAtMs;
         private final boolean emptyHandshake;
+        /**
+         * Outstanding MAP op awaits UE input (Request menu), not a one-shot Notify.
+         * The park budget is then the UI timeout (P1-1), not the AS ceiling.
+         */
+        private volatile boolean requestUi;
         /** Wins exactly one HTTP reply (completeParked vs adaptive gate). */
         private final AtomicBoolean settled = new AtomicBoolean(false);
         private volatile ScheduledFuture<?> gateFuture;
@@ -72,6 +81,8 @@ public class ClassicNiHttpPark {
 
         public String httpSessionId() { return httpSessionId; }
         public void setHttpSessionId(String httpSessionId) { this.httpSessionId = httpSessionId; }
+        public boolean requestUi() { return requestUi; }
+        public void setRequestUi(boolean requestUi) { this.requestUi = requestUi; }
         public String jsessionId() { return jsessionId; }
         public String correlationId() { return correlationId; }
         public AsHttpWireFormat format() { return format; }
@@ -101,6 +112,14 @@ public class ClassicNiHttpPark {
     });
 
     private volatile Supplier<RaCommandPort> httpSupplier = () -> null;
+    private volatile Supplier<RaCommandPort> ss7Supplier = () -> null;
+
+    /**
+     * Park retention: interactive menus re-park on every AS hop (fresh
+     * {@code parkedAtMs}), so anything older never progresses. Well above the NI
+     * Request UI timeout (P1-1, step 4); session-gone records go regardless of age.
+     */
+    public static final long PARK_TTL_MS = 600_000L;
 
     @PostConstruct
     void armOnBoot() {
@@ -111,6 +130,11 @@ public class ClassicNiHttpPark {
 
     public void bindHttp(Supplier<RaCommandPort> supplier) {
         this.httpSupplier = supplier == null ? () -> null : supplier;
+    }
+
+    /** MAP port for closing the dialog when a park expires with a live leg (P1-1). */
+    public void bindSs7(Supplier<RaCommandPort> supplier) {
+        this.ss7Supplier = supplier == null ? () -> null : supplier;
     }
 
     public ParkRecord park(String httpSessionId, String jsessionId, String correlationId,
@@ -160,21 +184,32 @@ public class ClassicNiHttpPark {
     /**
      * Schedule AdaptiveTimeout gate; on fire, if still parked, reply ABORT dialog + Set-Cookie
      * and unpark. Stamps {@code gate_ms}/{@code observed_ewma_ms} onto CDR (GATED / GATE_EXPIRED).
-     * Budget = configured async-gate ceiling (not EWMA×1.5).
+     * Budget is per outstanding op (P1-1): Request awaiting UE input uses the UI
+     * timeout ({@code ussd.ni.request-ui-timeout-ms}, clamped to the dialog timeout);
+     * Notify / first-hop parks keep the configured async-gate ceiling (not EWMA×1.5).
      */
     public void scheduleAdaptiveGate(ParkRecord rec) {
         if (rec == null) {
             return;
         }
-        long gateMs = adaptive.effectiveGateMs(
-                rec.networkId(),
-                config.asyncGateTimeoutMs(),
-                config.dialogTimeoutMs());
+        long gateMs;
+        String budget;
+        if (rec.requestUi()) {
+            gateMs = config.niRequestUiTimeoutMs();
+            budget = "request-ui";
+        } else {
+            gateMs = adaptive.effectiveGateMs(
+                    rec.networkId(),
+                    config.asyncGateTimeoutMs(),
+                    config.dialogTimeoutMs());
+            budget = "ceiling";
+        }
         rec.appliedGateMs = gateMs;
         stampSessionGate(rec, gateMs);
         scheduleGate(rec, gateMs);
         cdrWrite(rec, CdrPhase.S1_ACTIVE, et.restlink.ussdgw.cdr.CdrStatuses.GATE_ARMED,
-                "service=ClassicNiHttpPark|AdaptiveTimeout|gateBudget=ceiling");
+                "service=ClassicNiHttpPark|AdaptiveTimeout|gateBudget=" + budget
+                        + "|op=" + (rec.requestUi() ? "request" : "notify"));
     }
 
     public void scheduleGate(ParkRecord rec, long gateMs) {
@@ -277,28 +312,42 @@ public class ClassicNiHttpPark {
         }
         LOG.info("NI HTTP park gate expired corr={} jsession={} gateMs={}",
                 correlationId, rec.jsessionId(), rec.appliedGateMs());
-        cdrWrite(rec, CdrPhase.FAILED, "GATE_EXPIRED",
-                "service=ClassicNiHttpPark|AdaptiveTimeout");
-        GatedSessionMeta meta = buildGatedMeta(rec);
-        if (gatedSessions != null) {
-            gatedSessions.stamp(meta);
-        }
-        if (gatedAsNotify != null) {
-            VirtualSession sess = null;
-            if (store != null) {
+        // P2-2: side effects (CDR, MAP close, gated stamp, AS notify) must not prevent
+        // the HTTP reply. Compute the body in a try block; always reply in finally.
+        String body;
+        try {
+            cdrWrite(rec, CdrPhase.FAILED, "GATE_EXPIRED",
+                    "service=ClassicNiHttpPark|AdaptiveTimeout");
+            // P1-1: the MAP leg must not linger when the AS gives up. Win the terminal
+            // transition first (a concurrent bridge claim owns the dialog otherwise),
+            // then abort the live leg, drop the digit claim, and retire the session.
+            // A late UE digit then gets a hard-fail, not a silent swallow (P1-2).
+            closeLiveMapLeg(rec);
+            GatedSessionMeta meta = buildGatedMeta(rec);
+            if (gatedSessions != null) {
+                gatedSessions.stamp(meta);
+            }
+            if (gatedAsNotify != null) {
+                VirtualSession sess = null;
+                if (store != null) {
+                    try {
+                        sess = store.get(rec.correlationId()).orElse(null);
+                    } catch (RuntimeException ignored) {
+                        // best-effort
+                    }
+                }
                 try {
-                    sess = store.get(rec.correlationId()).orElse(null);
-                } catch (RuntimeException ignored) {
-                    // best-effort
+                    gatedAsNotify.pushToAs(meta, sess);
+                } catch (RuntimeException e) {
+                    LOG.warn("Gated AS XML push failed corr={}: {}", rec.correlationId(), e.toString());
                 }
             }
-            try {
-                gatedAsNotify.pushToAs(meta, sess);
-            } catch (RuntimeException e) {
-                LOG.warn("Gated AS XML push failed corr={}: {}", rec.correlationId(), e.toString());
-            }
+            body = wireFacade.encodeNiGatedAbort(meta, rec.format());
+        } catch (RuntimeException e) {
+            LOG.warn("onGateExpired side-effect failed corr={}: {}; still replying to AS",
+                    correlationId, e.toString());
+            body = "";
         }
-        String body = wireFacade.encodeNiGatedAbort(meta, rec.format());
         // Keep JSESSIONID→corr mapping (like completeParked) so AS can re-push
         // with the same Cookie after learning prior session was gated.
         cancelGate(rec);
@@ -306,8 +355,58 @@ public class ClassicNiHttpPark {
         reply(rec, httpId, 200, body);
     }
 
-    private GatedSessionMeta buildGatedMeta(ParkRecord rec) {
-        String msisdn = null;
+    /**
+     * P1-1: close the MAP leg parked behind an expired NI HTTP wait. CAS-law — the
+     * terminal transition is won before the MAP abort, so a concurrent bridge claim
+     * (which owns the dialog after its CAS) never sees a second close.
+     */
+    private void closeLiveMapLeg(ParkRecord rec) {
+        if (store == null || rec == null) {
+            return;
+        }
+        VirtualSession sess;
+        try {
+            sess = store.get(rec.correlationId()).orElse(null);
+        } catch (RuntimeException ignored) {
+            return;
+        }
+        if (sess == null || !sess.dialogAlive()
+                || sess.originationType() != OriginationType.MAP) {
+            return;
+        }
+        boolean owned;
+        try {
+            owned = store.compareAndTransitionAny(rec.correlationId(),
+                    List.of(
+                            VirtualSessionState.ACTIVE,
+                            VirtualSessionState.AWAITING_AS,
+                            VirtualSessionState.RESPONDING,
+                            VirtualSessionState.PUSH_PENDING,
+                            VirtualSessionState.S1_RELEASED),
+                    VirtualSessionState.COMPLETED).isPresent();
+        } catch (RuntimeException e) {
+            LOG.debug("NI park gate close skipped corr={}: {}",
+                    rec.correlationId(), e.toString());
+            return;
+        }
+        if (!owned) {
+            return;
+        }
+        try {
+            MapDialogHelper.abort(ss7(), sess.dialogId());
+        } catch (RuntimeException e) {
+            LOG.debug("NI park gate abort skipped corr={}: {}",
+                    rec.correlationId(), e.toString());
+        }
+        try {
+            store.setDialogAlive(rec.correlationId(), false);
+            store.clearMsDigitClaim(rec.correlationId());
+        } catch (RuntimeException ignored) {
+            // terminal bookkeeping is best-effort; the MAP close above already ran
+        }
+    }
+
+    private GatedSessionMeta buildGatedMeta(ParkRecord rec) {        String msisdn = null;
         String shortCode = null;
         String sessionId = null;
         int networkId = rec.networkId();
@@ -338,12 +437,13 @@ public class ClassicNiHttpPark {
             return;
         }
         try {
+            // CAS-law: caller-owned fields singly — never a detached full put over a
+            // concurrent bridge CAS (state) or abort (dialogAlive).
+            store.setGateMs(rec.correlationId(), gateMs);
             store.get(rec.correlationId()).ifPresent(s -> {
-                s.setGateMs(gateMs);
                 if (s.pullStartedAtMs() <= 0) {
-                    s.setPullStartedAtMs(rec.parkedAtMs());
+                    store.setPullStartedAtMs(rec.correlationId(), rec.parkedAtMs());
                 }
-                store.put(s);
             });
         } catch (RuntimeException e) {
             LOG.debug("NI park gate stamp skipped corr={}: {}", rec.correlationId(), e.toString());
@@ -414,6 +514,14 @@ public class ClassicNiHttpPark {
         }
     }
 
+    private RaCommandPort ss7() {
+        try {
+            return ss7Supplier.get();
+        } catch (RuntimeException e) {
+            return null;
+        }
+    }
+
     private void cancelGate(ParkRecord rec) {
         if (rec == null) {
             return;
@@ -435,5 +543,72 @@ public class ClassicNiHttpPark {
     /** Test / admin visibility. */
     public int size() {
         return byCorr.size();
+    }
+
+    /**
+     * Drop parks that can never complete (P1-9): records older than
+     * {@link #PARK_TTL_MS}, or whose ussdTx row is gone (terminal/removed —
+     * Notify-only flows where the AS never sends END, gate-expired parks, TTL
+     * reclaims). Runs periodically from {@code BridgeGateScheduler.reclaimExpiredTx}.
+     *
+     * @return number of records dropped
+     */
+    public int sweepStaleParked() {
+        long now = System.currentTimeMillis();
+        int dropped = 0;
+        for (ParkRecord rec : byCorr.values().toArray(new ParkRecord[0])) {
+            boolean stale = now - rec.parkedAtMs() > PARK_TTL_MS;
+            if (!stale && store != null) {
+                try {
+                    stale = store.get(rec.correlationId()).isEmpty();
+                } catch (RuntimeException ignored) {
+                    // keep on read failure; age TTL still applies
+                }
+            }
+            if (stale && unpark(rec.correlationId()).isPresent()) {
+                dropped++;
+            }
+        }
+        if (dropped > 0) {
+            LOG.info("NI HTTP park swept {} stale records (parked={})", dropped, byCorr.size());
+        }
+        return dropped;
+    }
+
+    /**
+     * Settle a parked AS HTTP immediately with an ABORT dialog (P1-9): on MAP
+     * abort the parked request must be answered now, not after the 25s gate.
+     * Drops the park (the session is terminal — a later AS END gets 404).
+     *
+     * @return true when a parked HTTP was settled
+     */
+    public boolean abortParked(String correlationId) {
+        Optional<ParkRecord> opt = findByCorr(correlationId);
+        if (opt.isEmpty()) {
+            return false;
+        }
+        ParkRecord rec = opt.get();
+        String httpId = rec.httpSessionId();
+        if (httpId == null || httpId.isBlank()) {
+            unpark(correlationId);
+            return false;
+        }
+        if (!rec.trySettle()) {
+            return false;
+        }
+        String body;
+        try {
+            body = wireFacade == null ? ""
+                    : wireFacade.encodeNiResponse(rec.correlationId(), "", AsAction.ABORT,
+                            false, rec.format());
+        } catch (RuntimeException e) {
+            LOG.debug("NI park abort encode skipped corr={}: {}", correlationId, e.toString());
+            body = "";
+        }
+        cancelGate(rec);
+        rec.setHttpSessionId(null);
+        reply(rec, httpId, 200, body);
+        unpark(correlationId);
+        return true;
     }
 }

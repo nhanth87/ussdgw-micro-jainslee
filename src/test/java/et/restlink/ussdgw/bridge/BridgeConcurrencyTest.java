@@ -233,6 +233,88 @@ class BridgeConcurrencyTest {
         }
     }
 
+    // ---------------------------------------------------------------- B3 (Step 2)
+
+    @Test
+    void hopClearRacingGateCannotReopenTheDialog() throws Exception {
+        ExecutorService pool = Executors.newFixedThreadPool(2);
+        try {
+            for (int i = 0; i < ROUNDS; i++) {
+                String corr = "hop-race-" + i;
+                String dialogId = "dlg-hop-" + i;
+                VirtualSession s = seedAwaiting(corr, dialogId, System.currentTimeMillis() - 1);
+                s.setMap2mapHopOutstanding(true);
+                store.put(s);
+
+                VirtualSession tickSnapshot = store.get(corr).orElseThrow();
+                CyclicBarrier gun = new CyclicBarrier(2);
+                Future<?> gate = pool.submit(() -> {
+                    sync(gun);
+                    bridge.onGateExpired(tickSnapshot);
+                });
+                Future<?> hopClear = pool.submit(() -> {
+                    sync(gun);
+                    // MapUssdParentSbb.clearMap2mapHopOutstanding: single-field only.
+                    store.setMap2mapHopOutstanding(corr, false);
+                });
+                gate.get(20, TimeUnit.SECONDS);
+                hopClear.get(20, TimeUnit.SECONDS);
+
+                assertThat(port.repliesFor(dialogId))
+                        .as("exactly one MAP reply for %s", dialogId)
+                        .isEqualTo(1);
+                VirtualSession after = store.get(corr).orElseThrow();
+                assertThat(after.state())
+                        .as("gate CAS must not be reverted to AWAITING_AS for %s", corr)
+                        .isEqualTo(VirtualSessionState.S1_RELEASED);
+                assertThat(after.map2mapHopOutstanding()).isFalse();
+
+                // A second tick must not fire again on the bridged row.
+                bridge.onGateExpired(store.get(corr).orElseThrow());
+                assertThat(port.repliesFor(dialogId))
+                        .as("no second MAP reply for %s", dialogId)
+                        .isEqualTo(1);
+            }
+        } finally {
+            pool.shutdownNow();
+        }
+    }
+
+    @Test
+    void staleClaimSnapshotCannotReplyAfterNetworkAbort() throws Exception {
+        for (int i = 0; i < ROUNDS; i++) {
+            String corr = "stale-claim-" + i;
+            String dialogId = "dlg-stale-" + i;
+            seedAwaiting(corr, dialogId, 0);
+
+            // Claim won pre-abort; the snapshot is now stale by construction.
+            VirtualSessionStore.AsResponseClaim claim =
+                    store.claimForAsResponse(corr, 1).orElseThrow();
+            bridge.onNetworkAbort(dialogId);
+            assertThat(store.get(corr).orElseThrow().state())
+                    .isEqualTo(VirtualSessionState.ZOMBIE);
+
+            // White-box: drive the stale claim through applyToLiveDialog.
+            var m = VirtualSessionBridge.class.getDeclaredMethod(
+                    "applyToLiveDialog", VirtualSession.class,
+                    et.restlink.ussdgw.api.AsResponse.class);
+            m.setAccessible(true);
+            try {
+                m.invoke(bridge, claim.session(),
+                        new AsResponse(corr, corr, 1, "Late", AsAction.END, false));
+            } catch (java.lang.reflect.InvocationTargetException e) {
+                throw new IllegalStateException(e.getCause());
+            }
+
+            assertThat(port.repliesFor(dialogId))
+                    .as("no MAP reply on the dead leg for %s", dialogId)
+                    .isZero();
+            VirtualSession after = store.get(corr).orElseThrow();
+            assertThat(after.state()).isEqualTo(VirtualSessionState.ZOMBIE);
+            assertThat(after.dialogAlive()).isFalse();
+        }
+    }
+
     // ---------------------------------------------------------------- M3
 
     @Test
@@ -356,6 +438,11 @@ class BridgeConcurrencyTest {
 
         @Override
         public void requestNiPush(VirtualSession session, String text) {
+            requestNiPush(session, text, false);
+        }
+
+        @Override
+        public void requestNiPush(VirtualSession session, String text, boolean notifyOnly) {
             pushes.computeIfAbsent(session.correlationId(), k -> new AtomicInteger())
                   .incrementAndGet();
         }

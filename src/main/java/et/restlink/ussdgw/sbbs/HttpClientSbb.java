@@ -140,7 +140,17 @@ public final class HttpClientSbb implements Sbb, SleeEventHandler {
         String payload = svc().wireFacade().encodePullRequest(req, format);
         AsPullTarget.Http target = new AsPullTarget.Http(pull.asUrl(), payload, format);
 
-        if (svc().asPullState().open(corr, target, System.currentTimeMillis()).isEmpty()) {
+        // P2-1: capture the session's current generation at send time (not the request's generation,
+        // which may be stale). A slow response stamped to its own turn loses the claim once the
+        // session moved on, instead of being applied to the next turn.
+        int sessionGen = 0;
+        try {
+            sessionGen = svc().store().get(corr).map(VirtualSession::generation).orElse(0);
+        } catch (RuntimeException ignored) {
+            // store not available (test stub) or session not found — fall back to 0
+        }
+        if (svc().asPullState().open(corr, target, System.currentTimeMillis(),
+                sessionGen).isEmpty()) {
             svc().asPull().recordFailure(pull.asUrl());
             svc().saga().onAsPullFailed(corr, "AS_PULL_STATE_SATURATED");
             return "state-saturated corr=" + corr;
@@ -244,9 +254,17 @@ public final class HttpClientSbb implements Sbb, SleeEventHandler {
                 status, bodyLen, false, contentType, "ok");
         AsResponse resp = svc().wireFacade().decodePullResponse(body, format, corr);
         int wireGen = resp.generation();
-        // Any wire: XML hardcodes gen=1; JSON may echo 1 / omit (0). Digit → session ≥2.
-        if (sess.isPresent()) {
-            resp = resp.stampedToSessionGeneration(sess.get().generation());
+        // P2-1 stamp rule. A wire gen > 1 means the AS speaks generations — trust it,
+        // so a stale turn loses the claim instead of being stamped onto the next turn.
+        // Classic XML hardcodes 1 (and JSON may omit → 0): no turn info, so stamp the
+        // send-time turn from the pull entry (preferred) or the live session.
+        if (wireGen <= 1) {
+            int pullGen = state == null ? 0 : state.generation();
+            int stampFrom = pullGen > 0 ? pullGen
+                    : sess.map(VirtualSession::generation).orElse(0);
+            if (stampFrom > 0) {
+                resp = resp.stampedToSessionGeneration(stampFrom);
+            }
         }
         // EWMA via bridge.onAsResponse(latency) only — avoid double-sample
         svc().bridge().onAsResponse(resp, latency);

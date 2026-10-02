@@ -1,0 +1,63 @@
+# Swarm override — 5k TPS resource reservation (capacity_5k_tps.md §1, §7).
+# Layer on top of the plan.md stack:
+#   docker stack deploy -c docker/stack.yml -c docker/capacity/stack.capacity-5k.yml ussdgw
+# Relative paths resolve from the FIRST compose file's dir (docker/), hence ./capacity/...;
+# bind sources are absolute (staged by host-reserve.sh --apply under /srv/ussdgw).
+# If the plan.md postgres image uses its own entrypoint, keep its command and only add
+# `-c config_file=...` the way that image expects.
+# Service names (ussdgw, postgres) must match docker/stack.yml. cpuset pinning is done by
+# pin-cpusets.sh (swarm has no cpuset key); limits below cap CPU/memory and reservations make the
+# scheduler refuse to place the stack on a node that cannot honor them.
+version: "3.8"
+
+services:
+  ussdgw:
+    env_file:
+      - ./capacity/ussdgw-5k.env
+    ulimits:
+      nofile:
+        soft: 1048576
+        hard: 1048576
+    stop_grace_period: 60s
+    volumes:
+      - type: bind
+        source: /srv/ussdgw/dumps
+        target: /opt/ussdgw/dumps
+    deploy:
+      replicas: 1
+      resources:
+        limits:
+          cpus: "16"
+          memory: 64G
+        reservations:
+          cpus: "16"
+          memory: 64G
+      update_config:
+        order: stop-first
+      restart_policy:
+        condition: on-failure
+        delay: 10s
+        max_attempts: 5
+        window: 120s
+
+  postgres:
+    command: ["postgres", "-c", "config_file=/etc/postgresql/postgresql-5k.conf"]
+    volumes:
+      - type: bind
+        source: /srv/ussdgw/capacity/postgresql-5k.conf
+        target: /etc/postgresql/postgresql-5k.conf
+        read_only: true
+    shm_size: 8g
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
+    stop_grace_period: 120s
+    deploy:
+      resources:
+        limits:
+          cpus: "12"
+          memory: 32G
+        reservations:
+          cpus: "12"
+          memory: 32G

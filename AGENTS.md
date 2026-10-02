@@ -296,6 +296,7 @@ Detail: [logging.md](docs/agents/logging.md).
 |---------|------|
 | `./build/package-dist.sh` | Maven fast-jar → **self-contained `./dist/`** with `lib/{boot,main}/` (JDK 25) — **required** before ship |
 | Digicom compile + redeploy | Exact shell copy-paste → [`skills.md` § Digicom compile + redeploy](docs/agents/skills.md) |
+| Docker / Swarm (build from source) | [`docs/agents/docker.md`](docs/agents/docker.md) footguns · [`docker/README.md`](docker/README.md) operator runbook · [`plan.md`](plan.md) requirements + trust boundary. **Never** call a Docker change done without `./docker/prove.sh` against the **running container** — green tests + a successful build prove nothing about what actually runs, and `status.json` 200 is not a CDR/UI proof. Build with `docker run --user $(id -u):$(id -g)`; `MAVEN_OPTS` takes JVM flags only (`-B`/`-ntp` there break every `mvn`); **never** exclude sctp's fstack module (jss7 `ss7-config` has a hard dep on it); build-time `db-kind` is still build-time (asserted in 3 places). |
 | `./run.sh` / `dist/run.sh` | Start packaged app (errors if jars/`lib` missing) |
 | **Server** | Copy **complete `dist/`** (after package) → `./run.sh` (host JDK 25) |
 | Bare bootstrap | [`dist-package-script.sh`](dist-package-script.sh) (sctp → jss7 → jain-slee → package) |

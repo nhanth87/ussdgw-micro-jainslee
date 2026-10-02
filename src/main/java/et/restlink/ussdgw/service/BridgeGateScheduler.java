@@ -25,6 +25,7 @@ import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 
 import java.util.List;
+import java.util.Optional;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 
@@ -55,6 +56,9 @@ public class BridgeGateScheduler {
     @Inject CampaignService campaigns;
     @Inject UssdConfigService config;
     @Inject Map2MapTelemetry map2MapTelemetry;
+    @Inject et.restlink.ussdgw.bridge.GatedSessionRegistry gatedSessions;
+    @Inject et.restlink.ussdgw.api.classic.ClassicNiHttpPark niHttpPark;
+    @Inject et.restlink.ussdgw.bridge.NiPushRetryRegistry niPushRetries;
 
     @ConfigProperty(name = "ussd.bridge.gate-tick-ms", defaultValue = "100")
     long gateTickMsProp;
@@ -148,86 +152,171 @@ public class BridgeGateScheduler {
         } catch (Throwable t) {
             LOG.warn("ussdTx TTL reclaim failed: {}", t.toString());
         }
+        // P1-9: bounded registries are swept here (30s), not lazily. Each sweep is
+        // isolated — one backend throwing must not skip the others.
+        try {
+            if (gatedSessions != null) {
+                gatedSessions.sweepExpired();
+            }
+        } catch (Throwable t) {
+            LOG.warn("gated session sweep failed: {}", t.toString());
+        }
+        try {
+            if (niHttpPark != null) {
+                niHttpPark.sweepStaleParked();
+            }
+        } catch (Throwable t) {
+            LOG.warn("NI HTTP park sweep failed: {}", t.toString());
+        }
+        // P2-3: per-MSISDN EWMA trim moved off the hot path. Bounded at 8192 entries;
+        // stale / unseeded entries are dropped first, then arbitrary if still over.
+        try {
+            adaptive.trimMsisdn();
+        } catch (Throwable t) {
+            LOG.warn("AdaptiveTimeout per-MSISDN trim failed: {}", t.toString());
+        }
     }
 
     /**
      * A silent HLR must not pin a correlation forever. An expired NI query fails its saga exactly
      * like a MAP SRI error would ({@code SRI_FAIL} path); an expired HLR-face query aborts the
      * inbound dialog so it does not leak. MAP2MAP hop TTL ends the inbound MO with hard-fail text.
+     *
+     * <p>P1-10: same isolation law as the gate tick — SKIP overlap, per-item catch, and the
+     * trailing HLR expiry must run even when an earlier item throws.
      */
-    @Scheduled(every = "${ussd.pending.sweep-ms:5000}ms")
+    @Scheduled(every = "${ussd.pending.sweep-ms:5000}ms",
+            concurrentExecution = Scheduled.ConcurrentExecution.SKIP)
     void sweepPendingCorrelations() {
         long now = System.currentTimeMillis();
-        for (NiPushRequestEvent ni : pendingSri.sweepExpired(now)) {
-            sriExpired.incrementAndGet();
-            Long ewma = null;
-            if (adaptive != null) {
-                double v = adaptive.observedLatencyMs(ni.networkId());
-                if (v > 0d) {
-                    ewma = Math.round(v);
-                }
-            }
-            cdr.write(ni.correlationId(), CdrPhase.FAILED, ni.msisdn(), null, "SRI_TIMEOUT",
-                    "service=BridgeGateScheduler", ni.networkId(), null, "MAP", null, ewma);
-            saga.onNiFailed(ni.correlationId(), "SRI_TIMEOUT");
+        for (NiPushRequestEvent ni : sweepSriExpired(now)) {
             try {
-                campaigns.onNiDone(ni.correlationId(), false, "SRI_TIMEOUT");
-            } catch (RuntimeException ignored) {
-                // campaign bookkeeping is best-effort; the saga already compensated
-            }
-        }
-        for (Map2MapRequestEvent req : pendingMap2Map.sweepExpired(now)) {
-            map2mapExpired.incrementAndGet();
-            VirtualSession session = null;
-            try {
-                session = store.get(req.correlationId()).orElse(null);
-            } catch (Throwable ignored) { }
-            // Gate may already have released the UE (async-wait + gated XML). Drop pending
-            // without a second hard-fail MAP reply — AS late path may still be in flight.
-            boolean alreadyBridged = session != null && (
-                    session.state() == VirtualSessionState.S1_RELEASED
-                            || session.state() == VirtualSessionState.PUSH_PENDING
-                            || session.state() == VirtualSessionState.RESPONDING
-                            || !session.dialogAlive()
-                            || session.state().terminal());
-            Long gateMs = Map2MapCdr.gateMs(session);
-            Long ewma = null;
-            if (adaptive != null) {
-                double v = adaptive.observedLatencyMs(req.networkId());
-                if (v > 0d) {
-                    ewma = Math.round(v);
-                }
-            }
-            cdr.write(req.correlationId(), CdrPhase.FAILED, req.msisdn(), req.shortCode(),
-                    alreadyBridged ? Map2MapCdr.TIMEOUT_AFTER_BRIDGE : Map2MapCdr.TIMEOUT,
-                    Map2MapCdr.detail(req, "service=BridgeGateScheduler",
-                            alreadyBridged ? "phase=after-bridge" : "phase=hop-ttl"),
-                    req.networkId(), req.tenantId(), "MAP", gateMs, ewma);
-            if (map2MapTelemetry != null) {
-                if (alreadyBridged) {
-                    map2MapTelemetry.timeoutAfterBridge();
-                } else {
-                    map2MapTelemetry.hopTimeout();
-                }
-            }
-            if (alreadyBridged) {
-                continue;
-            }
-            RaCommandPort ss7 = pendingMap2Map.ss7();
-            try {
-                MapDialogHelper.replyAndEnd(ss7, req.inboundDialogId(), req.inboundInvokeId(),
-                        hardFailMessage());
+                expireOneSri(ni);
             } catch (Throwable t) {
-                LOG.warn("MAP2MAP TTL end inbound failed corr={}: {}", req.correlationId(), t.toString());
+                LOG.warn("pending SRI sweep failed corr={}: {}",
+                        ni == null ? null : ni.correlationId(), t.toString());
             }
-            try {
-                store.get(req.correlationId()).ifPresent(s -> {
-                    s.setDialogAlive(false);
-                    store.put(s);
-                });
-            } catch (Throwable ignored) { }
         }
-        hlrProxyExpired.addAndGet(hlrFace.expirePending(now));
+        for (Map2MapRequestEvent req : sweepMap2MapExpired(now)) {
+            try {
+                expireOneMap2Map(req);
+            } catch (Throwable t) {
+                LOG.warn("pending MAP2MAP sweep failed corr={}: {}",
+                        req == null ? null : req.correlationId(), t.toString());
+            }
+        }
+        try {
+            hlrProxyExpired.addAndGet(hlrFace.expirePending(now));
+        } catch (Throwable t) {
+            LOG.warn("HLR proxy sweep failed: {}", t.toString());
+        }
+    }
+
+    private List<NiPushRequestEvent> sweepSriExpired(long now) {
+        try {
+            return pendingSri.sweepExpired(now);
+        } catch (Throwable t) {
+            LOG.warn("pending SRI list failed: {}", t.toString());
+            return List.of();
+        }
+    }
+
+    private List<Map2MapRequestEvent> sweepMap2MapExpired(long now) {
+        try {
+            return pendingMap2Map.sweepExpired(now);
+        } catch (Throwable t) {
+            LOG.warn("pending MAP2MAP list failed: {}", t.toString());
+            return List.of();
+        }
+    }
+
+    private void expireOneSri(NiPushRequestEvent ni) {
+        sriExpired.incrementAndGet();
+        Long ewma = null;
+        if (adaptive != null) {
+            double v = adaptive.observedLatencyMs(ni.networkId());
+            if (v > 0d) {
+                ewma = Math.round(v);
+            }
+        }
+        cdr.write(ni.correlationId(), CdrPhase.FAILED, ni.msisdn(), null, "SRI_TIMEOUT",
+                "service=BridgeGateScheduler", ni.networkId(), null, "MAP", null, ewma);
+        saga.onNiFailed(ni.correlationId(), "SRI_TIMEOUT");
+        try {
+            campaigns.onNiDone(ni.correlationId(), false, "SRI_TIMEOUT");
+        } catch (RuntimeException ignored) {
+            // campaign bookkeeping is best-effort; the saga already compensated
+        }
+    }
+
+    private void expireOneMap2Map(Map2MapRequestEvent req) {
+        map2mapExpired.incrementAndGet();
+        VirtualSession session = null;
+        try {
+            session = store.get(req.correlationId()).orElse(null);
+        } catch (Throwable ignored) { }
+        // Gate may already have released the UE (async-wait + gated XML). Drop pending
+        // without a second hard-fail MAP reply — AS late path may still be in flight.
+        boolean alreadyBridged = session != null && (
+                session.state() == VirtualSessionState.S1_RELEASED
+                        || session.state() == VirtualSessionState.PUSH_PENDING
+                        || session.state() == VirtualSessionState.RESPONDING
+                        || !session.dialogAlive()
+                        || session.state().terminal());
+        Long gateMs = Map2MapCdr.gateMs(session);
+        Long ewma = null;
+        if (adaptive != null) {
+            double v = adaptive.observedLatencyMs(req.networkId());
+            if (v > 0d) {
+                ewma = Math.round(v);
+            }
+        }
+        cdr.write(req.correlationId(), CdrPhase.FAILED, req.msisdn(), req.shortCode(),
+                alreadyBridged ? Map2MapCdr.TIMEOUT_AFTER_BRIDGE : Map2MapCdr.TIMEOUT,
+                Map2MapCdr.detail(req, "service=BridgeGateScheduler",
+                        alreadyBridged ? "phase=after-bridge" : "phase=hop-ttl"),
+                req.networkId(), req.tenantId(), "MAP", gateMs, ewma);
+        if (map2MapTelemetry != null) {
+            if (alreadyBridged) {
+                map2MapTelemetry.timeoutAfterBridge();
+            } else {
+                map2MapTelemetry.hopTimeout();
+            }
+        }
+        if (alreadyBridged) {
+            // Hop is dead (registry entry swept) — clear the outstanding flag so a
+            // later gate tick does not defer again. The bridged session itself
+            // survives for late AS reconcile.
+            try {
+                store.setMap2mapHopOutstanding(req.correlationId(), false);
+            } catch (Throwable ignored) { }
+            return;
+        }
+        // CAS-law: win the terminal transition before the MAP reply — the bridge
+        // may have claimed the session between the read-only check above and here.
+        Optional<VirtualSession> won = store.compareAndTransitionAny(
+                req.correlationId(),
+                List.of(VirtualSessionState.AWAITING_AS, VirtualSessionState.ACTIVE),
+                VirtualSessionState.COMPLETED);
+        if (won.isEmpty()) {
+            return;
+        }
+        // Hop TTL expired the pending entry — the hop will never resolve.
+        // Clear the outstanding flag (single-field) so the gate stops deferring,
+        // then terminate the inbound MO below.
+        try {
+            store.setMap2mapHopOutstanding(req.correlationId(), false);
+        } catch (Throwable ignored) { }
+        RaCommandPort ss7 = pendingMap2Map.ss7();
+        try {
+            MapDialogHelper.replyAndEnd(ss7, req.inboundDialogId(), req.inboundInvokeId(),
+                    hardFailMessage());
+        } catch (Throwable t) {
+            LOG.warn("MAP2MAP TTL end inbound failed corr={}: {}", req.correlationId(), t.toString());
+        }
+        try {
+            store.setDialogAlive(req.correlationId(), false);
+        } catch (Throwable ignored) { }
     }
 
     private String hardFailMessage() {
@@ -235,12 +324,37 @@ public class BridgeGateScheduler {
             String msg = config == null ? null : config.asyncHardFailMessage();
             if (msg != null && !msg.isBlank()) return msg;
         } catch (Throwable ignored) { }
-        return "ማው ማውማው ማውማው ማውማው ማው";
+        return et.restlink.ussdgw.config.UssdConfigService.DEFAULT_HARD_FAIL_MESSAGE;
+    }
+
+    /**
+     * Re-drive due late-push retries (P1-5, classic PushRetryQueue parity). Same
+     * isolation law as the other jobs: SKIP overlap, per-item catch.
+     */
+    @Scheduled(every = "5s", concurrentExecution = Scheduled.ConcurrentExecution.SKIP)
+    void tickNiRetries() {
+        List<et.restlink.ussdgw.bridge.NiPushRetryRegistry.RetryEntry> due;
+        try {
+            if (niPushRetries == null || bridge == null) {
+                return;
+            }
+            due = niPushRetries.takeDue(System.currentTimeMillis());
+        } catch (Throwable t) {
+            LOG.warn("NI retry tick failed: {}", t.toString());
+            return;
+        }
+        for (et.restlink.ussdgw.bridge.NiPushRetryRegistry.RetryEntry e : due) {
+            try {
+                bridge.retryNiPush(e);
+            } catch (Throwable t) {
+                LOG.warn("NI retry failed corr={}: {}",
+                        e == null ? null : e.correlationId(), t.toString());
+            }
+        }
     }
 
     /** Quarkus scheduler invocations of {@link #tickGates} since boot (proof the gate is alive). */
-    public long gateTicks() { return gateTicks.get(); }
-    public long gateExpired() { return gateExpired.get(); }
+    public long gateTicks() { return gateTicks.get(); }    public long gateExpired() { return gateExpired.get(); }
     public long reclaimCount() { return reclaimCount.get(); }
     public long sriExpired() { return sriExpired.get(); }
     public long map2mapExpired() { return map2mapExpired.get(); }

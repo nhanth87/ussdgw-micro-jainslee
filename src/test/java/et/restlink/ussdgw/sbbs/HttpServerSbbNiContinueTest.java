@@ -84,6 +84,12 @@ class HttpServerSbbNiContinueTest {
             public void onAsResponse(et.restlink.ussdgw.api.AsResponse response, long latencyMs) {
                 // no-op for continue unit test
             }
+
+            @Override
+            public boolean onNiAsContinue(String correlationId, String text) {
+                // no-op for continue unit test (routing only; P0-1 covered by HttpNiTwoDigitMenuTest)
+                return true;
+            }
         };
 
         services = new SbbServices();
@@ -311,6 +317,36 @@ class HttpServerSbbNiContinueTest {
         }
 
         @Override public void remove(String correlationId) { rows.remove(correlationId); }
+
+        @Override
+        public java.util.Optional<VirtualSession> compareAndTransition(
+                String correlationId, VirtualSessionState expected, VirtualSessionState next) {
+            VirtualSession s = correlationId == null ? null : rows.get(correlationId);
+            if (s == null || expected == null || next == null) {
+                return java.util.Optional.empty();
+            }
+            synchronized (s) {
+                if (s.state() != expected) return java.util.Optional.empty();
+                s.setState(next);
+                return java.util.Optional.of(s);
+            }
+        }
+
+        @Override
+        public java.util.Optional<VirtualSession> compareAndTransitionAny(
+                String correlationId, java.util.List<VirtualSessionState> expected,
+                VirtualSessionState next) {
+            if (correlationId == null || expected == null || next == null) {
+                return java.util.Optional.empty();
+            }
+            for (VirtualSessionState from : expected) {
+                if (from == null) continue;
+                java.util.Optional<VirtualSession> won =
+                        compareAndTransition(correlationId, from, next);
+                if (won.isPresent()) return won;
+            }
+            return java.util.Optional.empty();
+        }
     }
 
     private static final class CapturingHttp implements RaCommandPort {

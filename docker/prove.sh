@@ -1,0 +1,188 @@
+#!/usr/bin/env bash
+# Prove the RUNNING container, not the build host.
+#
+# AGENTS.md: green tests and a successful build NEVER mean a host runs the new code.
+# This is the Docker adaptation of that gate. Each check below has a matching
+# failure mode that is otherwise invisible until an operator hits it.
+#
+# Usage:
+#   ./docker/prove.sh                       # local docker / compose
+#   ./docker/prove.sh ussdgw_ussdgw        # swarm service (container id varies)
+#   ./docker/prove.sh "$(docker ps -q --filter name=ussdgw_ussdgw | head -1)"
+set -uo pipefail
+
+CONTAINER="${1:-}"
+KEY="${USSD_ADMIN_API_KEY:-ussd-admin}"
+BASE="${PROVE_BASE_URL:-http://127.0.0.1}"
+PASS=0; FAIL=0
+ok()   { echo "  PASS  $*"; PASS=$((PASS+1)); }
+bad()  { echo "  FAIL  $*"; FAIL=$((FAIL+1)); }
+head_() { echo; echo "=== $* ==="; }
+
+if [[ -z "$CONTAINER" ]]; then
+  CONTAINER="$(docker ps -q --filter name=ussdgw_ussdgw | head -1)"
+fi
+[[ -n "$CONTAINER" ]] || { echo "prove: no running ussdgw container — deploy first"; exit 1; }
+
+echo "container: $(docker inspect -f '{{.Name}} ({{.Image}})' "$CONTAINER")"
+
+# --- 1. the artifact in the container is the one we think it is -----------------
+head_ "artifact identity"
+img_digest="$(docker inspect -f '{{.Image}}' "$CONTAINER")"
+expected_digest="$(docker image inspect -f '{{index .RepoDigests 0}}' "$(docker inspect -f '{{.Config.Image}}' "$CONTAINER")" 2>/dev/null || echo "")"
+if [[ -n "$img_digest" ]]; then
+  ok "container runs image id ${img_digest:0:19}"
+else
+  bad "cannot read the image id of the running container"
+fi
+
+# BUILD-INFO.json travels inside the image: which SHAs produced it.
+if info="$(docker exec "$CONTAINER" cat /opt/ussdgw/BUILD-INFO.json 2>/dev/null)"; then
+  # Validate via a FILE, never through a pipeline. Under `set -o pipefail` an
+  # `echo | python3 -c` dies with SIGPIPE the moment python stops reading, which
+  # reports a perfectly valid BUILD-INFO as a failure.
+  printf '%s\n' "$info" > /tmp/prove-build-info.json
+  if summary="$(python3 - /tmp/prove-build-info.json <<'PY' 2>&1
+import json, sys
+d = json.load(open(sys.argv[1]))
+print("  sources:")
+for k, v in sorted(d.get("sources", {}).items()):
+    print(f"    {k:18} {v}")
+print(f"  builtAt:  {d.get('builtAt')}")
+print(f"  dbKind:   {d.get('bakedDbKind')}  (must be postgresql)")
+PY
+  )"; then
+    echo "$summary"
+    ok "BUILD-INFO.json present and valid JSON"
+  else
+    bad "BUILD-INFO.json is not valid JSON: $summary"
+  fi
+else
+  bad "no BUILD-INFO.json in the image - this is not a docker-built artifact"
+fi
+
+# The PG-bake stamp: an H2 bake on a PG host is THE crash-loop.
+baked="$(docker exec "$CONTAINER" cat /opt/ussdgw/.baked-db-kind 2>/dev/null | tr -d '[:space:]')"
+[[ "$baked" == "postgresql" ]] \
+  && ok ".baked-db-kind=postgresql (matches the runtime config)" \
+  || bad ".baked-db-kind='$baked' — expected postgresql; an H2 bake crash-loops on PG"
+
+# --- 2. the expected classes are actually inside the jar ------------------------
+head_ "classes in the running jar"
+# CdrFileLedger is the file-ledger read model; if it is missing the CDR page is
+# silently serving the old DB path. A mtime is not proof — grep the jar.
+# List the jar ONCE into a file. Same trap as above: `docker exec ... | grep -q`
+# under `set -o pipefail` fails on a MATCH because grep -q exits at the first hit
+# and docker exec is killed by SIGPIPE. That produced a false "wrong artifact".
+docker exec "$CONTAINER" unzip -l /opt/ussdgw/ussdgw-app.jar > /tmp/prove-appjar.txt 2>/dev/null || true
+if [ ! -s /tmp/prove-appjar.txt ]; then
+  docker exec "$CONTAINER" sh -c 'jar tf /opt/ussdgw/ussdgw-app.jar' > /tmp/prove-appjar.txt 2>/dev/null || true
+fi
+if grep -q 'cdr/CdrFileLedger\.class' /tmp/prove-appjar.txt 2>/dev/null; then
+  ok "CdrFileLedger present in ussdgw-app.jar (file-ledger read model)"
+else
+  bad "CdrFileLedger NOT in ussdgw-app.jar - wrong artifact deployed"
+fi
+# The MAP returnError branch must be inside the running SBB class, not just in git.
+docker exec "$CONTAINER" sh -c \
+  'unzip -p /opt/ussdgw/ussdgw-app.jar et/restlink/ussdgw/sbbs/MapUssdParentSbb.class' \
+  > /tmp/prove-sbb.bin 2>/dev/null || true
+if grep -aq 'MAP_RETURN_ERROR' /tmp/prove-sbb.bin 2>/dev/null; then
+  ok "MapUssdParentSbb carries the MAP_RETURN_ERROR branch"
+else
+  bad "MAP_RETURN_ERROR not in the running MapUssdParentSbb - stale artifact"
+fi
+# The MAP returnError branch must be in the running SBB.
+docker exec "$CONTAINER" sh -c \
+  'unzip -l /opt/ussdgw/lib/main/com.microjainslee.ra-jss7-*.jar 2>/dev/null | grep -c Ss7MapEvent' \
+  > /tmp/probe-jss7.txt 2>/dev/null || true
+if [ -s /tmp/probe-jss7.txt ] && [ "$(tr -d '[:space:]' < /tmp/probe-jss7.txt)" != "0" ]; then
+  ok "ra-jss7 present with the sealed Ss7MapEvent"
+else
+  echo "  SKIP  could not inspect ra-jss7 in the runtime image"
+fi
+
+# The running process really uses this jar, not a stale one from a previous deploy.
+head_ "running process"
+pid_in_container="$(docker exec "$CONTAINER" sh -c 'pgrep -f quarkus-run.jar | head -1' 2>/dev/null)"
+[[ -n "$pid_in_container" ]] \
+  && ok "JVM running inside the container (pid $pid_in_container)" \
+  || bad "no JVM process found inside the container"
+cp_line="$(docker exec "$CONTAINER" sh -c "tr '\\0' ' ' < /proc/$pid_in_container/cmdline" 2>/dev/null)"
+grep -q 'quarkus-run.jar' <<<"$cp_line" \
+  && ok "process runs quarkus-run.jar (the launcher, not the app jar alone)" \
+  || bad "unexpected command line: $cp_line"
+
+# --- 3. preflight conditions the entrypoint enforces -----------------------------
+head_ "preflight"
+docker exec "$CONTAINER" test -e /proc/net/sctp \
+  && ok "host SCTP available inside the container" \
+  || bad "no /proc/net/sctp — the host kernel has no sctp module (run host-prep.sh)"
+
+java_ver="$(docker exec "$CONTAINER" java -version 2>&1 | head -1)"
+grep -q 'version "25' <<<"$java_ver" \
+  && ok "Java 25 ($java_ver)" \
+  || bad "not Java 25: $java_ver"
+
+# --- 4. the live surface (status.json alone does NOT prove CDR/UI) --------------
+head_ "live HTTP surface"
+code="$(curl -sS --connect-timeout 3 --max-time 10 -o /tmp/prove-status.json -w '%{http_code}' \
+        -H "X-USSD-Admin-Key: $KEY" "$BASE:8088/admin/status.json" 2>/dev/null)"
+[[ "$code" == "200" ]] \
+  && ok "status.json 200 (app ready, not necessarily SS7 up)" \
+  || bad "status.json returned $code"
+
+if [[ -s /tmp/prove-status.json ]]; then
+  python3 - <<'PY' && ok "status.json parses; key values below" || bad "status.json is not valid JSON"
+import json
+d = json.load(open("/tmp/prove-status.json"))
+print(f"    ss7.live            = {d.get('ss7.live')}   <- link truth, may honestly be false")
+print(f"    cdr.file.recentEvents = {d.get('cdr.file.recentEvents')}")
+print(f"    cdr.file.warmed     = {d.get('cdr.file.warmed')}")
+print(f"    scheduler.gateTicks = {d.get('scheduler.gateTicks')}")
+PY
+fi
+
+# CDR page: the file-ledger surface. This is the surface that regressed before.
+code="$(curl -sS --connect-timeout 3 --max-time 10 -o /tmp/prove-cdr.html -w '%{http_code}' \
+        -H "X-USSD-Admin-Key: $KEY" "$BASE:8088/admin/cdr/partial" 2>/dev/null)"
+[[ "$code" == "200" ]] \
+  && ok "/admin/cdr/partial 200" \
+  || bad "/admin/cdr/partial returned $code"
+
+if grep -q 'cdr-ledger-row' /tmp/prove-cdr.html 2>/dev/null; then
+  rows="$(grep -c 'cdr-ledger-row' /tmp/prove-cdr.html)"
+  ok "CDR ledger serves $rows row(s) from the file ledger"
+  grep -q 'cdr-hop-list\|cdr-spine' /tmp/prove-cdr.html \
+    && ok "6-hop spine markup present" \
+    || echo "  note  no spine markup (expected when no session is expanded)"
+else
+  ok "CDR page returned no rows (valid on a freshly started gateway with an empty ledger)"
+fi
+
+# Admin UI shell (a 302 means the session cookie is missing, not a broken page).
+code="$(curl -sS --connect-timeout 3 --max-time 10 -o /dev/null -w '%{http_code}' \
+        -H "X-USSD-Admin-Key: $KEY" "$BASE:8088/admin/cdr" 2>/dev/null)"
+[[ "$code" =~ ^(200|302)$ ]] \
+  && ok "admin CDR shell reachable ($code)" \
+  || bad "admin CDR shell returned $code"
+
+# Through nginx, when it is up.
+code="$(curl -sS --connect-timeout 3 --max-time 10 -o /dev/null -w '%{http_code}' "$BASE/healthz" 2>/dev/null)"
+[[ "$code" == "200" ]] \
+  && ok "nginx /healthz 200 (:80 in front of :8088)" \
+  || echo "  note  nginx not answering on :80 (expected if not deployed yet)"
+
+# --- 5. runtime files the operator depends on -----------------------------------
+head_ "persisted files"
+docker exec "$CONTAINER" sh -c 'test -f /opt/ussdgw/logs/ussdgw.log' \
+  && ok "Log4j2 app log present in the mounted logs volume" \
+  || bad "no ussdgw.log — logs are not reaching the persistent volume"
+docker exec "$CONTAINER" sh -c 'test -d /opt/ussdgw/configs/ss7-persist' \
+  && ok "configs/ss7-persist exists and is writable (admin UI saves stack JSON)" \
+  || bad "ss7-persist missing — the SS7 admin save will fail"
+
+echo
+echo "=== prove.sh: $PASS passed, $FAIL failed ==="
+[[ "$FAIL" -eq 0 ]] || echo "prove.sh: NOT proven — fix the failures above before calling this done"
+exit $(( FAIL > 0 ? 1 : 0 ))

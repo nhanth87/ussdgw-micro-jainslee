@@ -139,6 +139,12 @@ public class RuntimeConfigStore {
         public static final String HTTP_NI_AUTH_REQUIRED = "ussd.http.ni.auth-required";
         /** networkId used for NI ingress when the authenticated principal carries none. */
         public static final String HTTP_NI_DEFAULT_NETWORK_ID = "ussd.http.ni.default-network-id";
+        /**
+         * Budget for an NI park whose outstanding MAP op is a Request awaiting UE
+         * input (human think-time), instead of the 25s AS ceiling (P1-1, step 4).
+         * Clamped to the dialog timeout so the park never outlives the MAP leg.
+         */
+        public static final String NI_REQUEST_UI_TIMEOUT_MS = "ussd.ni.request-ui-timeout-ms";
 
         /** TTL for NI pushes awaiting their own SRI-SM Response. */
         public static final String SRI_PENDING_TTL_MS = "ussd.sri.pending-ttl-ms";

@@ -16,6 +16,8 @@ import com.microjainslee.api.SleeEvent;
 import com.microjainslee.api.SleeEventHandler;
 import com.microjainslee.api.annotations.InjectRa;
 
+import java.util.List;
+
 /**
  * S2 NI push after SRI — UnstructuredSS-Request/Notify via ra-jss7 toward
  * SRI {@code networkNodeNumber} (MSC), with IMSI destReference (classic + TS 29.002).
@@ -59,8 +61,9 @@ public final class MapNiPushSbb implements Sbb, SleeEventHandler {
     }
 
     private String push(NiPushReadyEvent ni) {
-        String text = ni.text();
-        if (text != null && text.length() > 200) text = text.substring(0, 200);
+        // P2-4: alphabet-aware truncation (GSM-7 = 182 septets, UCS-2 = 80 chars, UCS-8 = 160 octets).
+        // The old hardcoded 200-char substring cut mid-codepoint for UCS-2 and ignored GSM-7 extension chars.
+        String text = et.restlink.ussdgw.codec.UssdEncodingPolicy.truncateToFit(ni.text(), ni.alphabet());
 
         if (ni.reuseExistingDialog()) {
             return continuePush(ni, text);
@@ -107,9 +110,12 @@ public final class MapNiPushSbb implements Sbb, SleeEventHandler {
                 MapDialogHelper.mscSsn(cfg), MapDialogHelper.localSsn(cfg),
                 pin.preferredAspName(), pin.remotePc());
         writeCdr(ni, CdrPhase.S2_PUSH, ni.notifyOnly() ? "NI_NOTIFY" : "NI_PUSH", text);
-        keepOrCompleteSession(ni);
-        writeCdr(ni, CdrPhase.COMPLETED, "BRIDGED_DONE",
-                "service=MapNiPushSbb|VirtualSessionBridge");
+        // P2-5: BRIDGED_DONE only when this push came off a bridged (late) row —
+        // plain NI was never bridged.
+        if (keepOrCompleteSession(ni)) {
+            writeCdr(ni, CdrPhase.COMPLETED, "BRIDGED_DONE",
+                    "service=MapNiPushSbb|VirtualSessionBridge");
+        }
         return "ni-sent msc=" + Pii.maskMsisdn(mscGt)
                 + (ni.notifyOnly() ? " notify" : " request")
                 + (imsi == null || imsi.isBlank() ? "" : " imsi");
@@ -131,9 +137,10 @@ public final class MapNiPushSbb implements Sbb, SleeEventHandler {
             return "ni-continue-no-dialog";
         }
         writeCdr(ni, CdrPhase.S2_PUSH, ni.notifyOnly() ? "NI_CONTINUE_NOTIFY" : "NI_CONTINUE", text);
-        keepOrCompleteSession(ni);
-        writeCdr(ni, CdrPhase.COMPLETED, "BRIDGED_DONE",
-                "service=MapNiPushSbb|VirtualSessionBridge");
+        if (keepOrCompleteSession(ni)) {
+            writeCdr(ni, CdrPhase.COMPLETED, "BRIDGED_DONE",
+                    "service=MapNiPushSbb|VirtualSessionBridge");
+        }
         return "ni-continue"
                 + (ni.notifyOnly() ? " notify" : " request")
                 + (ni.mscGt() == null || ni.mscGt().isBlank()
@@ -160,27 +167,45 @@ public final class MapNiPushSbb implements Sbb, SleeEventHandler {
                 networkId, tenant, origin, gate, ewma);
     }
 
-    private void keepOrCompleteSession(NiPushReadyEvent ni) {
+    /**
+     * @return true when the push came off a bridged (late) row — the caller writes
+     *         BRIDGED_DONE only then (P2-5: plain NI was never bridged).
+     */
+    private boolean keepOrCompleteSession(NiPushReadyEvent ni) {
         // HTTP-NI: keep session; AS HTTP stays parked until peer Notify RESULT /
         // MS continue (MapUssdParent) or AdaptiveTimeout gate. Do not completeParked here.
         boolean httpNi = false;
         try {
             httpNi = svc().niHttpPark().isHttpNi(ni.correlationId());
         } catch (Throwable ignored) { }
-        boolean keepHttpNi = httpNi;
-        svc().store().get(ni.correlationId()).ifPresent(s -> {
-            if (keepHttpNi) {
-                s.setState(VirtualSessionState.ACTIVE);
-                s.setPendingText(null);
-                svc().store().put(s);
-            } else {
-                s.setState(VirtualSessionState.COMPLETED);
-                s.setPendingText(null);
-                s.setDialogAlive(false);
-                // Profile get() returns a detached snapshot — must write-through then drop.
-                svc().store().put(s);
-                svc().store().remove(s.correlationId());
-            }
-        });
+        String corr = ni.correlationId();
+        if (httpNi) {
+            // CAS-law: interactive session stays ACTIVE by transition, never detached put.
+            // pendingText was already consumed from the event — no rewrite of the row.
+            svc().store().compareAndTransitionAny(corr,
+                    List.of(VirtualSessionState.PUSH_PENDING, VirtualSessionState.ACTIVE,
+                            VirtualSessionState.RESPONDING, VirtualSessionState.AWAITING_AS),
+                    VirtualSessionState.ACTIVE);
+            return false;
+        }
+        // Late (bridged) pushes stay PUSH_PENDING for the S2 outcome (P1-5): the
+        // S2 CLOSE completes the row, S2 errors retry or fall back. Plain NI pushes
+        // complete here exactly as before.
+        VirtualSessionState before = svc().store().get(corr)
+                .map(VirtualSession::state).orElse(null);
+        if (before == VirtualSessionState.PUSH_PENDING
+                || before == VirtualSessionState.S1_RELEASED) {
+            return true;
+        }
+        // CAS-law: terminal transition by CAS before drop — a concurrent claim/gate
+        // winner must not have its row resurrected under it.
+        if (svc().store().compareAndTransitionAny(corr,
+                List.of(VirtualSessionState.ACTIVE,
+                        VirtualSessionState.AWAITING_AS, VirtualSessionState.RESPONDING),
+                VirtualSessionState.COMPLETED).isPresent()) {
+            svc().store().setDialogAlive(corr, false);
+            svc().store().remove(corr);
+        }
+        return false;
     }
 }

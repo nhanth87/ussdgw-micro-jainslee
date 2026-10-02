@@ -28,13 +28,21 @@ public class MapUssdAccessAdapter implements UssdAccessPort {
 
     @Override
     public void requestNiPush(VirtualSession session, String text) {
+        requestNiPush(session, text, false);
+    }
+
+    /**
+     * Late reconcile (P1-3, D2b): END / bridged CONTINUE go out as one-shot
+     * {@code unstructuredSS-Notify} — never an interactive Request on a released leg.
+     */
+    public void requestNiPush(VirtualSession session, String text, boolean notifyOnly) {
         if (session == null || container == null) {
             LOG.warn("MAP NI push skipped (no session/container)");
             return;
         }
         container.routeEvent(new NiPushRequestEvent(
                         session.correlationId(), session.msisdn(), text, session.networkId(),
-                        session.pendingAlphabet()),
+                        session.pendingAlphabet(), notifyOnly),
                 container.createActivityContext("ni-" + session.correlationId()));
     }
 

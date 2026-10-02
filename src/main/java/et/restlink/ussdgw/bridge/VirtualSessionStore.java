@@ -50,6 +50,15 @@ public class VirtualSessionStore {
     @ConfigProperty(name = "ussd.tx.profile-ttl-ms", defaultValue = "120000")
     long profileTtlMs;
 
+    /**
+     * Absolute interactive session lifetime (D6 = 10 min, P1-2 step 4). Rows in
+     * {@code ACTIVE} (waiting on the UE with an open MAP menu) expire on this cap
+     * instead of the last gate arm, so a slow reader on turn 4+ is not reclaimed.
+     * Anchored on {@code createdAtMs} — writes never slide it.
+     */
+    @ConfigProperty(name = "ussd.tx.max-session-ms", defaultValue = "600000")
+    long maxSessionMs = 600_000L;
+
     private volatile boolean tableReady;
 
     /**
@@ -248,6 +257,45 @@ public class VirtualSessionStore {
         }
     }
 
+    /**
+     * Live dialog for {@code msisdn} other than {@code excludeCorr} (P1-4 handset-busy
+     * check): a row with an open leg ({@code ACTIVE}/{@code AWAITING_AS}/
+     * {@code RESPONDING}). Released ({@code S1_RELEASED}) and terminal rows are free.
+     */
+    public Optional<VirtualSession> findActiveByMsisdn(String msisdn, String excludeCorr) {
+        String digits = AdaptiveTimeout.normalizeMsisdn(msisdn);
+        if (digits == null || digits.isEmpty()) {
+            return Optional.empty();
+        }
+        ensureTable();
+        ProfileFacility f = facility();
+        if (f == null) {
+            return Optional.empty();
+        }
+        try {
+            Collection<ProfileLocalObject> rows =
+                    f.findProfilesByAttribute(UssdTxProfile.TABLE_NAME, "msisdn", digits);
+            for (ProfileLocalObject plo : rows) {
+                VirtualSession s = UssdTxProfileMapper.read((UssdTxProfile) plo.getProfile());
+                if (s == null) {
+                    continue;
+                }
+                if (excludeCorr != null && excludeCorr.equals(s.correlationId())) {
+                    continue;
+                }
+                VirtualSessionState st = s.state();
+                if (st == VirtualSessionState.ACTIVE
+                        || st == VirtualSessionState.AWAITING_AS
+                        || st == VirtualSessionState.RESPONDING) {
+                    return Optional.of(s);
+                }
+            }
+            return Optional.empty();
+        } catch (RuntimeException e) {
+            return Optional.empty();
+        }
+    }
+
     public void remove(String correlationId) {
         if (correlationId == null || correlationId.isBlank()) return;
         ensureTable();
@@ -346,6 +394,23 @@ public class VirtualSessionStore {
     }
 
     /**
+     * CAS state transition from the first matching expected state (for callers that
+     * accept several live states, e.g. saga compensation). Tries each in order;
+     * exactly one CAS can win.
+     */
+    public Optional<VirtualSession> compareAndTransitionAny(String correlationId,
+                                                            List<VirtualSessionState> expected,
+                                                            VirtualSessionState next) {
+        if (correlationId == null || expected == null || next == null) return Optional.empty();
+        for (VirtualSessionState from : expected) {
+            if (from == null) continue;
+            Optional<VirtualSession> won = compareAndTransition(correlationId, from, next);
+            if (won.isPresent()) return won;
+        }
+        return Optional.empty();
+    }
+
+    /**
      * Atomically take the session out of the running for one AS content response, mirroring
      * classic {@code BridgeReconciler}: the read-only checks are a fast path, the CAS is the
      * authority. Exactly one of {pull response, {@code /as/callback} POST, gate scheduler}
@@ -374,6 +439,17 @@ public class VirtualSessionStore {
             }
             from = VirtualSessionState.S1_RELEASED;
         }
+        // P2-1: post-CAS generation revalidation. Between acceptAsResponse (read) and
+        // casState (CAS), another thread could bump the generation (e.g., MS digit →
+        // nextGeneration). Re-read and verify; if stale, roll back the CAS.
+        if (generation > 0) {
+            Optional<VirtualSession> fresh = get(correlationId);
+            if (fresh.isEmpty() || fresh.get().generation() != generation) {
+                // Roll back: RESPONDING → from (AWAITING_AS or S1_RELEASED).
+                casState(correlationId, VirtualSessionState.RESPONDING, from);
+                return Optional.empty();
+            }
+        }
         s.setState(from);
         return Optional.of(new AsResponseClaim(s, from));
     }
@@ -383,14 +459,51 @@ public class VirtualSessionStore {
      * caller only owns one field, so concurrent writers do not lose updates.
      */
     public void setDialogAlive(String correlationId, boolean alive) {
+        updateField(correlationId, "dialogAlive", alive);
+    }
+
+    /**
+     * Atomic single-field writes for caller-owned fields (CAS-law: never follow a CAS
+     * with a full-row {@link #put(VirtualSession)} from a detached snapshot).
+     */
+    public void setMap2mapHopOutstanding(String correlationId, boolean outstanding) {
+        updateField(correlationId, "map2mapHopOutstanding", outstanding);
+    }
+
+    public void setGateMs(String correlationId, long gateMs) {
+        updateField(correlationId, "gateMs", gateMs);
+    }
+
+    public void setInvokeId(String correlationId, long invokeId) {
+        updateField(correlationId, "invokeId", invokeId);
+    }
+
+    public void setPullStartedAtMs(String correlationId, long pullStartedAtMs) {
+        updateField(correlationId, "pullStartedAtMs", pullStartedAtMs);
+    }
+
+    public void setPendingText(String correlationId, String pendingText) {
+        updateField(correlationId, "pendingText", pendingText);
+    }
+
+    public void setPendingAlphabet(String correlationId,
+                                   et.restlink.ussdgw.api.UssdAlphabet alphabet) {
+        updateField(correlationId, "pendingAlphabet",
+                alphabet == null
+                        ? et.restlink.ussdgw.api.UssdAlphabet.AUTO.name()
+                        : alphabet.name());
+    }
+
+    private void updateField(String correlationId, String field, Object value) {
         if (correlationId == null || correlationId.isBlank()) return;
         ProfileFacility f = facility();
         if (f == null) return;
         try {
             f.updateField(new ProfileID(UssdTxProfile.TABLE_NAME, correlationId),
-                    "dialogAlive", old -> alive);
+                    field, old -> value);
         } catch (RuntimeException e) {
-            LOG.debug("dialogAlive update skipped corr={}: {}", correlationId, e.toString());
+            LOG.debug("ussdTx field update skipped corr={} field={}: {}",
+                    correlationId, field, e.toString());
         }
     }
 
@@ -557,6 +670,17 @@ public class VirtualSessionStore {
     }
 
     /**
+     * Move an armed gate's deadline without touching state (P1-8: deferring
+     * MAP2MAP_MO_HOLD must leave the due index, or every 100ms tick rewrites one
+     * CDR row per held session until hop TTL).
+     */
+    public void deferGateDeadline(String correlationId, long newDeadlineMs) {
+        if (correlationId == null || correlationId.isBlank() || newDeadlineMs <= 0) return;
+        updateField(correlationId, "gateDeadlineMs", newDeadlineMs);
+        get(correlationId).ifPresent(this::indexGate);
+    }
+
+    /**
      * Atomically claim blank {@code msisdn} on the row, or fail-closed when already bound to
      * another digits-normalized subscriber. Closes the create→write TOCTOU where two threads
      * both saw a blank row and last-writer-won.
@@ -653,12 +777,20 @@ public class VirtualSessionStore {
     /**
      * TTL anchor is {@code createdAtMs}: anchoring on "now" would slide the expiry forward on
      * every write, so a frequently updated session would never expire (leaked saga row).
+     * Rows in {@code ACTIVE} wait on the human (open MAP menu / parked NI): they expire on
+     * the absolute session cap instead of the last gate arm, or a slow reader loses the
+     * row mid-menu (P1-2).
      */
     private long expiresAt(VirtualSession s) {
         long created = s.createdAtMs() > 0 ? s.createdAtMs() : System.currentTimeMillis();
         long dialog = config == null ? profileTtlMs : Math.max(profileTtlMs, config.dialogTimeoutMs());
         long gate = s.gateDeadlineMs() > 0 ? s.gateDeadlineMs() + GATE_TTL_GRACE_MS : 0L;
-        return Math.max(created + dialog, gate);
+        long exp = Math.max(created + dialog, gate);
+        if (s.state() == VirtualSessionState.ACTIVE) {
+            long cap = maxSessionMs > 0 ? maxSessionMs : 600_000L;
+            exp = Math.max(exp, created + cap);
+        }
+        return exp;
     }
 
     private ProfileFacility facility() {

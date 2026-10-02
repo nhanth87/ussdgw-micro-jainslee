@@ -19,6 +19,7 @@ import com.microjainslee.api.RaCommandPort;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 
+import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Supplier;
@@ -39,6 +40,9 @@ public class VirtualSessionBridge {
     @Inject GatedSessionRegistry gatedSessions;
     @Inject GatedAsNotifyService gatedAsNotify;
     @Inject UssdUserProfileStore userProfiles;
+    @Inject et.restlink.ussdgw.service.PendingMap2MapRegistry pendingMap2Map;
+    @Inject NiPushRetryRegistry niPushRetries;
+    @Inject NiPushFallback niPushFallback;
 
     private volatile Supplier<RaCommandPort> ss7Supplier = () -> null;
 
@@ -133,22 +137,91 @@ public class VirtualSessionBridge {
                 && s.originationType() != OriginationType.MAP;
         if (bridged || offMapLegGone) {
             recoverCount.incrementAndGet();
-            s.setPendingText(response.text());
-            s.setPendingAlphabet(response.alphabet());
-            s.setState(VirtualSessionState.PUSH_PENDING);
-            persist(s);
-            accessNi.requestNiPush(s, response.text());
-            cdrWrite(s, CdrPhase.S2_PUSH, "QUEUED",
-                "service=VirtualSessionBridge|late AS reconcile|"
+            // P1-3: the AS action decides the S2 shape (3GPP 22.090 one-shot vs menu).
+            // ABORT pushes nothing — retire terminal. END and (D2b) bridged CONTINUE go
+            // out as one-shot Notify: the S1 leg is gone and no one owns the next UE
+            // digit, so an interactive Request would orphan its reply (P1-2 path).
+            AsAction lateAction = response.action() == null ? AsAction.END : response.action();
+            if (lateAction == AsAction.ABORT) {
+                Optional<VirtualSession> gone = store.compareAndTransition(
+                        pushBackId, VirtualSessionState.RESPONDING,
+                        VirtualSessionState.ABORTED);
+                if (gone.isEmpty()) return;
+                store.clearMsDigitClaim(pushBackId);
+                store.remove(pushBackId);
+                cdrWrite(gone.get(), CdrPhase.FAILED, "ABORTED",
+                        "service=VirtualSessionBridge|late-abort|note=no-push");
+                return;
+            }
+            // CAS-law: this claim owns RESPONDING — move to PUSH_PENDING by CAS and write
+            // caller-owned fields singly, never a detached full put over concurrent writers.
+            Optional<VirtualSession> queued = store.compareAndTransition(
+                    pushBackId, VirtualSessionState.RESPONDING, VirtualSessionState.PUSH_PENDING);
+            if (queued.isEmpty()) return;
+            VirtualSession q = queued.get();
+            store.setPendingText(pushBackId, response.text());
+            store.setPendingAlphabet(pushBackId, response.alphabet());
+            // P1-4: handset busy behind another live dialog (classic shouldDeliverNow) —
+            // hold PUSH_PENDING and retry instead of colliding on the S2 leg.
+            if (niPushRetries != null
+                    && store.findActiveByMsisdn(q.msisdn(), pushBackId).isPresent()) {
+                niPushRetries.advance(pushBackId, true);
+                cdrWrite(q, CdrPhase.S2_PUSH, "PUSH_DEFERRED",
+                        "service=VirtualSessionBridge|busy|note=retry-armed|"
+                                + CdrUssdSnippet.asUssdDetail(response.text()));
+                return;
+            }
+            accessNi.requestNiPush(q, response.text(), true);
+            cdrWrite(q, CdrPhase.S2_PUSH, "QUEUED",
+                "service=VirtualSessionBridge|late AS reconcile|notify|"
                         + CdrUssdSnippet.asUssdDetail(response.text()));
             return;
         }
         // MAP leg died while parked and no abort was observed: nothing is deliverable. Retire
         // the claim rather than leaving the row stranded in RESPONDING.
         zombieDrop.incrementAndGet();
-        s.setState(VirtualSessionState.ZOMBIE);
-        persist(s);
-        cdrWrite(s, CdrPhase.FAILED, "ZOMBIE", "AS response on dead MAP leg");
+        Optional<VirtualSession> dead = store.compareAndTransition(
+                pushBackId, VirtualSessionState.RESPONDING, VirtualSessionState.ZOMBIE);
+        if (dead.isEmpty()) return;
+        cdrWrite(dead.get(), CdrPhase.FAILED, "ZOMBIE", "AS response on dead MAP leg");
+    }
+
+    /**
+     * HTTP-NI AS continue: the AS posted the next menu with the JSESSIONID Cookie after
+     * a UE digit. The NI wire carries no generation (classic XML has none), so stamping
+     * is meaningless here — the session's own CAS is the authority.
+     *
+     * <p>CAS {@code ACTIVE → RESPONDING} so a concurrent duplicate POST loses;
+     * {@code AWAITING_AS} is tolerated once for rows forced there by the pre-fix shim.
+     * Then release the digit claim and return to {@code ACTIVE} (still interactive).
+     * No MAP emit here — {@code HttpServerSbb} routes the next Request after this.
+     * No EWMA feed either: NI park dwell is AS+human think time, not AS latency
+     * (EWMA stays telemetry for MO pull).
+     *
+     * @return {@code true} when this call owned the continue
+     */
+     public boolean onNiAsContinue(String correlationId, String text) {
+        if (correlationId == null || correlationId.isBlank()) return false;
+        Optional<VirtualSession> won = store.compareAndTransition(
+                correlationId, VirtualSessionState.ACTIVE, VirtualSessionState.RESPONDING);
+        if (won.isEmpty()) {
+            won = store.compareAndTransition(
+                    correlationId, VirtualSessionState.AWAITING_AS, VirtualSessionState.RESPONDING);
+            if (won.isEmpty()) return false;
+        }
+        store.releaseMsDigitInFlight(correlationId);
+        store.compareAndTransition(
+                correlationId, VirtualSessionState.RESPONDING, VirtualSessionState.ACTIVE);
+        VirtualSession s = store.get(correlationId).orElse(null);
+        if (s == null) return true;
+        cdrWrite(s, CdrPhase.S1_ACTIVE, AsAction.CONTINUE.name(),
+                "service=VirtualSessionBridge|http-ni|asAction=CONTINUE"
+                        + "|gen=" + s.generation()
+                        + "|menuTurn=" + s.generation()
+                        + "|" + CdrUssdSnippet.asUssdDetail(text)
+                        + "|note=AS→UE");
+        recordUserMenuState(s, AsAction.CONTINUE.name(), text);
+        return true;
     }
 
     /**
@@ -164,8 +237,14 @@ public class VirtualSessionBridge {
         // (Brook: Abort/Reject is the hop terminal — hold until clearMap2mapHopOutstanding).
         // Stay-on-call (arm=true → BRIDGED async-wait) during hop is still allowed.
         if (!arm && s.map2mapHopOutstanding() && s.originationType() == OriginationType.MAP) {
-            LOG.warn("Gate hard-fail deferred — MAP2MAP hop outstanding corr={}",
-                    s.correlationId());
+            // P1-8: re-index out of the due head — returning false without moving the
+            // deadline rewrites one MAP2MAP_MO_HOLD CDR per 100ms tick per held session.
+            // Target = hop TTL expiry (the sweep clears the flag there); the CDR below
+            // then fires at most once per defer window, not once per tick.
+            long deferTo = System.currentTimeMillis() + hopTtlMs();
+            store.deferGateDeadline(s.correlationId(), deferTo);
+            LOG.warn("Gate hard-fail deferred — MAP2MAP hop outstanding corr={} deferTo={}",
+                    s.correlationId(), deferTo);
             cdrWrite(s, CdrPhase.S1_ACTIVE, "MAP2MAP_MO_HOLD",
                     "service=VirtualSessionBridge|hopOutstanding|gate=no-bridge");
             return false;
@@ -245,24 +324,168 @@ public class VirtualSessionBridge {
     }
 
     public void onNetworkAbort(String dialogId) {
-        store.byDialogId(dialogId).ifPresent(s -> {
-            // Publish the dead leg atomically first, so a concurrent AS claim cannot reply
-            // on a torn-down dialog even if it read the row before this snapshot was written.
-            store.setDialogAlive(s.correlationId(), false);
-            s.setDialogAlive(false);
-            if (s.state() == VirtualSessionState.AWAITING_AS
-                    || s.state() == VirtualSessionState.RESPONDING
-                    || s.state() == VirtualSessionState.S1_RELEASED
-                    || s.state() == VirtualSessionState.PUSH_PENDING) {
-                s.setState(VirtualSessionState.ZOMBIE);
-                zombieDrop.incrementAndGet();
-                persist(s);
-                cdrWrite(s, CdrPhase.FAILED, "ZOMBIE", "network abort");
-            } else {
-                s.setState(VirtualSessionState.ABORTED);
-                persist(s);
+        Optional<VirtualSession> opt = store.byDialogId(dialogId);
+        if (opt.isEmpty()) return;
+        String corr = opt.get().correlationId();
+        // Publish the dead leg atomically first, so a concurrent AS claim cannot reply
+        // on a torn-down dialog even if it read the row before this snapshot was written.
+        store.setDialogAlive(corr, false);
+        // CAS-law: transitions via CAS only — never a detached-snapshot full put, which
+        // would revert a concurrent claimForAsResponse winner back out of RESPONDING.
+        // P1-7 (classic markAborted parity): teardown noise touches pre-bridge states
+        // only. A bridged session (S1 released by us) keeps its state so the committed
+        // S2 push still runs; the noise is logged, not acted on.
+        Optional<VirtualSession> zombie = store.compareAndTransitionAny(corr,
+                List.of(VirtualSessionState.AWAITING_AS,
+                        VirtualSessionState.RESPONDING),
+                VirtualSessionState.ZOMBIE);
+        boolean won;
+        if (zombie.isPresent()) {
+            won = true;
+            zombieDrop.incrementAndGet();
+            cdrWrite(zombie.get(), CdrPhase.FAILED, "ZOMBIE", "network abort");
+        } else {
+            won = store.compareAndTransition(
+                    corr, VirtualSessionState.ACTIVE, VirtualSessionState.ABORTED).isPresent();
+        }
+        if (won) {
+            // P1-9: a parked AS HTTP must be answered now (ABORT), not after the gate.
+            // No-op for MO sessions (never parked).
+            abortHttpPark(corr);
+            return;
+        }
+        Optional<VirtualSession> cur = store.get(corr);
+        if (cur.isPresent()) {
+            VirtualSessionState st = cur.get().state();
+            if (st == VirtualSessionState.S1_RELEASED
+                    || st == VirtualSessionState.PUSH_PENDING) {
+                cdrWrite(cur.get(), CdrPhase.S1_RELEASED, "ABORT_AFTER_BRIDGE",
+                        "service=VirtualSessionBridge|note=teardown-noise-kept-push");
             }
-        });
+        }
+    }
+
+    /** Best-effort: settle a parked NI HTTP with ABORT when its MAP leg dies. */
+    private void abortHttpPark(String correlationId) {
+        if (niHttpPark == null || correlationId == null || correlationId.isBlank()) {
+            return;
+        }
+        try {
+            niHttpPark.abortParked(correlationId);
+        } catch (RuntimeException e) {
+            LOG.debug("NI park abort skipped corr={}: {}", correlationId, e.toString());
+        }
+    }
+
+    /**
+     * S2 outcome for a late push: MAP returnError on the push dialog (P1-5). The leg
+     * is already dead — no endDialog, no abort. Retryable network refusals re-arm the
+     * backoff; subscriber verdicts and exhausted retries go to the fallback and retire.
+     *
+     * @return slee detail fragment for the caller
+     */
+    public String onNiPushError(String correlationId, String errorName) {
+        if (correlationId == null || correlationId.isBlank()) return "ni-push-error-no-corr";
+        Optional<VirtualSession> opt = store.get(correlationId);
+        if (opt.isEmpty() || opt.get().state() != VirtualSessionState.PUSH_PENDING) {
+            return "ni-push-error-no-pending";
+        }
+        VirtualSession s = opt.get();
+        cdrWrite(s, CdrPhase.FAILED, "MAP_RETURN_ERROR",
+                "service=VirtualSessionBridge|leg=s2|error=" + errorName);
+        if (NiPushRetryPolicy.isRetryable(errorName) && niPushRetries != null) {
+            int attempt = niPushRetries.advance(correlationId, true);
+            if (attempt <= NiPushRetryPolicy.MAX_ATTEMPTS) {
+                cdrWrite(s, CdrPhase.S2_PUSH, "NI_RETRY_ARMED",
+                        "service=VirtualSessionBridge|attempt=" + attempt
+                                + "|error=" + errorName);
+                return "ni-push-retry-armed attempt=" + attempt + " error=" + errorName;
+            }
+        }
+        fallback(s, errorName == null ? "NI_PUSH_ERROR" : errorName);
+        if (store.compareAndTransition(
+                correlationId, VirtualSessionState.PUSH_PENDING,
+                VirtualSessionState.FAILED).isPresent()) {
+            store.remove(correlationId);
+        }
+        cancelNiRetry(correlationId);
+        return "ni-push-failed error=" + errorName;
+    }
+
+    /**
+     * S2 outcome for a late push: the Notify TC-END arrived (P1-5). Retire the row
+     * the push kept pending since send.
+     */
+    public String onNiPushDelivered(String correlationId) {
+        if (correlationId == null || correlationId.isBlank()) return "ni-push-close-no-corr";
+        Optional<VirtualSession> won = store.compareAndTransition(
+                correlationId, VirtualSessionState.PUSH_PENDING, VirtualSessionState.COMPLETED);
+        if (won.isEmpty()) {
+            return "ni-push-close-lost";
+        }
+        cancelNiRetry(correlationId);
+        store.remove(correlationId);
+        cdrWrite(won.get(), CdrPhase.S2_PUSH, "NI_PUSH_OK",
+                "service=VirtualSessionBridge|note=s2-close");
+        return "ni-push-ok";
+    }
+
+    /** Scheduler-driven re-push of a due retry entry (P1-5). */
+    public void retryNiPush(NiPushRetryRegistry.RetryEntry entry) {
+        if (entry == null || entry.correlationId() == null
+                || entry.correlationId().isBlank()) {
+            return;
+        }
+        String corr = entry.correlationId();
+        try {
+            Optional<VirtualSession> opt = store.get(corr);
+            if (opt.isEmpty() || opt.get().state() != VirtualSessionState.PUSH_PENDING) {
+                cancelNiRetry(corr);
+                return;
+            }
+            VirtualSession s = opt.get();
+            if (niPushRetries != null
+                    && store.findActiveByMsisdn(s.msisdn(), corr).isPresent()) {
+                niPushRetries.advance(corr, entry.notifyOnly());
+                cdrWrite(s, CdrPhase.S2_PUSH, "NI_RETRY_DEFERRED",
+                        "service=VirtualSessionBridge|busy|attempt=" + entry.attempt());
+                return;
+            }
+            accessNi.requestNiPush(s, s.pendingText(), entry.notifyOnly());
+            cdrWrite(s, CdrPhase.S2_PUSH, "NI_RETRY",
+                    "service=VirtualSessionBridge|attempt=" + entry.attempt() + "|"
+                            + CdrUssdSnippet.asUssdDetail(s.pendingText()));
+        } catch (Throwable t) {
+            LOG.warn("NI push retry failed corr={}: {}", corr, t.toString());
+        }
+    }
+
+    public void cancelNiRetry(String correlationId) {
+        if (niPushRetries == null || correlationId == null || correlationId.isBlank()) {
+            return;
+        }
+        try {
+            niPushRetries.cancel(correlationId);
+        } catch (RuntimeException e) {
+            LOG.debug("NI retry cancel skipped corr={}: {}", correlationId, e.toString());
+        }
+    }
+
+    private void fallback(VirtualSession session, String reason) {
+        if (session == null) return;
+        if (niPushFallback != null) {
+            try {
+                niPushFallback.fallback(session, reason);
+                return;
+            } catch (RuntimeException e) {
+                LOG.warn("NI push fallback failed corr={}: {}", session.correlationId(),
+                        e.toString());
+            }
+        }
+        LOG.warn("NI push fallback (log/CDR only) corr={} reason={}",
+                session.correlationId(), reason);
+        cdrWrite(session, CdrPhase.FAILED, "NI_FALLBACK",
+                "service=VirtualSessionBridge|reason=" + reason);
     }
 
     private void dropLate(String correlationId, AsResponse response) {
@@ -326,64 +549,104 @@ public class VirtualSessionBridge {
         AsAction action = response.action() == null ? AsAction.END : response.action();
         var alphabet = response.alphabet() == null
                 ? et.restlink.ussdgw.api.UssdAlphabet.AUTO : response.alphabet();
+        String corr = s.correlationId();
+        // CAS-law: this claim owns RESPONDING — every emitting branch transitions by CAS
+        // *before* touching MAP, so a lost race never double-replies. Snapshot fields
+        // (dialogId/invokeId/text) are read-only inputs; row writes are CAS + single-field.
         // HTTP-NI continue from AS: HttpServerSbb re-routes NiPushRequestEvent — skip MAP
         // reply on the synthetic/parked dialog (MapNiPush owns the next UnstructuredSS-Request).
-        boolean httpNi = niHttpPark != null && niHttpPark.isHttpNi(s.correlationId());
+        boolean httpNi = niHttpPark != null && niHttpPark.isHttpNi(corr);
         if (s.originationType() == OriginationType.MAP && !httpNi) {
             // MAP2MAP: AS END/ABORT must wait for hop terminal (never end MO early).
             if (s.map2mapHopOutstanding()
                     && (action == AsAction.END || action == AsAction.ABORT)) {
                 LOG.warn("AS {} deferred — MAP2MAP hop outstanding corr={}",
-                        action, s.correlationId());
-                s.setState(VirtualSessionState.AWAITING_AS);
-                persist(s);
-                cdrWrite(s, CdrPhase.S1_ACTIVE, "MAP2MAP_MO_HOLD",
+                        action, corr);
+                if (store.compareAndTransition(
+                        corr, VirtualSessionState.RESPONDING,
+                        VirtualSessionState.AWAITING_AS).isEmpty()) {
+                    return;
+                }
+                cdrWrite(store.get(corr).orElse(s), CdrPhase.S1_ACTIVE, "MAP2MAP_MO_HOLD",
                         "service=VirtualSessionBridge|hopOutstanding|asAction=" + action);
                 return;
             }
             switch (action) {
                 case CONTINUE -> {
+                    if (store.compareAndTransition(
+                            corr, VirtualSessionState.RESPONDING,
+                            VirtualSessionState.ACTIVE).isEmpty()) {
+                        return;
+                    }
                     MapDialogHelper.replyContinue(port, s.dialogId(), s.invokeId(),
                             response.text(), alphabet);
                     // Do NOT bump generation here — classic oracle bumps only on MS input
                     // (MapUssdParentSbb.onUserContinue). Double-bump would skip AS turns.
-                    s.setState(VirtualSessionState.ACTIVE);
-                    store.releaseMsDigitInFlight(s.correlationId());
+                    store.releaseMsDigitInFlight(corr);
                 }
                 case ABORT -> {
+                    if (store.compareAndTransition(
+                            corr, VirtualSessionState.RESPONDING,
+                            VirtualSessionState.ABORTED).isEmpty()) {
+                        return;
+                    }
                     MapDialogHelper.abort(port, s.dialogId());
-                    s.setDialogAlive(false);
-                    s.setState(VirtualSessionState.ABORTED);
-                    store.clearMsDigitClaim(s.correlationId());
+                    store.setDialogAlive(corr, false);
+                    store.clearMsDigitClaim(corr);
+                    store.remove(corr);
                 }
                 case END -> {
+                    if (store.compareAndTransition(
+                            corr, VirtualSessionState.RESPONDING,
+                            VirtualSessionState.COMPLETED).isEmpty()) {
+                        return;
+                    }
                     MapDialogHelper.replyAndEnd(port, s.dialogId(), s.invokeId(),
                             response.text(), alphabet);
-                    s.setDialogAlive(false);
-                    s.setState(VirtualSessionState.COMPLETED);
-                    store.clearMsDigitClaim(s.correlationId());
+                    store.setDialogAlive(corr, false);
+                    store.clearMsDigitClaim(corr);
+                    store.remove(corr);
                 }
             }
         } else if (httpNi) {
             if (action == AsAction.ABORT) {
-                s.setDialogAlive(false);
-                s.setState(VirtualSessionState.ABORTED);
-                store.clearMsDigitClaim(s.correlationId());
+                if (store.compareAndTransition(
+                        corr, VirtualSessionState.RESPONDING,
+                        VirtualSessionState.ABORTED).isEmpty()) {
+                    return;
+                }
+                store.setDialogAlive(corr, false);
+                store.clearMsDigitClaim(corr);
+                store.remove(corr);
             } else if (action == AsAction.END) {
-                s.setDialogAlive(false);
-                s.setState(VirtualSessionState.COMPLETED);
-                store.clearMsDigitClaim(s.correlationId());
+                if (store.compareAndTransition(
+                        corr, VirtualSessionState.RESPONDING,
+                        VirtualSessionState.COMPLETED).isEmpty()) {
+                    return;
+                }
+                store.setDialogAlive(corr, false);
+                store.clearMsDigitClaim(corr);
+                store.remove(corr);
             } else {
-                s.setState(VirtualSessionState.ACTIVE);
-                store.releaseMsDigitInFlight(s.correlationId());
+                if (store.compareAndTransition(
+                        corr, VirtualSessionState.RESPONDING,
+                        VirtualSessionState.ACTIVE).isEmpty()) {
+                    return;
+                }
+                store.releaseMsDigitInFlight(corr);
             }
         } else {
-            s.setDialogAlive(false);
-            s.setState(action == AsAction.ABORT
-                    ? VirtualSessionState.ABORTED : VirtualSessionState.COMPLETED);
-            store.clearMsDigitClaim(s.correlationId());
+            VirtualSessionState terminal = action == AsAction.ABORT
+                    ? VirtualSessionState.ABORTED : VirtualSessionState.COMPLETED;
+            if (store.compareAndTransition(
+                    corr, VirtualSessionState.RESPONDING, terminal).isEmpty()) {
+                return;
+            }
+            store.setDialogAlive(corr, false);
+            store.clearMsDigitClaim(corr);
+            store.remove(corr);
         }
-        persist(s);
+        VirtualSession done = store.get(corr).orElse(s);
         // Status END/CONTINUE/ABORT = AS body applied toward UE (not hop-close).
         // END here means AS→UE final reply was received and forwarded — not MAP2MAP_HOP_CLOSE.
         CdrPhase phase = switch (action) {
@@ -391,16 +654,16 @@ public class VirtualSessionBridge {
             case ABORT -> CdrPhase.FAILED;
             case END -> CdrPhase.COMPLETED;
         };
-        cdrWrite(s, phase, action.name(),
+        cdrWrite(done, phase, action.name(),
                 "service=VirtualSessionBridge|"
                         + (httpNi ? "http-ni" : "sync")
                         + "|asAction=" + action.name()
-                        + "|gen=" + s.generation()
-                        + "|menuTurn=" + s.generation()
+                        + "|gen=" + done.generation()
+                        + "|menuTurn=" + done.generation()
                         + "|" + CdrUssdSnippet.asUssdDetail(response.text())
                         + "|note=AS→UE");
         if (action == AsAction.CONTINUE || action == AsAction.END || action == AsAction.ABORT) {
-            recordUserMenuState(s, action.name(), response.text());
+            recordUserMenuState(done, action.name(), response.text());
         }
     }
 
@@ -465,4 +728,17 @@ public class VirtualSessionBridge {
     public long bridgeCount() { return bridgeCount.get(); }
     public long recoverCount() { return recoverCount.get(); }
     public long zombieDrop() { return zombieDrop.get(); }
+
+    /** Hop TTL for gate-defer re-indexing (P1-8); falls back when the registry is absent. */
+    private long hopTtlMs() {
+        try {
+            if (pendingMap2Map != null) {
+                long ttl = pendingMap2Map.ttlMs();
+                if (ttl > 0) return ttl;
+            }
+        } catch (RuntimeException ignored) {
+            // fall through
+        }
+        return 30_000L;
+    }
 }
