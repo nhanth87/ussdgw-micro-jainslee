@@ -518,5 +518,208 @@ every repo** the user can reach — far too much exposure to park on a carrier-a
 host. `~/.gitconfig` on that host said `Jenny Assistant <jenny@assistant.ai>`; corrected
 to `Tran Nhan <nhanth87@gmail.com>` so the first commit is attributable.
 
+### B25 — no `sctp.backend` means FSTACK_DPDK: "listening" with nothing bound
+
+**The root cause of a deaf gateway, and it predates the containers.**
+`ss7-digicom-balance.json` on the host had **no `sctp.backend` key**. The resolution
+chain in `Ss7StackBuilder.createSctp` is:
+
+```
+JSON sctp.backend  →  -Dss7.sctp.impl (class name)  →  SctpProvider.create(name)
+                   →  System.getProperty("sctp.backend")  →  SctpBackend.from(null)
+SctpBackend.from(null) == FSTACK_DPDK          <- the silent default
+```
+
+FSTACK_DPDK is a **userspace** dataplane: it needs hugepages and
+`libsctp_fstack.so`. This host has **0 AnonHugePages** and the image has no such
+library. What the gateway did anyway:
+
+```
+boot log : SCTP server … listening        status.json : ss7 = wired
+/proc/net/sctp/eps : (empty)              ss -ln --sctp : (empty)
+```
+
+A log line and a `wired` flag, **zero** sockets. The sibling `gmlc` on the same host —
+same link names, same ports 2011/2019 — carries `"backend": "NETTY_KERNEL"` and was
+the process actually holding the carrier associations. And the **old systemd ussdgw
+deploy** had `backend = None` with no `-Dsctp.backend` either: ussdgw's SS7 was never
+live on this host. This is not a container regression; the container just made it
+measurable.
+
+The pre-existing guard tested the **wrong half** of the config: it rejected
+`channel: "tcp"`. The channel string said `sctp` — the *implementation* underneath was
+DPDK userspace. A transport-name check cannot catch a missing backend key.
+
+Fix — `"backend": "NETTY_KERNEL"` added after `"workerThreads": 8,` in
+`build/ss7-lab.json`, `build/ss7-lab-sim-pull.json`, `build/ss7-digicom-balance.json`
+(gitignored on `main`; **force-added to `digicom` by `push-dual.sh` — verified**),
+`dist/configs/ss7-lab*.json`, and the deployed `/srv/ussdgw/configs/ss7-digicom-balance.json`.
+New guards, in order of when they fire:
+
+| Where | Guard |
+|---|---|
+| `build-images.sh` | asserts `jdk.sctp@25.0.4.1` is in the jlink'd JRE — NETTY_KERNEL is unusable without it |
+| `install-config.sh validate()` | resolves the backend of the file that will boot; refuses FSTACK with no library |
+| `entrypoint.sh` step **4b** | resolves backend pre-boot: dies on FSTACK without `sctp.library`, requires `jdk.sctp` for NETTY_KERNEL |
+| `prove.sh` §3b | reads `/proc/net/sctp/eps` + `assocs` from inside the container |
+
+Proof on the carrier host: eps on **2011 / 2019 / 8023** owned by uid 10001, and two
+associations **ST=3 ESTABLISHED** — `172.16.144.163:2011 ↔ 10.177.55.241:2501`,
+`172.16.144.163:2019 ↔ 10.177.54.241:2502` — `ss7.live = true`.
+
+> **"Listening" is a log line; the kernel is the truth.** For SCTP that truth is
+> `/proc/net/sctp/eps` and `/proc/net/sctp/assocs` — never `netstat`, never `ss -tlnp`,
+> never a transport string in JSON. And when a value is absent, find out what the
+> *default* resolves to before assuming the absence is harmless.
+
+### The guard for B25 exited 1 without saying why
+
+Step 4b was written, and immediately reproduced the defect it was guarding against:
+the preflight **failed silently**. Under `set -euo pipefail`,
+
+```bash
+backend=$(grep -o '"backend"[^,]*' "$f")   # no match → grep exits 1 → assignment fails
+die "…"                                    # never reached
+```
+
+The interesting case for this check is precisely the one where grep finds **nothing**
+(absent key ⇒ FSTACK default), and that is the case where the command substitution
+kills the script before the message. Every `$( )` in the block now carries `|| true`
+(same for `cfg_val` and the `ls ss7-*.json` fallback). Verified against four fixtures:
+key absent / `NETTY_KERNEL` / explicit `FSTACK_DPDK` / unknown value.
+
+> In a fail-fast script, **a negative match is data, not failure**. Every command
+> substitution that may legitimately return nothing needs `|| true`, or the script
+> reports its own exit code instead of the reason.
+
+### A gate that fires on a file nobody boots
+
+The first `install-config.sh` backend gate globbed every `ss7-*.json` and **died on the
+unused spare** `ss7-lab.json` (port 8013) while the booted file was fine. Now
+`ussd.map.config-file` is resolved **once** into `selected_stack`: findings on that file
+are **errors**, findings on spares are **warnings** via `stack_note`, and the later
+"referenced stack file must exist" check reuses the same variable instead of re-deriving
+it. A config directory is a library; only one entry is the program.
+
+### B24 — `start-first` + host-mode ports: Pending forever, service reports 1/1
+
+nginx ran with `update_config: order: start-first`. **Swarm reserves host-mode published
+ports for placement even when the service is on `network_mode: host`**, so the new task
+could never be scheduled:
+
+```
+docker stack services ussdgw   →  nginx  1/1  ussdgw-nginx:7d7e8f3   (looks deployed)
+docker service ps  ussdgw_nginx →  Pending  "no suitable node (host-mode port already in use)"
+```
+
+and the **old container kept serving**. I read `1/1` + the new image tag as success. It
+was neither: the spec had moved, the running task had not. Fix = `order: stop-first`,
+plus the false comment in `stack.yml` (which claimed Docker ignores the `ports:` block
+for host-network services) corrected. `prove.sh` §1b now compares each service's **spec
+image ID** against the **image ID of its running container** and fails on any Pending
+task. Also note: Swarm does **not** roll tasks for an `update_config`-only change (it is
+not part of `TaskTemplate`), so the corrected order protects *future* deploys.
+
+> `docker stack services` reports the **spec**. Only `docker service ps` +
+> `docker inspect <container>` report what is **running**. 1/1 with a Pending task is a
+> normal, reachable state.
+
+### Counting the header row, and globbing the spares
+
+Two false results in `prove.sh`, both on a **live** gateway:
+
+- It globbed all `ss7-*.json`, so the unused spare's port produced
+  `FAIL NO kernel SCTP endpoint on: 8013 (kernel has: 2011 2019 8023)`. Scope every
+  check to the booted file.
+- `awk 'NR>1 && NF>3'` over `/proc/net/sctp/assocs` reported **associations: 2** on a
+  host with **0**: the header row has the *same* field count (27) as data rows, so a
+  width filter does not exclude it and `NR>1` alone leaves the second header line of a
+  per-socket dump. Use `NF>19`.
+
+Real column map (`/proc/net/sctp/assocs`): 5 = **ST**, 12 = **LPORT**, 13 = **RPORT**,
+14 = **LADDRS**, 16 = **RADDRS**; in `/proc/net/sctp/eps`, LPORT is field **6**.
+`ST=3` = ESTABLISHED.
+
+Also removed a PCRE negative lookahead from a `grep -E`: `grep` exits **2** on a syntax
+error, and inside `if grep …` that is indistinguishable from "no match" — a broken
+expression silently flips the verdict instead of failing loudly. Both fixes were
+validated against captured real kernel output, not against a hoped-for format.
+
+### "Tests passed" — check the default, then find the log
+
+`docker/build/build-all.sh` gates tests on `RUN_TESTS`, which **defaults to 0**, and the
+output goes to `$LOG_DIR/ussdgw-test.log`, not stdout. A quiet build therefore proves
+nothing about tests. Run with `RUN_TESTS=1` and read the file: **669 tests, 0 failures,
+0 errors, 0 skipped**, `Ss7ApplyServiceWiredDetailTest` 4/4, in
+`/srv/ussdgw-build/out/logs/ussdgw-test.log`. (`Tests run: 0` also looks green.)
+
+### A reused build output dir keeps the previous run's `configs/`
+
+`build/package-dist.sh` (~lines 255–285) has a **never-clobber** rule for `configs/`.
+Correct for an operator's live host, wrong for a build directory: a reused `out/dist`
+silently keeps the *previous* run's seeds. Harmless for the **image** —
+`docker/ussdgw/Dockerfile` does not `COPY dist/configs`; runtime config is bind-mounted
+from `/srv/ussdgw/configs` — but very real for an rsync'd `dist/`. Stage with a mirror
+`rm -rf dist/` first, and diff `configs/` before believing a seed change shipped.
+
+### Seeding over ssh: four shell traps
+
+| Trap | What happened |
+|---|---|
+| unquoted `--data-urlencode k=v` | a value with spaces made the trailing words **extra curl URLs** |
+| unquoted heredoc + `set -u` | a bcrypt hash `$2a$10$…` was expanded by the shell — quote the delimiter (`<<'EOF'`) |
+| `ssh host 'sudo bash -s' < file` | received **no stdin** and ran an empty script successfully — pipe base64 and decode remotely |
+| `sudo -u "#10001"` | not accepted; to prove a uid can read a bind-mounted file use `docker run --user 10001 -v …` |
+
+### Restore fidelity is a diff, not a look
+
+Rows were extracted from the operator's CUSTOM dump with
+`pg_restore --data-only --table=… -f -` (**no database touched**) and compared against
+the container's rows: `ussd_short_code` (6 rows), `ussd_tenant`, `ussd_app_user`
+**identical byte for byte**, excluding the surrogate `id` and timestamps. Three details
+that a visual check would have missed:
+
+- **Sequence.** `public.ussd_short_code_v8_id_seq` `last_value = 6 ≥ max(id) = 6`.
+  Restoring with explicit ids and forgetting `setval` breaks the *next* insert, not the
+  restore.
+- **An API that cannot carry the data.** `/admin/app-users` accepts a **plaintext** key
+  and bcrypts it, so the original hash is not reproducible through it. `ni-push` was
+  restored by verbatim SQL `INSERT` of the original bcrypt hash
+  (`$2a$10$TfLg…`, fingerprint `9ad01837`) so the operator's existing key still works if
+  they hold it. That the key was **not** recoverable from anything on disk is proven, not
+  assumed: `sha256("ussd_MkNRQA5RXzWTocd7mkK4O7uwmuW5BrUB")[:8] = 803afcf9 ≠ 9ad01837`,
+  i.e. the app user's key ≠ the tenant `http_api_key`.
+- **`bypass` is a transition mirror of `!rerouteEnable`.** Restoring one without the
+  other leaves the UI showing a contradiction.
+
+`*804#` kept `https://bph.vas.et/v2/interactive` + hop GT `*875#` + `bypass=f` /
+`reroute_enable=t`; `*101` `mark=t`; `*199#` `network_id=1`; all with `tenant_id NULL`
+and `app_username ''`, as in the dump. `as-node` on `:8090` was **left running on
+purpose** — 4 of the 6 live short codes point at it.
+
+### :80 is cleartext **by design** — do not call it a redirect
+
+`http://<host>:80/admin/routing` → `302 http://127.0.0.1/admin/login`. That is the
+**application's** auth redirect, not nginx sending :80 to :443: `docker/nginx/ussdgw.conf`'s
+:80 server block proxies `location /` straight to the app, so the admin login and UI are
+reachable in cleartext on `0.0.0.0:80`. I initially read the 302 as "80 redirects to
+443" — a false proof that would have hidden a real exposure. Hardening it (drop
+`location /` from :80, keep ACME + a redirect) changes an operator-facing surface:
+**ask first**.
+
+> When a check returns a redirect, read the `Location`. "It 302s" is not "it is
+> encrypted", and the redirect may belong to a different layer than the one under test.
+
+### Final proof state (2026-10-02, carrier host)
+
+3/3 services 1/1 **on their spec images**; `./docker/prove.sh` → **25 passed, 0 failed**;
+`ss7.live = true` with two ESTABLISHED carrier associations; `scheduler.gateTicks`
+climbing (611 and counting — bridge armed at boot, no admin Start); container health
+`healthy`; `BUILD-INFO.json` `sources.ussdgw` equal to the image tag, `builtAt
+2026-10-02T14:03:37Z`, `dbKind postgresql`. Not proven: a real MO producing ledger rows
+(`cdr.file.recentEvents = 0`). The candidate is the loopback lab link
+`L3-LAB-SIM 127.0.0.1:8023 ← 127.0.0.1:8024` with `tools/ss7-simulator` — **never**
+inject MAP toward the live carrier peers to make a metric move.
+
 ## Synced from workspace (2026-09-18)
 Cross-project footguns added to workspace [`docs/agents/lessons.md`](../../../../../docs/agents/lessons.md) from the OTA P1 SMSC-GW build — **do not paste, link**: Quarkus `@ConfigProperty(defaultValue="")` boot-breaker → `Optional<String>`; Claude Code worktree-agents branch from a stale base under uncommitted WIP (commit clean base / salvage-and-reapply); **parallel subagents share one session rate-limit** (prefer sequential in-tree); auto-mode classifier blocks remote-shell/prod-DB/inline-credential writes; Iran L2TP ship = **sequential** rsync (parallel deadlocks).
