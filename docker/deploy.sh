@@ -80,6 +80,18 @@ if [[ ! -f "$ENV_FILE" ]]; then
 fi
 [[ -f "$ENV_FILE" ]] && { set -a; . "$ENV_FILE"; set +a; }
 
+# USSD_ADMIN_API_KEY is not part of this deployment's configuration and must not become
+# one by accident. It used to ship in .env as `USSD-admin` lab placeholder; `set -a` above
+# exported it, and prove.sh — which reads the mounted secret, the mounted config, and then
+# this variable — tried it FIRST. It was rejected with a 401, and prove.sh reported a live
+# carrier gateway as broken. A placeholder that reaches the verifier is not a placeholder.
+# Keep only a value an operator set deliberately in THIS shell.
+if [[ -n "${USSD_ADMIN_API_KEY:-}" && "$USSD_ADMIN_API_KEY" == "ussd-admin" ]]; then
+  unset USSD_ADMIN_API_KEY
+  info "ignoring USSD_ADMIN_API_KEY=ussd-admin from the environment: that is the lab"
+  info "  placeholder, not this deployment's key (the key in force is in ussdgw_admin_key)"
+fi
+
 STACK_NAME="${STACK_NAME:-ussdgw}"
 DATA_ROOT="${DATA_ROOT:-/srv/ussdgw}"
 BUILD_ROOT="${BUILD_ROOT:-/srv/ussdgw-build}"

@@ -61,15 +61,18 @@ curl -s 127.0.0.1:8088/admin/status.json \
 
 ## 6. Log
 
-Volume là `drwx-----x root:root` nên phải `sudo`:
+Log nằm ở `/srv/ussdgw/logs` (stack.yml bind-mount vào đó). Không dùng
+`/var/lib/docker/volumes/ussdgw_ussdgw-logs/_data`: với `o: bind` thư mục đó không
+được tạo và không được đọc — nó chỉ là sổ sách của docker, không phải chỗ chứa data.
 
 ```bash
-L=/var/lib/docker/volumes/ussdgw_ussdgw-logs/_data
-sudo tail -f $L/ussdgw.log        # Log4j2 app log
-sudo tail -f $L/ussdgw-slee.log   # SleeEventTrace
-sudo tail -f $L/ussd-cdr.log      # CDR ledger (SoT của /admin/cdr)
+sudo tail -f /srv/ussdgw/logs/ussdgw.log        # Log4j2 app log
+sudo tail -f /srv/ussdgw/logs/ussdgw-slee.log   # SleeEventTrace
+sudo tail -f /srv/ussdgw/logs/ussd-cdr.log      # CDR ledger (SoT của /admin/cdr)
 tail -5 /srv/ussdgw-build/out/logs/ussdgw-test.log   # test evidence
 ```
+
+`sudo` vì các file thuộc uid 10001 (user của container).
 
 ## 7. Rollback
 
