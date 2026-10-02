@@ -159,7 +159,14 @@ public final class GrpcClientSbb implements Sbb, SleeEventHandler {
         if (wireGen <= 1) {
             int pullGen = state == null ? 0 : state.generation();
             // Classic / JSON omit or hardcode gen=1; after MS digit session may be ≥2 (Sip parity).
-            Optional<VirtualSession> sess = svc().store().get(corr);
+            //
+            // Guarded, and only here because it matters: this read decides the generation stamp
+            // for the AS answer. An unguarded lookup that fails throws out of onCompleted, the
+            // outer catch swallows it, and the whole AS response is DISCARDED — the handset gets
+            // nothing and the CDR shows no terminal event. That is the "store reads never throw,
+            // nothing may propagate out of a SLEE event handler" rule in AGENTS.md, and the
+            // send path here already guards for it.
+            Optional<VirtualSession> sess = safeSession(corr);
             int stampFrom = pullGen > 0 ? pullGen : sess.map(VirtualSession::generation).orElse(0);
             if (stampFrom > 0) {
                 resp = resp.stampedToSessionGeneration(stampFrom);
@@ -172,6 +179,21 @@ public final class GrpcClientSbb implements Sbb, SleeEventHandler {
                 + " wireGen=" + wireGen + " gen=" + resp.generation()
                 + " asAction=" + action
                 + (asSnip.isEmpty() ? "" : " asUssd=" + asSnip);
+    }
+
+    /**
+     * Session lookup for the completion path. A store that is unavailable or mid-read must never
+     * cost us the AS response: fall back to empty and let the pull state's own turn decide.
+     */
+    private Optional<VirtualSession> safeSession(String corr) {
+        try {
+            var store = svc().store();
+            return store == null ? Optional.empty() : store.get(corr);
+        } catch (RuntimeException e) {
+            org.apache.logging.log4j.LogManager.getLogger(GrpcClientSbb.class)
+                    .warn("GrpcClientSbb session lookup failed corr={}: {}", corr, e.toString());
+            return Optional.empty();
+        }
     }
 
     private void invoke(RaCommandPort port, String corr, AsPullTarget.Grpc target) {

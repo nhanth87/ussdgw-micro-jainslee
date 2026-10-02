@@ -299,6 +299,48 @@ PY
     echo "-- SBOM: $name produced no JSON (see $LOG_DIR/sbom-$name.log)"
   fi
 }
+# --- version proof: the build must produce exactly the versions sources.lock implies ------
+# A lock file records intent; this proves the artifact matches it. The failure this catches is
+# real and slow otherwise: bumping micro-jainslee in sources.lock without rebuilding the
+# reactor leaves the old jars in /m2 and everything "passes" against the wrong version.
+# Every probe is `|| true` on purpose. Under `set -e` a grep that matches nothing returns 1
+# and kills the whole script with NO message — which is how the first version of this block
+# died silently at 5/6 with an empty log. A missing version must print, not vanish.
+pom_prop() { grep -m1 -oE "<$2>[^<]+" "$1" 2>/dev/null | cut -d'>' -f2 || true; }
+{
+  expect_mj="${USSD_EXPECT_MICROJAINSLLEE:-}"
+  expect_ss7="${USSD_EXPECT_SS7:-}"
+  # The reactor carries no microjainslee.version PROPERTY: its version is the <version> of
+  # the BOM's own coordinates. Read the one that follows <artifactId>jainslee-pom</artifactId>.
+  got_mj="$(awk '/<artifactId>jainslee-pom<\/artifactId>/{f=1;next} f&&match($0,/<version>[^<]+/){print substr($0,RSTART+9,RLENGTH-9);exit}' \
+            "$WORK_DIR/jain-slee/jainslee-pom/pom.xml" 2>/dev/null || true)"
+  got_ss7="$(pom_prop "$WORK_DIR/jain-slee/vendor-ras/ra-jss7/pom.xml" ss7.version)"
+  ussdgw_mj="$(pom_prop "$WORK_USSDGW/pom.xml" microjainslee.version)"
+  echo "-- micro-jainslee (reactor) : $got_mj"
+  echo "-- jSS7         (reactor) : $got_ss7"
+  echo "-- micro-jainslee (ussdgw) : $ussdgw_mj"
+  [[ -n "$got_mj" ]] || die "cannot read microjainslee.version from the built jain-slee pom"
+  [[ "$got_mj" == "$ussdgw_mj" ]] \
+    || die "VERSION MISMATCH: jain-slee built $got_mj but ussdgw's pom asks for $ussdgw_mj.
+     Either pin ussdgw to $got_mj, or bump jain-slee in sources.lock and rebuild the reactor."
+  if [[ -n "$expect_mj" ]]; then
+    [[ "$got_mj" == "$expect_mj" ]] \
+      || die "builder image expects micro-jainslee $expect_mj but the pinned source built $got_mj.
+     Update ARG MICROJAINSLLEE_VERSION in docker/build/Dockerfile to match sources.lock."
+    [[ "$got_ss7" == "$expect_ss7" ]] \
+      || die "builder image expects jSS7 $expect_ss7 but the pinned source built $got_ss7.
+     Update ARG SS7_VERSION in docker/build/Dockerfile to match sources.lock."
+  fi
+  # The installed artifacts must match too, not just the poms.
+  for gav in "com.microjainslee:jainslee-core" "com.microjainslee:ra-jss7"; do
+    d="$M2/$(echo "${gav%:*}" | tr '.' '/')/${gav#*:}/$got_mj"
+    [[ -d "$d" ]] || die "$gav:$got_mj is not installed in $M2 — the reactor did not build it"
+  done
+  d="$M2/org/restcomm/protocols/ss7/config/ss7-config/$got_ss7"
+  [[ -d "$d" ]] || die "ss7-config:$got_ss7 is not installed in $M2"
+  echo "-- versions verified against the installed artifacts ✓"
+}
+
 sbom_for jain-slee "$WORK_DIR/jain-slee/pom.xml"
 sbom_for jss7 "$WORK_DIR/jss7/pom.xml"
 sbom_for ussdgw "$WORK_USSDGW/pom.xml"

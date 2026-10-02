@@ -178,7 +178,12 @@ class Map2MapBridgeArmTest {
         assertThat(map2MapTelemetry.completionAfterGateCount()).isZero();
         assertThat(map2MapTelemetry.hopOkCount()).isEqualTo(1);
         assertThat(map2MapTelemetry.asRoutedCount()).isEqualTo(1);
-        assertThat(cdr.statuses()).contains(Map2MapCdr.OK).doesNotContain(Map2MapCdr.COMPLETE_AFTER_GATE);
+        // A hop that returns text and routes the AS records the AMBER HOP_CLOSE, per the locked
+        // call flow (map2map.md: hop text -> HOP_CLOSE, never green OK alone). Map2MapCdr.OK is
+        // still recognised when READING older rows but is no longer written by anything.
+        assertThat(cdr.statuses())
+                .contains(Map2MapCdr.HOP_CLOSE)
+                .doesNotContain(Map2MapCdr.OK, Map2MapCdr.COMPLETE_AFTER_GATE);
     }
 
     @Test

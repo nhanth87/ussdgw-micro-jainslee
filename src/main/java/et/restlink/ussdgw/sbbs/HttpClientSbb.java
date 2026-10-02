@@ -135,7 +135,7 @@ public final class HttpClientSbb implements Sbb, SleeEventHandler {
             svc().saga().onAsPullFailed(corr, "NO_HTTP_RA");
             return "no-ra";
         }
-        String tenantId = svc().store().get(corr).map(VirtualSession::tenantId).orElse(null);
+        String tenantId = safeSession(corr).map(VirtualSession::tenantId).orElse(null);
         AsHttpWireFormat format = svc().wireFormatResolver().resolve(tenantId);
         String payload = svc().wireFacade().encodePullRequest(req, format);
         AsPullTarget.Http target = new AsPullTarget.Http(pull.asUrl(), payload, format);
@@ -192,7 +192,11 @@ public final class HttpClientSbb implements Sbb, SleeEventHandler {
         // the bridge fall back to its own pull clock; inventing a URL would merge every AS onto
         // one breaker.
         long latency = state == null ? -1L : state.latencyMsAt(System.currentTimeMillis());
-        Optional<VirtualSession> sess = svc().store().get(corr);
+        // Guarded: this read feeds the CDR line, the generation stamp below and the
+        // tenant/shortCode resolution. An unguarded lookup that throws is swallowed by the outer
+        // catch and the whole AS response is discarded — the handset gets nothing.
+        // Same rule as the send path, and AGENTS.md: nothing propagates out of a SLEE handler.
+        Optional<VirtualSession> sess = safeSession(corr);
         String shortCode = sess.map(VirtualSession::shortCode).orElse(null);
         int networkId = sess.map(VirtualSession::networkId).orElse(0);
         String tenantId = sess.map(VirtualSession::tenantId).orElse(null);
@@ -278,6 +282,18 @@ public final class HttpClientSbb implements Sbb, SleeEventHandler {
     }
 
     /** POST raw AS pull body with format Content-Type (XML or JSON). */
+    /** Session lookup for the completion path; never let it cost us the AS response. */
+    private Optional<VirtualSession> safeSession(String corr) {
+        try {
+            var store = svc().store();
+            return store == null ? Optional.empty() : store.get(corr);
+        } catch (RuntimeException e) {
+            org.apache.logging.log4j.LogManager.getLogger(HttpClientSbb.class)
+                    .warn("HttpClientSbb session lookup failed corr={}: {}", corr, e.toString());
+            return Optional.empty();
+        }
+    }
+
     private static void submitPost(RaCommandPort port, String corr, AsPullTarget.Http target) {
         port.sendCommand(new HttpCallbackCommand.JsonPostRequest(
                 corr, target.url(), target.body(), target.format().contentType()));
@@ -289,7 +305,7 @@ public final class HttpClientSbb implements Sbb, SleeEventHandler {
             return;
         }
         try {
-            Optional<VirtualSession> sess = svc().store().get(correlationId);
+            Optional<VirtualSession> sess = safeSession(correlationId);
             String msisdn = sess.map(VirtualSession::msisdn).orElse(null);
             String shortCode = sess.map(VirtualSession::shortCode).orElse(null);
             int networkId = sess.map(VirtualSession::networkId).orElse(0);
