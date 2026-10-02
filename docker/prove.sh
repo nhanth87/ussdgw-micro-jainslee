@@ -188,33 +188,79 @@ head_ "SCTP endpoints (kernel truth)"
 # what any stack JSON without a "backend" key gets — the userspace stack logs both lines and
 # creates no kernel socket at all. The gateway reports healthy, status.json says
 # ss7.live=false "peer down", and the only honest witness is the kernel's own table.
+#
+# Scope matters, and the first version of this check got it wrong in a way that produced a
+# FAIL on a healthy gateway: it globbed every ss7-*.json in the configs mount, so the unused
+# ss7-lab.json (port 8013, left on the host from August) contributed an expectation for a
+# socket nothing was ever going to open. Only the file ussd.map.config-file selects boots.
+# A gate that demands a port no process asked for is a false positive, and false positives
+# are how operators learn to ignore gates.
 eps="$(cat /proc/net/sctp/eps 2>/dev/null || docker exec "$CONTAINER" cat /proc/net/sctp/eps 2>/dev/null || true)"
 if [[ -z "$eps" ]]; then
   bad "cannot read /proc/net/sctp/eps — the SS7 wire is UNPROVEN (re-run with sudo)"
 else
+  booted_stack="$(docker exec "$CONTAINER" sh -c \
+    'grep -E "^ussd\.map\.config-file=" /opt/ussdgw/configs/application.properties 2>/dev/null \
+     | head -1 | cut -d= -f2- | tr -d " "' 2>/dev/null || true)"
+  booted_stack="${booted_stack:-ss7-lab.json}"
+  booted_stack="$(basename "$booted_stack")"
+
   # LPORT is field 6; the first line is the header.
   have="$(awk 'NR>1 && $6!="" {print $6}' <<<"$eps" | sort -un | tr '\n' ' ')"
   want="$(docker exec "$CONTAINER" sh -c \
-            'grep -ohE "\"local\"[[:space:]]*:[[:space:]]*\"[0-9.]+:[0-9]+\"" /opt/ussdgw/configs/ss7-*.json 2>/dev/null' \
-          | grep -oE ':[0-9]+"$' | tr -d ':"' | sort -un | tr '\n' ' ')"
+            "grep -ohE '\"local\"[[:space:]]*:[[:space:]]*\"[0-9.]+:[0-9]+\"' '/opt/ussdgw/configs/$booted_stack' 2>/dev/null" \
+          | grep -oE ':[0-9]+"$' | tr -d ':"' | sort -un | tr '\n' ' ' || true)"
   if [[ -z "$want" ]]; then
-    bad "no local SCTP ports found in the container's ss7-*.json — cannot prove the wire"
+    bad "no local SCTP ports found in $booted_stack (the file ussd.map.config-file selects) — cannot prove the wire"
   else
     missing=""
     for p in $want; do
       [[ " $have " == *" $p "* ]] || missing="$missing $p"
     done
     if [[ -z "$missing" ]]; then
-      ok "kernel SCTP endpoints listening on:$want"
-      assocs="$(awk 'NR>1 && NF>3' /proc/net/sctp/assocs 2>/dev/null | wc -l || echo 0)"
-      echo "        associations: $assocs (0 = the peer has not connected yet; that is a"
-      echo "        peer/firewall question, not a deaf gateway — the sockets exist)"
+      ok "kernel SCTP endpoints listening on:$want (from $booted_stack, the file that boots)"
     else
       bad "NO kernel SCTP endpoint on:$missing  (kernel has:${have:- none})"
       echo "        sctp.backend in the stack JSON decides which implementation binds these."
       echo "        Omitted, it is FSTACK_DPDK — userspace DPDK, which logs 'listening' and"
       echo "        binds nothing without hugepages + libsctp_fstack.so. Set"
       echo "        \"backend\": \"NETTY_KERNEL\" in the sctp block."
+    fi
+  fi
+
+  # Associations. The header is 19 space-separated fields and every data row has more than
+  # that, so counting "lines with more than 3 fields" counts the header — the previous
+  # version reported 2 associations on a host with 0. Field 5 is SST; 3 = ESTABLISHED.
+  assocs="$(awk 'NR>1 && NF>19' /proc/net/sctp/assocs 2>/dev/null | wc -l | tr -d ' ' || echo 0)"
+  estab="$(awk 'NR>1 && NF>19 && $5==3' /proc/net/sctp/assocs 2>/dev/null | wc -l | tr -d ' ' || echo 0)"
+  if [[ "${assocs:-0}" -gt 0 ]]; then
+    ok "SCTP associations: $assocs ($estab ESTABLISHED)"
+    # Columns, counted from the kernel's own header line:
+    #   1 ASSOC 2 SOCK 3 STY 4 SST 5 ST 6 HBKT 7 ASSOC-ID 8 TX_QUEUE 9 RX_QUEUE 10 UID
+    #   11 INODE 12 LPORT 13 RPORT 14 LADDRS 15 <-> 16 RADDRS 17 HBINT …
+    awk 'NR>1 && NF>19 {printf "        %s:%s <-> %s:%s  ST=%s\n", $14, $12, $16, $13, $5}' \
+      /proc/net/sctp/assocs 2>/dev/null | head -6
+  else
+    # Zero associations is not automatically a defect: a lab stack file whose peers are
+    # 127.0.0.1 simulators that are not running has nothing to connect to, and only the
+    # gateway's own log knows the difference. Say what is known and what is not.
+    peers="$(docker exec "$CONTAINER" sh -c \
+      "grep -ohE '\"peer\"[[:space:]]*:[[:space:]]*\"[0-9.]+:[0-9]+\"' '/opt/ussdgw/configs/$booted_stack' 2>/dev/null" \
+      | sed -E 's/.*"([0-9.]+:[0-9]+)".*/\1/' | sort -u || true)"
+    echo "  note  0 SCTP associations. The listening sockets exist (above), so this is a"
+    echo "        peer/firewall question rather than a deaf gateway. $booted_stack points at:"
+    echo "$peers" | sed 's/^/          /'
+    echo "        A public peer (anything but 127.0.0.1) that stays unconnected while these"
+    echo "        sockets listen is a FAIL for a carrier deploy — investigate before shipping."
+    # No PCRE here: grep -E has no negative lookahead, and a pattern it cannot compile would
+    # exit 2, which under `set -e` inside an `if` reads as "no match" rather than as a broken
+    # check. Classify the addresses in the shell instead.
+    public_peer=""
+    for p in $peers; do
+      case "$p" in 127.*|0.0.0.0*|"[::1]"*) ;; *) public_peer="$public_peer $p" ;; esac
+    done
+    if [[ -n "${public_peer// /}" ]]; then
+      bad "carrier peers configured in $booted_stack but no association is established:$public_peer"
     fi
   fi
 fi
