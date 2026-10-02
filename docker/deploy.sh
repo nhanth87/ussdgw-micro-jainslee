@@ -387,40 +387,39 @@ stage_live_snapshot() {
   done < <(docker exec "$cid" sh -c 'ls -1 /opt/ussdgw/configs' 2>/dev/null || true)
   [[ -f "$dst/application.properties" ]] \
     || { rm -rf "$SNAP"; SNAP=""; warn "snapshot of the live config is still incomplete — see the errors below"; return 1; }
-  info "staged a read-only snapshot of the live config from container ${cid:0:12} ($n extra file(s)) at $SNAP"
+  info "staged a read-only snapshot of the live config from container ${cid:0:12} ($n extra file(s))"
   return 0
 }
 
-
-# DEST is where install-config seeds; LIVE_CONFIGS is where the service reads. With the
-# bind mounts stack.yml declares these are the same directory, so the normal path is a
-# single answer and this block is a guard, not a mechanism.
+# DEST is where install-config seeds; LIVE_CONFIGS is where the service reads. With the bind
+# mounts stack.yml declares these are the same directory. If they are not, a deploy would
+# seed a tree the gateway never opens — say so rather than proceed.
 if [[ -n "$LIVE_CONFIGS" && "$LIVE_CONFIGS" != "$DEST" ]]; then
-  if [[ "$MODE_CHECK" == 1 || "$MODE_DEPLOY" == 0 ]]; then
-    # Read-only mode: validate what the service actually reads, never a tree that does not
-    # exist on this host (a plain local volume has its data under /var/lib/docker/volumes,
-    # and CONFIG_SRC cannot be pointed at a directory the operator cannot read).
-    if stage_live_snapshot "$LIVE_CONFIGS"; then
-      CONFIG_SRC="$SNAP/configs"
-      info "validating the config the gateway reads (snapshot of $LIVE_CONFIGS)"
-    else
-      CONFIG_SRC="$LIVE_CONFIGS"
-      info "validating $LIVE_CONFIGS"
-    fi
-  else
-    die "config source mismatch: this stack's gateway reads $LIVE_CONFIGS, but DEST=$DEST.
+  die "config source mismatch: this stack's gateway reads $LIVE_CONFIGS, but DEST=$DEST.
      Seeding DEST would create a config tree the gateway never opens. Make DEST agree with
      the service, or make the service read DEST — don't run a deploy that quietly disagrees
      with itself."
-  fi
 fi
 # CONFIG_SRC that is neither DEST nor where the service reads means .env points at a retired
 # install tree. install-config would then validate files this deployment does not use and say
 # nothing about the ones it does — which is exactly how a stale path survives unnoticed.
-if [[ -n "$LIVE_CONFIGS" && "$CONFIG_SRC" != "$DEST" && "$CONFIG_SRC" != "$LIVE_CONFIGS" && "$CONFIG_SRC" != "${SNAP:+$SNAP/configs}" ]]; then
+if [[ -n "$LIVE_CONFIGS" && "$CONFIG_SRC" != "$DEST" && "$CONFIG_SRC" != "$LIVE_CONFIGS" ]]; then
   warn "docker/.env sets CONFIG_SRC=$CONFIG_SRC, which is neither DEST ($DEST) nor the path"
   warn "this stack's gateway reads ($LIVE_CONFIGS). The findings below are about files this"
   warn "deployment does not use. Fix docker/.env: CONFIG_SRC=$DEST"
+  CONFIG_SRC="$LIVE_CONFIGS"
+fi
+
+# The criterion for reading the config through the container is READABILITY, not whether the
+# paths happen to differ. application.properties is 0600 owned by the container's uid (10001)
+# because it holds the datasource password, so whoever runs the deploy cannot read it — on
+# this host that is user app against a 10001-owned file. `grep: Permission denied` is not a
+# config problem, and install-config must not be handed a path it cannot open.
+if [[ -n "$CONFIG_SRC" && ! -r "$CONFIG_SRC/application.properties" ]]; then
+  info "config at $CONFIG_SRC is not readable as $(id -un); reading it through the gateway"
+  if stage_live_snapshot "$CONFIG_SRC"; then
+    CONFIG_SRC="$SNAP/configs"
+  fi
 fi
 
 # The certificate edge: same principle as the config. nginx's key is 0640 owned by uid 101
@@ -454,10 +453,10 @@ fi
 # never overwrites: the admin UI writes SS7 stack JSON back into configs/, so a "refresh"
 # would destroy live edits.
 if [[ "$MODE_CHECK" == 1 || "$CONFIG_SRC" != "$DEST" ]]; then
-  # A snapshot is read-only, so there is nothing to seed: the gateway is running from that
-  # config, which means it is already seeded. Validated, never written.
+  # Read-only: either a dry run, or a snapshot — and a snapshot means the gateway is already
+  # running from a seeded config, so there is nothing to write. Validated, never written.
   ./docker/install-config.sh --check
-  [[ "$CONFIG_SRC" == "$DEST" ]] || info "config validated, not written (snapshot of the running gateway's config)"
+  [[ "$CONFIG_SRC" == "$DEST" ]] || info "config validated, not written (read through the running gateway)"
 else
   if [[ "$MODE_FORCE_CONFIG" == 1 ]]; then
     warn "--force-config: backing up $DEST before overwriting"
