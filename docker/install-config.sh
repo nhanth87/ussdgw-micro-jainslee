@@ -210,15 +210,95 @@ else
   ok "destination has no application.properties — seeding"
 fi
 
-cp -a "$CONFIG_SRC"/. "$DEST"/
+# --- writability, BEFORE any copy (B14) -----------------------------------------
+# host-prep.sh creates $DEST owned by 10001:10001 (the image's user, so the running
+# container can write back). The operator running this script is normally `app`
+# (uid 1000), so on the documented path `host-prep.sh` then `install-config.sh` the
+# directory is NOT writable by whoever is installing.
+#
+# `cp -a "$src"/. "$dest"/` then produced roughly thirty `Permission denied` lines
+# and the script carried on to its next step, burying the real cause under noise.
+# Check once, up front, and name the remedy.
+if [[ ! -w "$DEST" ]]; then
+  die "$DEST is not writable by $(id -un) (uid $(id -u)); owner is $(stat -c '%U:%G %a' "$DEST").
+     host-prep.sh creates it as 10001:10001 so the container can write back, which
+     is why the installing user needs elevation here:
+       sudo $0 ${MODE:+--force}
+     (or install the files by hand, then re-run with --check)"
+fi
+
+# --- copy a WHITELIST, never the whole directory (B15) --------------------------
+# `cp -a "$CONFIG_SRC"/. "$DEST"/` copied everything the operator happened to keep
+# next to the live config. On a long-lived host that directory also holds:
+#
+#   application.properties.bak-*      ten rollback copies
+#   ss7-digicom-balance.json.bak-*, … historic stack files
+#   ss7-persist.quarantine-*          SIM persist XML kept ASIDE BECAUSE it was bad
+#   bak-sysctl-*                      host tweak snapshots
+#
+# Copying the quarantine directories back in defeats their entire purpose: they are
+# separated from the live tree precisely so their corrupt *sccp*.xml keys can never
+# be loaded by a booting gateway. It also left the running config directory holding
+# eleven application.properties files, so "which one is live?" became a guess.
+#
+# Seed only what the gateway actually reads:
+#   application.properties   the entrypoint refuses to start without it
+#   ss7-*.json               the stack definitions (validated above)
+#   ss7-persist/             created EMPTY — a fresh gateway must not inherit
+#                            association/persist state from another install
+seeded=()
+install_one() {
+  local src="$1"
+  local base
+  base="$(basename "$src")"
+  cp -a "$src" "$DEST/$base" || die "copying $base into $DEST failed"
+  seeded+=("$base")
+}
+
+install_one "$CONFIG_SRC/application.properties"
+
+for f in "$CONFIG_SRC"/ss7-*.json; do
+  [[ -f "$f" ]] || continue
+  install_one "$f"
+done
+
+# ss7-persist stays empty on purpose; anything else in the source is not ours to
+# place into a running gateway's config tree.
 mkdir -p "$DEST/ss7-persist"
 
-# Prove the copy landed. `cp -a src/. dest/` exiting 0 is not evidence on its own
-# when the destination already contained a same-named file.
+ok "seeded ${#seeded[@]} file(s): ${seeded[*]}"
+
+# Account honestly for what was LEFT BEHIND.
+#
+# Deriving this from the copy loop was wrong: `*.bak` never ends in `.json` so it
+# never matched the glob, and application.properties.bak-* was never a candidate to
+# begin with — the counter could only ever read zero, which reads as "nothing was
+# skipped" and is worse than not reporting at all. Enumerate the source instead.
+left_files=0; left_dirs=0
+while IFS= read -r e; do
+  [[ -n "$e" ]] || continue
+  b="$(basename "$e")"
+  # Anything that got seeded is not "left behind".
+  case " ${seeded[*]} " in *" $b "*) continue ;; esac
+  if [[ -d "$CONFIG_SRC/$e" ]]; then left_dirs=$((left_dirs + 1)); else left_files=$((left_files + 1)); fi
+done < <(ls -A "$CONFIG_SRC" 2>/dev/null || true)
+
+if (( left_files > 0 || left_dirs > 0 )); then
+  ok "left behind ${left_files} file(s) and ${left_dirs} dir(s) in the source — backups, quarantine"
+  ok "  material and ss7-persist state are never seeded into the live tree (list: $(ls -A "$CONFIG_SRC" | tr '\n' ' '))"
+fi
+
+# Prove the copy landed. `cp` returning 0 is not evidence on its own when the
+# destination already contained a same-named file.
 [[ -f "$DEST/application.properties" ]] \
   || die "seeding reported success but $DEST/application.properties is missing — check permissions"
 if ! compgen -G "$DEST/ss7-*.json" >/dev/null 2>&1; then
   warn "no ss7-*.json landed in $DEST — SS7 boot will find no stack config"
+fi
+# Nothing quarantined may have slipped through the whitelist.
+if compgen -G "$DEST/*quarantine*" >/dev/null 2>&1; then
+  die "quarantined material is present in $DEST: $(ls -d "$DEST"/*quarantine* | tr '\n' ' ')
+     Corrupt SIM persist state must never be reachable from a booting gateway."
 fi
 
 # The admin UI writes stack JSON here — without it, saving from /admin/ss7 fails.
