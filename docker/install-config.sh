@@ -44,51 +44,84 @@ validate() {
     *) die "JDBC url='${url:-unset}' is not jdbc:postgresql://" ;;
   esac
 
+  # Which stack file actually BOOTS. Findings against that file are errors; findings against
+  # a spare file in the same tree are warnings. Refusing to install because an UNUSED lab
+  # file lacks a key trains operators to ignore this check — and the day someone switches
+  # stacks from /admin/ss7 is the day it matters again.
+  local cfgref selected_stack
+  cfgref="$(grep -E '^ussd\.map\.config-file=' "$dir/application.properties" | cut -d= -f2- | tr -d ' ')"
+  selected_stack="$(basename "${cfgref:-ss7-lab.json}")"
+
+  stack_note() {  # $1 = file, $2 = message. Bash locals are dynamically scoped, so this
+                  # sees validate()'s `errors` and `selected_stack`.
+    if [[ "$(basename "$1")" == "$selected_stack" ]]; then
+      errors=$((errors + 1)); echo "ERROR: $2" >&2
+    else
+      warn "$2"
+      warn "  ($(basename "$1") is not what ussd.map.config-file selects, so it does not boot"
+      warn "   today — fix it before switching to it from /admin/ss7)"
+    fi
+  }
+
   # SS7 stack files: must parse, and every link must be SCTP (never TCP).
   local f
   for f in "$dir"/ss7-*.json; do
     [[ -f "$f" ]] || continue
-    jq empty "$f" 2>/dev/null || die "$(basename "$f") is not valid JSON"
+    if ! jq empty "$f" 2>/dev/null; then
+      stack_note "$f" "$(basename "$f") is not valid JSON"
+      continue
+    fi
     local bad
     bad="$(jq -r '.. | objects | .channel? // empty' "$f" 2>/dev/null | grep -vi '^sctp$' | sort -u || true)"
-    [[ -z "$bad" ]] || die "$(basename "$f") has non-SCTP channel(s): $bad (SS7 is SCTP-only)"
+    [[ -z "$bad" ]] || stack_note "$f" "$(basename "$f") has non-SCTP channel(s): $bad (SS7 is SCTP-only)"
 
     # ...and WHICH SCTP implementation binds the sockets. "channel: sctp" is necessary but
     # nowhere near sufficient: sctp.backend selects the provider, and SctpBackend.from(null)
     # is FSTACK_DPDK — a userspace DPDK stack needing hugepages and a native
     # libsctp_fstack.so. Omitting the key does not error. The gateway logs
     # "SCTP server … listening" and "ss7=wired" and creates no kernel socket, so the carrier
-    # peer never connects and /proc/net/sctp/eps stays empty. That is exactly what shipped,
-    # and the channel check above passed it.
+    # peer never connects and /proc/net/sctp/eps stays empty. That is exactly what shipped on
+    # the Digicom test host, and the channel check above passed it.
     local backend lib
     backend="$(jq -r '.sctp.backend // empty' "$f" 2>/dev/null)"
     if [[ -z "$backend" ]]; then
-      die "$(basename "$f") has no sctp.backend, so it resolves to FSTACK_DPDK
-       (SctpBackend.from(null)) — a userspace DPDK stack. The gateway would boot, log
-       'listening' on every link and bind nothing: a deaf SS7 plane that looks wired.
+      stack_note "$f" "$(basename "$f") has no sctp.backend, so it resolves to FSTACK_DPDK
+       (SctpBackend.from(null)) — a userspace DPDK stack. The gateway boots, logs 'listening'
+       on every link and binds nothing: a deaf SS7 plane that looks wired.
        Fix: add  \"backend\": \"NETTY_KERNEL\"  to the sctp block (kernel SCTP), or set
        FSTACK_DPDK explicitly together with a sctp.library path that exists."
+      continue
     fi
     case "$(tr '[:lower:]-' '[:upper:]_' <<<"$backend")" in
-      NETTY_KERNEL) ok "$(basename "$f") parses, all links channel=sctp, backend=NETTY_KERNEL (kernel SCTP)" ;;
+      NETTY_KERNEL) ;;
       FSTACK_DPDK)
         lib="$(jq -r '.sctp.library // empty' "$f" 2>/dev/null)"
         [[ -n "$lib" && -e "$lib" ]] \
-          || die "$(basename "$f") asks for FSTACK_DPDK but sctp.library='${lib:-unset}' does not exist
-       — the gateway would log 'listening' and create no socket. entrypoint.sh re-checks
-       this inside the container, where the path must also be mounted."
-        ok "$(basename "$f") parses, all links channel=sctp, backend=FSTACK_DPDK (library $lib)" ;;
-      *) die "$(basename "$f") sctp.backend='$backend' — expected NETTY_KERNEL or FSTACK_DPDK" ;;
+          || stack_note "$f" "$(basename "$f") asks for FSTACK_DPDK but sctp.library='${lib:-unset}' does not exist
+       — the gateway would log 'listening' and create no socket. entrypoint.sh re-checks this
+       inside the container, where the path must also be mounted."
+        ;;
+      *) stack_note "$f" "$(basename "$f") sctp.backend='$backend' — expected NETTY_KERNEL or FSTACK_DPDK" ;;
     esac
+    if [[ "$(basename "$f")" == "$selected_stack" ]]; then
+      ok "$(basename "$f") parses, links channel=sctp, backend=$backend — this is the file that boots"
+    else
+      ok "$(basename "$f") parses, links channel=sctp, backend=$backend (spare)"
+    fi
   done
 
-  # The referenced stack file must exist, or jSS7 NPEs at boot.
-  local cfgref
-  cfgref="$(grep -E '^ussd\.map\.config-file=' "$dir/application.properties" | cut -d= -f2- | tr -d ' ')"
+  # The referenced stack file must exist, or jSS7 NPEs at boot. cfgref/selected_stack were
+  # resolved above, before the ss7-*.json loop, so that loop could tell the file that boots
+  # from a spare one — do not recompute them here and risk the two disagreeing.
   if [[ -n "$cfgref" ]]; then
-    local resolved="$dir/$(basename "$cfgref")"
-    [[ -f "$resolved" ]] || die "ussd.map.config-file=$cfgref but $resolved does not exist"
-    ok "map config file present: $(basename "$resolved")"
+    [[ -f "$dir/$selected_stack" ]] \
+      || die "ussd.map.config-file=$cfgref but $dir/$selected_stack does not exist"
+    ok "map config file present: $selected_stack"
+  else
+    warn "ussd.map.config-file is not set — entrypoint.sh will fall back to $selected_stack,
+       or to the first ss7-*.json it finds, which is alphabetical rather than intentional"
+    [[ -f "$dir/$selected_stack" ]] \
+      || die "no ussd.map.config-file, and no $selected_stack in $dir to fall back to"
   fi
 
   # Lab-only escape hatch must not be on in production.
