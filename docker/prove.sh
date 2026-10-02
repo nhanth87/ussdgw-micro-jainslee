@@ -31,58 +31,65 @@ fi
 #   1. the default was the built-in lab key `ussd-admin`, which no real deployment uses;
 #   2. the key in force is `ussd.admin.api-key` in the mounted config when the deployment is
 #      configured by file rather than by secret;
-#   3. reading the secret needs the right uid. `docker exec` runs as the image's USER (10001)
-#      and the secret is mounted 0400 root:root, so the read failed, `2>/dev/null` swallowed
-#      the reason, and the script fell through to (1). That is the path that produced three
-#      bogus FAILs on the Digicom host on a gateway with two live carrier associations.
+#   4. USSD_ADMIN_API_KEY in the ENVIRONMENT is trusted first — and docker/.env ships
+#      USSD_ADMIN_API_KEY=ussd-admin as a lab placeholder, which deploy.sh re-exports. So
+#      "the override wins" carried the lab default straight into the 401s on a host whose
+#      real key is a 64-char secret. A source's name says nothing about whether its value is
+#      the key in force.
 #
-# Two ways this went wrong on a real host, both silently:
-#   1. the fallback `KEY="ussd-admin"` is the built-in lab default, which a real deployment
-#      never uses — so every admin check below returned 401 and proved.sh reported a healthy,
-#      traffic-serving gateway as broken;
-#   2. reading the secret needs the right uid. `docker exec` runs as the image's USER
-#      (10001), and the secret is mounted 0400 root:root, so the read fails — the 2>/dev/null
-#      swallowed it and the script fell through to the lab default. The key was right there in
-#      the mounted configs, which the container CAN read.
-# So: try in order, then PROVE the key works before trusting any 401.
-resolve_key() {
-  local out
-  # 1. explicit override from the caller
-  [[ -n "${USSD_ADMIN_API_KEY:-}" ]] && { printf '%s' "$USSD_ADMIN_API_KEY"; return; }
-  # 2. the secret, as the container's own uid, then as root (docker's own privilege, not ours)
-  for u in "" "0"; do
-    out="$(docker exec ${u:+-u "$u"} "$CONTAINER" sh -c \
-      'tr -d "\r\n" < "${USSD_ADMIN_API_KEY_FILE:-/run/secrets/ussdgw_admin_key}"' 2>/dev/null || true)"
-    [[ -n "$out" ]] && { printf '%s' "$out"; return; }
-  done
-  # 3. ussd.admin.api-key from the config the container actually mounted — this is the key in
-  #    force when the app is configured by file rather than by secret
-  out="$(docker exec "$CONTAINER" sh -c \
-    'sed -n "s/^ussd\.admin\.api-key=//p" /opt/ussdgw/configs/application.properties 2>/dev/null | head -1' \
-    2>/dev/null | tr -d '\r\n[:space:]' || true)"
-  [[ -n "$out" ]] && { printf '%s' "$out"; return; }
-  printf ''
+# So: collect every candidate, then keep the first one the gateway ACCEPTS. Verified against
+# a live host — an env override can be stale, a secret can be unreadable, and a config can
+# carry the key — and only acceptance distinguishes them.
+key_accepted() {  # $1 = candidate; 0 = the gateway accepted it
+  [[ -n "$1" ]] || return 1
+  [[ "$(curl -sS --connect-timeout 3 --max-time 10 -o /dev/null -w '%{http_code}' \
+        -H "X-USSD-Admin-Key: $1" "$BASE:8088/admin/status.json" 2>/dev/null)" == 200 ]]
 }
-KEY="$(resolve_key)"
-KEY_SOURCE=""
-if [[ -n "$KEY" ]]; then
-  # Do not hand the key to the checks until something has accepted it. A wrong key turns
-  # every admin check into a 401 and reads as "the gateway is broken".
-  if [[ "$(curl -sS --connect-timeout 3 --max-time 10 -o /dev/null -w '%{http_code}' \
-             -H "X-USSD-Admin-Key: $KEY" "$BASE:8088/admin/status.json" 2>/dev/null)" == 200 ]]; then
-    KEY_SOURCE="accepted by the running gateway (${#KEY} chars)"
-  else
-    echo "admin key: resolved ${#KEY} chars but the gateway REJECTED it (non-200 on /admin/status.json)."
-    echo "  Every admin check below would report a 401 that says nothing about the gateway."
-    echo "  Set USSD_ADMIN_API_KEY to the key in force and re-run."
-    exit 1
-  fi
-else
-  echo "admin key: could not resolve one from the secret or the mounted config."
-  echo "  Not falling back to a default — a 401 from a guessed key is not a finding."
+KEY=""; KEY_SOURCE=""
+try_key() {  # $1 = candidate, $2 = description
+  key_accepted "$1" || return 1
+  KEY="$1"; KEY_SOURCE="$2"
+  return 0
+}
+# 1. the secret the container was given, as the container's uid, then as root (docker's own
+#    privilege, not ours). A deployment configured by secret has this as the key in force.
+SECRET_KEY=""
+for u in "" "0"; do
+  out="$(docker exec ${u:+-u "$u"} "$CONTAINER" sh -c \
+    'tr -d "\r\n" < "${USSD_ADMIN_API_KEY_FILE:-/run/secrets/ussdgw_admin_key}"' 2>/dev/null || true)"
+  [[ -n "$out" ]] && { SECRET_KEY="$out"; break; }
+done
+# 2. ussd.admin.api-key from the config the container actually mounted
+CFG_KEY="$(docker exec "$CONTAINER" sh -c \
+  'sed -n "s/^ussd\.admin\.api-key=//p" /opt/ussdgw/configs/application.properties 2>/dev/null | head -1' \
+  2>/dev/null | tr -d '\r\n[:space:]' || true)"
+# 3. the environment override LAST. It is the one an operator sets by hand, but it is also
+#    the one .env pre-fills with a lab placeholder, so it has to earn its place like the rest.
+ENV_KEY="${USSD_ADMIN_API_KEY:-}"
+
+# Prefer the secret, then the config, then the env override; each only if accepted.
+try_key "$SECRET_KEY" "the container's mounted secret" \
+  || try_key "$CFG_KEY"   "ussd.admin.api-key in the mounted config" \
+  || try_key "$ENV_KEY"   "USSD_ADMIN_API_KEY from the environment"
+
+if [[ -z "$KEY" ]]; then
+  echo "admin key: none of the candidates was accepted by $BASE:8088/admin/status.json"
+  [[ -n "$ENV_KEY" ]] && echo "  tried: USSD_ADMIN_API_KEY from the environment (${#ENV_KEY} chars)"
+  [[ -n "$SECRET_KEY" ]] && echo "  tried: the mounted secret (${#SECRET_KEY} chars)"
+  [[ -n "$CFG_KEY" ]] && echo "  tried: ussd.admin.api-key in the mounted config (${#CFG_KEY} chars)"
+  [[ -z "$ENV_KEY" && -z "$SECRET_KEY" && -z "$CFG_KEY" ]] && \
+    echo "  nothing to try: no secret readable, no api-key in the config, no override set"
+  echo "  Refusing to run the admin checks: a 401 from a guessed key looks exactly like a"
+  echo "  broken gateway, and that misreading is what made Swarm kill a healthy container."
+  echo "  Set USSD_ADMIN_API_KEY to the key in force, or read it from the running container:"
+  echo "    docker exec \$(docker ps -q --filter name=ussdgw_ussdgw | head -1) cat /run/secrets/ussdgw_admin_key"
   exit 1
 fi
-echo "admin key: $KEY_SOURCE"
+echo "admin key: $KEY_SOURCE (${#KEY} chars, verified by a 200 from the gateway)"
+[[ -n "$ENV_KEY" && "$KEY" != "$ENV_KEY" ]] && \
+  echo "  note: USSD_ADMIN_API_KEY in the environment does NOT match the key in force." \
+       "The .env lab placeholder is the usual cause — it is ignored here, but fix it so" \
+       "other tools stop guessing."
 
 # Curl the admin API without putting the key in argv. `ps` on this host shows the full
 # command line of every process, and prove.sh is run by hand on a carrier box that has other
