@@ -197,6 +197,25 @@ validate() {
       warn "openssl not installed — skipping certificate expiry and chain checks"
     fi
   else
+    # "Not readable" and "not there" are different problems with different fixes, and
+    # reporting them as one is how an operator spends an hour on a certificate that was
+    # present all along. `test -f` needs +x on every parent directory: on the Digicom host
+    # /srv/ussdgw/nginx is drwxr-x--- messagebus, so as `app` the test returns false for
+    # files that DO exist and nginx DOES serve — the check said "no TLS certificate" while
+    # nginx was listening on 443 with that very certificate.
+    local unreadable=()
+    for f in "$cdir" "$cert" "$key"; do
+      if [[ -e "$f" ]] && ! stat -c %a "$f" >/dev/null 2>&1; then
+        unreadable+=("$f")
+      fi
+    done
+    if (( ${#unreadable[@]} > 0 )); then
+      die "cannot inspect ${unreadable[*]} as $(id -un) — the path exists but this user cannot
+     traverse/read it, so the certificate check below is UNVERIFIED, not passed or failed.
+     (/srv/ussdgw/nginx being drwxr-x--- messagebus is enough to cause this.)
+     Re-run this gate with enough privilege to stat the files (e.g. sudo), or point CERT_DIR at
+     a path the operator can read. Do not seed certificates on the strength of this result."
+    fi
     die "no TLS certificate at $cert / $key — the nginx :443 server block is unconditional and
      nginx will not start without them.
      Seed them on the host, e.g.:
