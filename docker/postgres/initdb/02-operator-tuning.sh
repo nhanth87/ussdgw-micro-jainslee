@@ -47,34 +47,68 @@ fi
 if grep -qF "$MARKER" "$PGCONF"; then
   echo "operator tuning: already applied"
 else
+  # Both files must end in a newline before anything is appended, or the first
+  # appended line is glued onto the last existing one.
+  #
+  # docker/postgres/postgresql.conf did not end in a newline, and the block below
+  # started with `listen_addresses = '127.0.0.1'`. The result was a single line:
+  #
+  #     log_statement = 'ddl'listen_addresses = '127.0.0.1'
+  #
+  # and PostgreSQL refused to start at all:
+  #
+  #     LOG:  syntax error in file ".../postgresql.conf" line 848, near token "listen_addresses"
+  #     FATAL:  configuration file ".../postgresql.conf" contains errors
+  #
+  # Fix the file, and be defensive about both sides so a future edit cannot
+  # reintroduce it.
+  if [[ -s "$PGCONF" && -n "$(tail -c 1 "$PGCONF")" ]]; then
+    echo "" >> "$PGCONF"
+  fi
+
   {
-    echo ""
     echo "$MARKER"
-    # Defaults first so every later line overrides cleanly if a value repeats.
-    grep -vE '^[[:space:]]*(#|$)' "$TUNING"
+    # awk rather than grep: grep emits its final line without a trailing newline
+    # when the input lacks one, which is the same defect one level down.
+    awk 'NF && $0 !~ /^[[:space:]]*#/' "$TUNING" | while IFS= read -r line; do
+      printf '%s\n' "$line"
+    done
     echo "# <<< ussdgw operator tuning <<<"
   } >> "$PGCONF"
-  echo "operator tuning: applied $(grep -cvE '^[[:space:]]*(#|$)' "$TUNING") setting(s) to $PGCONF"
+
+  applied="$(awk 'NF && $0 !~ /^[[:space:]]*#/' "$TUNING" | wc -l)"
+  echo "operator tuning: applied $applied setting(s) to $PGCONF"
 fi
 
-# Prove the two settings that matter actually landed in the file the server reads.
-# A missing tuning file and a tuning file that was never applied look identical from
-# the outside, so check the effective file rather than trusting the copy above.
-for want in "listen_addresses" "shared_buffers"; do
-  grep -qE "^[[:space:]]*${want}[[:space:]]*=" "$PGCONF" \
-    || { echo "ERROR: $want not present in $PGCONF after applying tuning" >&2; exit 1; }
-done
-
-# The loopback pin specifically: assert the value, not just the key.
-if ! grep -qE "^[[:space:]]*listen_addresses[[:space:]]*=[[:space:]]*'127\.0\.0\.1'" "$PGCONF"; then
-  # Accept the unquoted form too, but never '*'.
-  if grep -qE "^[[:space:]]*listen_addresses[[:space:]]*=[[:space:]]*\*" "$PGCONF"; then
-    echo "ERROR: listen_addresses is '*' in $PGCONF. On hostnet that exposes the USSD" >&2
-    echo "       database on every interface of this host. Refusing to continue." >&2
-    exit 1
-  fi
-  echo "ERROR: listen_addresses is not pinned to 127.0.0.1 in $PGCONF" >&2
+# --- validate by PARSING, not by grepping (this is the part that was wrong) ------
+# The previous version asserted with
+#
+#     grep -qE "^[[:space:]]*listen_addresses[[:space:]]*=[[:space:]]*'127\.0\.0\.1'"
+#
+# and printed "pinned to loopback" — against the very file that had just been shown
+# to fail to parse. `log_statement = 'ddl'listen_addresses = '127.0.0.1'` still
+# matches that pattern, because the merged line still contains the key, whitespace
+# and an equals sign. A regex cannot tell a valid assignment from a corrupted one.
+#
+# Ask the server instead. `postgres -C <name>` reads and parses the configuration and
+# exits non-zero if it does not, so it is a real syntax check.
+if ! parsed="$(postgres -D "$PGCONF" -C listen_addresses 2>&1)"; then
+  echo "ERROR: $PGCONF does not parse — PostgreSQL will refuse to start." >&2
+  echo "  postgres says: $parsed" >&2
+  echo "  The operator tuning must be a whole number of lines, each newline-terminated." >&2
   exit 1
 fi
+# postgres echoes the effective value; strip surrounding whitespace.
+parsed="${parsed//[[:space:]]/}"
+[[ "$parsed" == "127.0.0.1" ]] \
+  || { echo "ERROR: effective listen_addresses is '$parsed', not 127.0.0.1." >&2
+       echo "       On hostnet any other value exposes the USSD database on this" >&2
+       echo "       host's interfaces. Refusing to continue." >&2
+       exit 1; }
 
-echo "operator tuning: listen_addresses pinned to loopback"
+shared="$(postgres -D "$PGCONF" -C shared_buffers 2>&1 || true)"
+shared="${shared//[[:space:]]/}"
+[[ -n "$shared" && "$shared" != *"error"* ]] \
+  || { echo "ERROR: could not read effective shared_buffers ($shared)" >&2; exit 1; }
+
+echo "operator tuning: $PGCONF parses; listen_addresses=127.0.0.1, shared_buffers=$shared"
