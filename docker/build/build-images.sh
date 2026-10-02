@@ -77,15 +77,52 @@ if ! docker run --rm --user postgres --entrypoint sh "ussdgw-postgres:$TAG" \
 fi
 ok "postgres image carries a readable docker-entrypoint-initdb.d/01-ussdgw.sh"
 
-# And the loopback pin, which is the only thing standing between a carrier host's
-# LAN and the USSD database.
-if ! docker run --rm --entrypoint sh "ussdgw-postgres:$TAG" \
-     -c 'grep -q "^listen_addresses = .127.0.0.1." /etc/postgresql/postgresql.conf' 2>/dev/null; then
-  die "ussdgw-postgres:$TAG does not pin listen_addresses to 127.0.0.1.
-       On hostnet that means PostgreSQL binds 5432 on every interface of this host.
-       The stock upstream image ships listen_addresses = '*'."
+# And the loopback pin, which is the only thing standing between a carrier host's LAN and
+# the USSD database.
+#
+# ASK THE SERVER, NOT THE FILE. The first version of this check was
+#
+#     grep -q "^listen_addresses = .127.0.0.1." /etc/postgresql/postgresql.conf
+#
+# and it passed on an image whose database bound 0.0.0.0:5432. The official image never
+# opens /etc/postgresql/postgresql.conf — that path is only the AUTHORED SOURCE which
+# initdb/02-operator-tuning.sh appends into $PGDATA/postgresql.conf. Grepping it asserts
+# that a file we ship says something, not that PostgreSQL will do it: a check that cannot
+# fail, guarding the exact defect it was written to catch.
+#
+# So run the real hook against a throwaway PGDATA inside the real image and ask postgres
+# for the effective value. This fails if the hook is missing, if the tuning file is
+# unparseable, or if the pin is absent or '*' — i.e. it fails for every way this has
+# actually been broken.
+if ! docker run --rm --user postgres --entrypoint sh "ussdgw-postgres:$TAG" \
+     -c 'test -r /docker-entrypoint-initdb.d/02-operator-tuning.sh' 2>/dev/null; then
+  die "ussdgw-postgres:$TAG has no readable initdb/02-operator-tuning.sh.
+       Without it the operator tuning is never applied to \$PGDATA/postgresql.conf and
+       the server runs on upstream defaults — listen_addresses = '*', which on hostnet
+       binds the USSD database on every interface of this host."
 fi
-ok "postgres image pins listen_addresses to loopback"
+
+effective="$(docker run --rm --user postgres --entrypoint bash "ussdgw-postgres:$TAG" -c '
+  set -e
+  export PGDATA=/tmp/pg-assert
+  mkdir -p "$PGDATA"
+  cp /usr/share/postgresql/postgresql.conf.sample "$PGDATA/postgresql.conf"
+  printf "local all all trust\n" > "$PGDATA/pg_hba.conf"
+  /docker-entrypoint-initdb.d/02-operator-tuning.sh > /tmp/hook.log 2>&1 || {
+    echo "HOOK_FAILED"; cat /tmp/hook.log; exit 1; }
+  postgres -D "$PGDATA" -C listen_addresses 2>/dev/null | tail -1
+' 2>&1)" || die "ussdgw-postgres:$TAG — the tuning hook failed inside the image:
+       $(printf '%s' "$effective" | sed 's/^/         /')"
+
+effective="$(printf '%s' "$effective" | tr -d '[:space:]')"
+if [ "$effective" != "127.0.0.1" ]; then
+  die "ussdgw-postgres:$TAG would run with listen_addresses='$effective', not 127.0.0.1.
+       On hostnet that binds the USSD database on every interface of this host — proven
+       reachable from the M3UA peer addresses on digicom-nb. The stock upstream image
+       ships '*'. This value was read from postgres itself after running the image's own
+       initdb hook, not from a file we ship."
+fi
+ok "postgres image really runs listen_addresses=127.0.0.1 (hook applied, value read back from postgres)"
 
 echo
 echo "build-images: next — point docker/.env at these tags and deploy:"
