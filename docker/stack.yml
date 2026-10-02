@@ -58,6 +58,14 @@ secrets:
     external: true
   ussdgw_admin_key:
     external: true
+  # Superuser credential for the postgres container (see services.postgres). Create it
+  # before deploying, or postgres exits 1 with "Database is uninitialized and superuser
+  # password is not specified" — and with restart_policy: max_attempts: 5 the task is
+  # then retired, so `docker stack services` keeps listing a database that never
+  # initialised while the gateway waits for it forever.
+  #   openssl rand -base64 24 | tr -d '\n=' | docker secret create ussdgw_pg_super_password -
+  ussdgw_pg_super_password:
+    external: true
 
 services:
 
@@ -88,10 +96,29 @@ services:
         uid: "999"
         gid: "999"
         mode: 0400
+      # The superuser (POSTGRES_USER below) needs its own credential, and the official
+      # image REFUSES TO INITIALISE without one:
+      #
+      #   Error: Database is uninitialized and superuser password is not specified.
+      #          You must specify POSTGRES_PASSWORD to a non-empty value for the
+      #          superuser.
+      #
+      # It is deliberately NOT the same secret as ussdgw_db_password: that one is the
+      # application role `ussdgw`, created by initdb/01-ussdgw.sh, and the gateway is
+      # the only consumer. Sharing one credential between the app role and a superuser
+      # would mean a leaked JDBC password is also DDL/role-administration on the host.
+      - source: ussdgw_pg_super_password
+        target: ussdgw_pg_super_password
+        uid: "999"
+        gid: "999"
+        mode: 0400
     environment:
       POSTGRES_USER: ussdgw_admin
       POSTGRES_DB: ussdgw_admin
       POSTGRES_INITDB_ARGS: "--auth-host=scram-sha-256"
+      # Read from the secret, never POSTGRES_PASSWORD inline: an inline value is visible
+      # in `docker service inspect`, in the swarm raft log and in shell history.
+      POSTGRES_PASSWORD_FILE: /run/secrets/ussdgw_pg_super_password
       USSD_DB_PASSWORD_FILE: /run/secrets/ussdgw_db_password
       # PGDATA must be the mounted volume root; the image defaults to a subdir that
       # does not exist on a fresh bind mount.
@@ -200,6 +227,10 @@ services:
     networks: [hostnet]
     volumes:
       - nginx-certs:/etc/nginx/certs
+    # Declarative only. This service is on `hostnet`, and Docker ignores published ports
+    # for a container in host network mode — nginx binds :80/:443 on the host directly.
+    # Kept so the intent is readable and so a future move off hostnet does not silently
+    # lose the entry point; do not read this as evidence of a NAT rule.
     ports:
       - target: 80
         published: 80
@@ -210,9 +241,15 @@ services:
         protocol: tcp
         mode: host
     depends_on: [ussdgw]
-    # The image runs as non-root (uid 101) but must bind :80/:443, which are
-    # privileged ports. CAP_NET_BIND_SERVICE is the ONLY capability added anywhere
-    # in this stack — never privileged:true, never CAP_NET_ADMIN or CAP_SYS_ADMIN.
+    # NET_BIND_SERVICE is granted here so that it stays in the container's bounding set,
+    # but on its own it does NOTHING for this service: capabilities in the permitted set
+    # belong to uid 0, and the image runs as uid 101. The bind is enabled by the FILE
+    # capability baked onto /usr/sbin/nginx in docker/nginx/Dockerfile (asserted there
+    # with getcap). Without it nginx dies on its first bind —
+    # `[emerg] bind() to 0.0.0.0:80 failed (13: Permission denied)` — five times, and
+    # then restart_policy retires the task while `docker stack services` still lists it.
+    # Still the ONLY capability added anywhere in this stack: never privileged:true,
+    # never CAP_NET_ADMIN or CAP_SYS_ADMIN.
     cap_add:
       - NET_BIND_SERVICE
     deploy:

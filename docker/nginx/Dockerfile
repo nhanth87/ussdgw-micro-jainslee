@@ -73,7 +73,7 @@ COPY docker/nginx/ussdgw.conf  /etc/nginx/conf.d/ussdgw.conf
 # This proves the directives, the includes and the upstream resolve. It
 # deliberately does NOT prove the operator certificate is valid or unexpired —
 # docker/install-config.sh --check covers that half.
-RUN apk add --no-cache openssl curl \
+RUN apk add --no-cache openssl curl libcap \
  && openssl req -x509 -newkey rsa:2048 -nodes -days 1 -subj /CN=build-selftest \
         -keyout /etc/nginx/certs/privkey.pem \
         -out    /etc/nginx/certs/fullchain.pem \
@@ -83,10 +83,36 @@ RUN apk add --no-cache openssl curl \
  && test ! -e /tmp/nginx.pid \
  && nginx -v
 
-# nginx needs CAP_NET_BIND_SERVICE for :80/:443, and nothing else (see
-# docker/stack.yml). It runs as non-root otherwise, so a compromise of the proxy
-# is not root on the host. Running the whole container as uid 101 is correct with
-# that capability granted, and is what keeps a proxy bug from being root.
+# BINDING :80/:443 AS uid 101 — the part that `cap_add` in the stack file CANNOT do.
+#
+# docker/stack.yml grants NET_BIND_SERVICE, and that is necessary but nowhere near
+# sufficient: capabilities in a container's permitted/effective set belong to **uid 0**.
+# A process running as uid 101 has no effective capabilities at all, so the kernel's
+# `capable(CAP_NET_BIND_SERVICE)` check fails and nginx dies on its very first bind:
+#
+#     [emerg] 1#1: bind() to 0.0.0.0:80 failed (13: Permission denied)
+#     nginx: [emerg] bind() to 0.0.0.0:80 failed (13: Permission denied)
+#
+# With `restart_policy: max_attempts: 5` that is five failures and then a retired task:
+# `docker stack services` still lists nginx, :80 never binds, and the admin UI is simply
+# gone. It reached production exactly like that, because the local proof ran nginx on an
+# unprivileged port and the build-time `nginx -t` runs as root — neither can hit this.
+#
+# The targeted fix is a FILE capability on the binary, which the kernel honours for any
+# uid, so the container stays non-root. Not `net.ipv4.ip_unprivileged_port_start=0`,
+# which would let every unprivileged process on a carrier host bind any port.
+#
+# `getcap` is the guard: if a future alpine base moves setcap out of libcap, or the
+# capability is dropped by a later layer, the build goes red instead of shipping a proxy
+# that cannot listen.
+RUN setcap cap_net_bind_service=+ep /usr/sbin/nginx \
+ && getcap /usr/sbin/nginx | tee /usr/local/share/nginx-caps.txt \
+ && getcap /usr/sbin/nginx | grep -q 'cap_net_bind_service=ep' \
+ && echo "nginx: file capability cap_net_bind_service=ep set (uid 101 can bind :80/:443)"
+
+# Non-root: a compromise of the proxy is uid 101, not root on a carrier host. The
+# :80/:443 bind comes from the FILE capability set above — not from the stack file's
+# cap_add, which only ever applies to uid 0.
 USER nginx
 EXPOSE 80 443
 
