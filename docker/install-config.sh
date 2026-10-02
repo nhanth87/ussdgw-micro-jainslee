@@ -203,25 +203,37 @@ validate() {
     # /srv/ussdgw/nginx is drwxr-x--- messagebus, so as `app` the test returns false for
     # files that DO exist and nginx DOES serve — the check said "no TLS certificate" while
     # nginx was listening on 443 with that very certificate.
-    local unreadable=()
+    # Three states, not two. `[[ -e ]]` collapses "absent" and "cannot look" into false —
+    # `-e` is a stat and returns false on EACCES — so an un-traversable parent
+    # (/srv/ussdgw/nginx is drwxr-x--- messagebus) reported a present certificate as a
+    # missing one, on a host where nginx was serving it on :443. Use stat directly and
+    # read its error string to tell ENOENT from EACCES.
+    local missing=() unreadable=() f serr
     for f in "$cdir" "$cert" "$key"; do
-      if [[ -e "$f" ]] && ! stat -c %a "$f" >/dev/null 2>&1; then
+      if serr="$(stat -c '%n %a %u' "$f" 2>&1)"; then
+        continue
+      elif [[ "$serr" == *"No such file or directory"* ]]; then
+        missing+=("$f")
+      else
         unreadable+=("$f")
       fi
     done
     if (( ${#unreadable[@]} > 0 )); then
-      die "cannot inspect ${unreadable[*]} as $(id -un) — the path exists but this user cannot
-     traverse/read it, so the certificate check below is UNVERIFIED, not passed or failed.
+      die "cannot inspect ${unreadable[*]} as $(id -un): $(printf '%s' "$serr" | tail -1).
+     The path may well exist — this user just cannot traverse to it, so the certificate check
+     below is UNVERIFIED: neither passed nor failed.
      (/srv/ussdgw/nginx being drwxr-x--- messagebus is enough to cause this.)
      Re-run this gate with enough privilege to stat the files (e.g. sudo), or point CERT_DIR at
      a path the operator can read. Do not seed certificates on the strength of this result."
     fi
-    die "no TLS certificate at $cert / $key — the nginx :443 server block is unconditional and
+    if (( ${#missing[@]} > 0 )); then
+      die "no TLS certificate at $cert / $key — the nginx :443 server block is unconditional and
      nginx will not start without them.
      Seed them on the host, e.g.:
        sudo install -m 0644 -o 101 -g 101 <fullchain.pem> $cert
        sudo install -m 0640 -o 101 -g 101 <privkey.pem>  $key
      (Override the directory with CERT_DIR=… if it differs from the stack's bind mount.)"
+    fi
   fi
 
   # MO SSN 147 lesson: some peers address the gateway as gsmSCF.
