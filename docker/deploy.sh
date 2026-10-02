@@ -154,10 +154,17 @@ info "kernel SCTP present; $DATA_ROOT/{configs,logs,data,pgdata} present"
 # Log4j2 writes to $DATA_ROOT/logs (ussd.log.dir). If a log is not appearing there,
 # check this before anything else: a file that exists but is never written to is worse
 # than a missing one, because "tail -f" on it returns nothing and reads as "no traffic".
+# Print what each service mounts, with the HOST PATH a bind resolves to. Printing only the
+# volume name (or its Mountpoint) is how "three copies of the config" looked real: swarm
+# keeps the volume name in .Source and docker reports
+# /var/lib/docker/volumes/<name>/_data as the Mountpoint, but with driver_opts {o: bind,
+# type: none} that directory is never created and never read — the data is the declared
+# device. On the Digicom host `findmnt` and the inode both said /srv/ussdgw/logs.
 for svc in "${STACK_NAME}_ussdgw" "${STACK_NAME}_nginx" "${STACK_NAME}_postgres"; do
   docker service inspect "$svc" >/dev/null 2>&1 || continue
-  docker service inspect "$svc" \
-    --format '{{range .Spec.TaskTemplate.ContainerSpec.Mounts}}{{if .Source}}{{.Type}} {{.Source}} -> {{.Target}};{{end}}{{end}}' 2>/dev/null | tr ';' '\n'
+  docker service inspect "$svc" --format \
+    '{{range .Spec.TaskTemplate.ContainerSpec.Mounts}}{{if .Source}}{{.Source}}{{if .VolumeOptions.DriverConfig.Options.device}} = {{.VolumeOptions.DriverConfig.Options.device}}{{end}} -> {{.Target}};{{end}}{{end}}' \
+    2>/dev/null | tr ';' '\n'
 done | grep . | sed 's/^/deploy: mount: /'
 
 # Ports. Only a *first* deploy needs them free: an update of our own stack is expected
@@ -300,70 +307,66 @@ step "3/6 operator config → $DEST"
 # that refuses an H2 db-kind, a non-SCTP channel, a missing sctp.backend and a dead TLS cert.
 export CONFIG_SRC DEST
 
-# WHICH directory does the gateway actually read? This is the question the whole
-# config step turns on, and on the Digicom host the answer was NOT the one install-config
-# was pointed at — two separate copies of the config existed:
+# WHICH directory does the gateway actually read? That is the question this step turns on,
+# and on the Digicom host install-config was pointed somewhere else:
 #
-#   docker/.env          CONFIG_SRC=/home/app/ota-push-services/…/configs   (the old
-#                        systemd tree, still carrying an ss7-digicom-balance.json with no
-#                        sctp.backend — the FSTACK_DPDK deafness)
-#   install-config DEST  /srv/ussdgw/configs                                (edited to
-#                        NETTY_KERNEL, byte-identical content)
-#   the running service  mounts the swarm VOLUME ussdgw_ussdgw-configs
+#   docker/.env   CONFIG_SRC=/home/app/ota-push-services/…/configs
+#                 the retired systemd tree, whose ss7-digicom-balance.json still has no
+#                 sctp.backend — so the gate reported the FSTACK_DPDK deafness against a
+#                 file that does not boot, and said nothing about the one that does.
+#                 (fixed in .env to /srv/ussdgw/configs; the guard below keeps it honest)
 #
-# The gate validated the first two and never asked about the third. A validation that
-# inspects a directory nothing reads is the "config present ≠ config read" lesson one
-# level up: here it would have blocked a good deploy and passed a broken one.
-configs_source() {
-  local src=""
-  if docker service inspect "${STACK_NAME}_ussdgw" >/dev/null 2>&1; then
-    src="$(docker service inspect "${STACK_NAME}_ussdgw" \
-      --format '{{range .Spec.TaskTemplate.ContainerSpec.Mounts}}{{if eq .Target "/opt/ussdgw/configs"}}{{.Source}}{{end}}{{end}}' 2>/dev/null || true)"
-  else
-    src="${STACK_NAME}_ussdgw-configs"
+# There was only ever ONE live config: the bind mount works. My "three divergent copies"
+# came from reading docker's bookkeeping instead of the filesystem — `findmnt` says
+# /var/lib/docker/volumes/ussdgw_ussdgw-logs/_data is /dev/sda1[/srv/ussdgw/logs], same
+# inode as /srv/ussdgw/logs.
+#
+# So read the declared bind device. Mountpoint is only the answer for a genuinely plain
+# local volume, and that case now says so out loud instead of quietly pointing at a path
+# that holds nothing.
+volume_host_path() {  # $1 = service, $2 = container path
+  local svc="$1" target="$2" dev opts name
+  if docker service inspect "$svc" >/dev/null 2>&1; then
+    dev="$(docker service inspect "$svc" \
+      --format "{{range .Spec.TaskTemplate.ContainerSpec.Mounts}}{{if eq .Target \"$target\"}}{{.VolumeOptions.DriverConfig.Options.device}}{{end}}{{end}}" \
+      2>/dev/null || true)"
+    [[ -n "$dev" ]] && { printf '%s' "$dev"; return; }
+    name="$(docker service inspect "$svc" \
+      --format "{{range .Spec.TaskTemplate.ContainerSpec.Mounts}}{{if eq .Target \"$target\"}}{{.Source}}{{end}}{{end}}" \
+      2>/dev/null || true)"
+    # No driver_opts => a plain local volume, so Mountpoint IS the path.
+    if [[ -n "$name" && "$name" != /* ]]; then
+      opts="$(docker volume inspect "$name" --format '{{.Options.device}}' 2>/dev/null || true)"
+      if [[ -n "$opts" ]]; then printf '%s' "$opts"; return; fi
+      warn "$name has no bind device (Options.device empty) — using its Mountpoint; this is a"
+      warn "  plain local volume, so its data lives under /var/lib/docker/volumes, NOT in $DATA_ROOT"
+      docker volume inspect "$name" --format '{{.Mountpoint}}' 2>/dev/null || true
+      return
+    fi
+    [[ -n "$name" ]] && { printf '%s' "$name"; return; }
   fi
-  [[ -n "$src" ]] || { echo ""; return; }
-  # For a named local volume the spec's Source is the VOLUME NAME, not a host path. The
-  # only way to learn where those bytes actually live on this node is the daemon, so ask
-  # it — guessing /var/lib/docker/volumes/<name>/_data works on default storage drivers
-  # and silently points at nothing on anything that configures a different root.
-  if [[ "$src" != /* ]]; then
-    local mp
-    mp="$(docker volume inspect "$src" --format '{{.Mountpoint}}' 2>/dev/null || true)"
-    [[ -n "$mp" ]] && src="$mp"
-  fi
-  printf '%s' "$src"
+  # Not deployed yet: the device stack.yml declares for this target.
+  case "$target" in
+    /opt/ussdgw/configs) printf '%s' "${CONFIG_SRC:-$DATA_ROOT/configs}" ;;
+    /etc/nginx/certs)    printf '%s' "${CERT_DIR:-$DATA_ROOT/nginx/certs}" ;;
+  esac
 }
+configs_source() { volume_host_path "${STACK_NAME}_ussdgw" /opt/ussdgw/configs; }
+certs_source()   { volume_host_path "${STACK_NAME}_nginx" /etc/nginx/certs; }
 LIVE_CONFIGS="$(configs_source)"; LIVE_CONFIGS="${LIVE_CONFIGS%/}"
 
-# Same question for the certificate edge: which path does the nginx container serve from?
-certs_source() {
-  local src="" mp
-  if docker service inspect "${STACK_NAME}_nginx" >/dev/null 2>&1; then
-    src="$(docker service inspect "${STACK_NAME}_nginx" \
-      --format '{{range .Spec.TaskTemplate.ContainerSpec.Mounts}}{{if eq .Target "/etc/nginx/certs"}}{{.Source}}{{end}}{{end}}' 2>/dev/null || true)"
-  fi
-  if [[ -n "$src" && "$src" != /* ]]; then
-    mp="$(docker volume inspect "$src" --format '{{.Mountpoint}}' 2>/dev/null || true)"
-    [[ -n "$mp" ]] && src="$mp"
-  fi
-  printf '%s' "${src:-${CERT_DIR:-$DATA_ROOT/nginx/certs}}"
-}
-
-# Reading the live config from the host is not always possible. A swarm volume's
-# mountpoint lives under /var/lib/docker/volumes, which is drwx-----x root:root —
-# traversable but not readable by the operator, so install-config reported
-# "no application.properties in …" for a directory that demonstrably has one (the
-# gateway was reading it happily). Do not read what you cannot read, and do not
-# declare absence either: stage a read-only snapshot THROUGH the container that owns
-# the mount, which is the only party that can read it, and validate that.
+# install-config must READ application.properties, and that file is 0600 owned by the
+# container's uid (10001) because it holds the datasource password. So the live config is
+# genuinely unreadable to whoever runs the deploy even though its directory is traversable.
+# That is a permission boundary, not a path puzzle — read the bytes through the container
+# that owns them.
 SNAP=""
 stage_live_snapshot() {
   local dir="$1" cid dst
   [[ -n "$dir" ]] || return 1
   [[ -r "$dir/application.properties" ]] && return 0        # readable directly: no copy
   cid="$(docker ps -q --filter "name=${STACK_NAME}_ussdgw" | head -1 || true)"
-  [[ -n "$cid" ]] || { warn "cannot read $dir and no running ${STACK_NAME}_ussdgw container to read it through"; return 1; }
+  [[ -n "$cid" ]] || { warn "cannot read $dir/application.properties and no running ${STACK_NAME}_ussdgw container to read it through"; return 1; }
   SNAP="$(mktemp -d "${TMPDIR:-/tmp}/ussdgw-cfgsnap.XXXXXX")" || return 1
   chmod 0755 "$SNAP"
   dst="$SNAP/configs"; mkdir -p "$dst"; chmod 0755 "$dst"
@@ -389,75 +392,81 @@ stage_live_snapshot() {
 }
 
 
+# DEST is where install-config seeds; LIVE_CONFIGS is where the service reads. With the
+# bind mounts stack.yml declares these are the same directory, so the normal path is a
+# single answer and this block is a guard, not a mechanism.
 if [[ -n "$LIVE_CONFIGS" && "$LIVE_CONFIGS" != "$DEST" ]]; then
-  warn "the running gateway mounts configs from $LIVE_CONFIGS, but install-config validates/seeds $DEST"
-  warn "-> these are different files. install-config will report on a tree the service never reads."
   if [[ "$MODE_CHECK" == 1 || "$MODE_DEPLOY" == 0 ]]; then
+    # Read-only mode: validate what the service actually reads, never a tree that does not
+    # exist on this host (a plain local volume has its data under /var/lib/docker/volumes,
+    # and CONFIG_SRC cannot be pointed at a directory the operator cannot read).
     if stage_live_snapshot "$LIVE_CONFIGS"; then
       CONFIG_SRC="$SNAP/configs"
-      info "validating the MOUNTED config (snapshot) instead of $DEST"
+      info "validating the config the gateway reads (snapshot of $LIVE_CONFIGS)"
     else
       CONFIG_SRC="$LIVE_CONFIGS"
-      info "validating the MOUNTED copy instead: CONFIG_SRC=$LIVE_CONFIGS"
+      info "validating $LIVE_CONFIGS"
     fi
   else
-    die "config source mismatch: DEST=$DEST but ${STACK_NAME}_ussdgw mounts $LIVE_CONFIGS.
-     Seeding $DEST would produce a config tree the gateway never reads — the silent-failure
-     shape this script exists to prevent. Pick one and state it:
-       a) keep the current topology and validate/seed the mounted path:
-            CONFIG_SRC=$LIVE_CONFIGS ./docker/deploy.sh
-       b) move the stack onto the bind mounts stack.yml declares (/srv/ussdgw/...), which
-          means copying the live volume contents to /srv/ussdgw/{configs,logs,data,pgdata}
-          first — data-affecting, so do it deliberately, not from this script."
+    die "config source mismatch: this stack's gateway reads $LIVE_CONFIGS, but DEST=$DEST.
+     Seeding DEST would create a config tree the gateway never opens. Make DEST agree with
+     the service, or make the service read DEST — don't run a deploy that quietly disagrees
+     with itself."
   fi
 fi
-# CONFIG_SRC that is neither DEST nor the live mount means .env still points at a retired
-# install tree. install-config would validate files the deploy does not use, and say
-# nothing about the ones that matter.
-if [[ -n "$LIVE_CONFIGS" && "$CONFIG_SRC" != "$DEST" && "$CONFIG_SRC" != "$LIVE_CONFIGS" && "$CONFIG_SRC" != "$SNAP/configs" ]]; then
-  warn "docker/.env sets CONFIG_SRC=$CONFIG_SRC, which is neither DEST ($DEST) nor the"
-  warn "mounted $LIVE_CONFIGS. The findings below are about files this stack never reads."
-  warn "Fix docker/.env: CONFIG_SRC=$DEST   (then the gate covers what the service mounts)"
+# CONFIG_SRC that is neither DEST nor where the service reads means .env points at a retired
+# install tree. install-config would then validate files this deployment does not use and say
+# nothing about the ones it does — which is exactly how a stale path survives unnoticed.
+if [[ -n "$LIVE_CONFIGS" && "$CONFIG_SRC" != "$DEST" && "$CONFIG_SRC" != "$LIVE_CONFIGS" && "$CONFIG_SRC" != "${SNAP:+$SNAP/configs}" ]]; then
+  warn "docker/.env sets CONFIG_SRC=$CONFIG_SRC, which is neither DEST ($DEST) nor the path"
+  warn "this stack's gateway reads ($LIVE_CONFIGS). The findings below are about files this"
+  warn "deployment does not use. Fix docker/.env: CONFIG_SRC=$DEST"
 fi
 
-# The certificate nginx serves comes from ITS mount, which on this host is also a swarm
-# volume under an un-traversable parent. Validate a snapshot taken through the nginx
-# container, for the same reason the config is snapshotted: the host path cannot be
-# stat'ed, and reporting that as "no TLS certificate" is a false negative on a live :443.
+# The certificate edge: same principle as the config. nginx's key is 0640 owned by uid 101
+# under /srv/ussdgw/nginx, whose parent is drwxr-x--- messagebus — so the operator cannot
+# stat it. Reading it through the nginx container is the honest way to check expiry and
+# chain; inferring "no certificate" from a stat the operator was not allowed to make is a
+# false negative on a live :443.
 LIVE_CERTS="$(certs_source)"; LIVE_CERTS="${LIVE_CERTS%/}"
 if ! stat -c %a "$LIVE_CERTS/fullchain.pem" >/dev/null 2>&1; then
   NCID="$(docker ps -q --filter "name=${STACK_NAME}_nginx" | head -1 || true)"
-  if [[ -n "$SNAP" && -n "$NCID" ]]; then
+  [[ -n "$SNAP" ]] || { SNAP="$(mktemp -d "${TMPDIR:-/tmp}/ussdgw-cfgsnap.XXXXXX")"; chmod 0755 "$SNAP"; }
+  if [[ -n "$NCID" ]]; then
     mkdir -p "$SNAP/certs"
     for cf in fullchain.pem privkey.pem; do
       docker cp "$NCID:/etc/nginx/certs/$cf" "$SNAP/certs/$cf" >/dev/null 2>&1 || continue
       chmod u+rw "$SNAP/certs/$cf"
     done
   fi
-  if [[ -f "${SNAP:-}/certs/fullchain.pem" ]]; then
-    info "staged the served certificate from nginx container ${NCID:0:12} ($LIVE_CERTS is not inspectable as $(id -un))"
+  if [[ -f "$SNAP/certs/fullchain.pem" ]]; then
+    info "certificate read through the nginx container ${NCID:0:12} ($LIVE_CERTS is not stat-able as $(id -un))"
     export CERT_DIR="$SNAP/certs"
-  elif [[ -n "$LIVE_CERTS" && "$LIVE_CERTS" != "${CERT_DIR:-}" ]]; then
-    warn "cannot inspect $LIVE_CERTS as $(id -un) and no nginx container to read it through —"
-    warn "the certificate check below is UNVERIFIED, not passed"
+  else
+    warn "cannot inspect $LIVE_CERTS as $(id -un), and no nginx container to read it through —"
+    warn "the certificate check below is UNVERIFIED, neither passed nor failed"
   fi
 else
-  info "certificate path $LIVE_CERTS is inspectable"
+  info "certificate: $LIVE_CERTS"
 fi
 
-./docker/install-config.sh --check
-# Seeding DEST only makes sense when DEST is what the service reads. When the live config
-# is a volume, /srv/ussdgw/configs is a second copy that nothing opens — seeding it is
-# work that looks like progress and changes nothing. Say that instead of doing it.
-if [[ "$CONFIG_SRC" != "$DEST" ]]; then
+# First deploy seeds, every later deploy validates only. install-config copies ONCE and
+# never overwrites: the admin UI writes SS7 stack JSON back into configs/, so a "refresh"
+# would destroy live edits.
+if [[ "$MODE_CHECK" == 1 || "$CONFIG_SRC" != "$DEST" ]]; then
+  # A snapshot is read-only, so there is nothing to seed: the gateway is running from that
+  # config, which means it is already seeded. Validated, never written.
+  ./docker/install-config.sh --check
+  [[ "$CONFIG_SRC" == "$DEST" ]] || info "config validated, not written (snapshot of the running gateway's config)"
+else
   if [[ "$MODE_FORCE_CONFIG" == 1 ]]; then
-    die "--force-config writes $DEST, but the gateway mounts $LIVE_CONFIGS — that copy would
-     change nothing. To change the live config, edit it where it is mounted (or fix the
-     stack's mounts to point at $DEST first, then re-run)."
+    warn "--force-config: backing up $DEST before overwriting"
+    ./docker/install-config.sh --force
   elif [[ ! -f "$DEST/application.properties" ]]; then
-    info "seeding $DEST for the record; the running gateway keeps using $LIVE_CONFIGS"
+    info "first deploy — seeding $DEST from $CONFIG_SRC"
+    ./docker/install-config.sh
   else
-    info "$DEST already populated — left untouched (and not what the gateway reads)"
+    ./docker/install-config.sh --check
   fi
 fi
 
