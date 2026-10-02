@@ -142,6 +142,14 @@ public final class MapUssdParentSbb implements Sbb, SleeEventHandler {
                 ? Optional.empty() : svc().store().byDialogId(dialogId);
         if (inbound.isPresent()) {
             VirtualSession s = inbound.get();
+            // S2 outcome for a late (bridged) push: dialogId == corr, never an MO
+            // dialog. Retry or fall back (P1-5) — the leg is already dead, so no
+            // endDialog/abort here.
+            if (s.state() == VirtualSessionState.PUSH_PENDING
+                    && dialogId.equals(s.correlationId())) {
+                return "s2-push-error error=" + name + " "
+                        + svc().bridge().onNiPushError(s.correlationId(), name);
+            }
             try {
                 svc().cdr().write(s.correlationId(), CdrPhase.FAILED, s.msisdn(), s.shortCode(),
                         "MAP_RETURN_ERROR",
@@ -248,15 +256,15 @@ public final class MapUssdParentSbb implements Sbb, SleeEventHandler {
             String msg = svc().config().asyncHardFailMessage();
             if (msg != null && !msg.isBlank()) return msg;
         } catch (Throwable ignored) { }
-        return "ማው ማውማው ማውማው ማውማው ማው";
+        return et.restlink.ussdgw.config.UssdConfigService.DEFAULT_HARD_FAIL_MESSAGE;
     }
 
     private void markDialogDead(String dialogId) {
         try {
-            svc().store().byDialogId(dialogId).ifPresent(s -> {
-                s.setDialogAlive(false);
-                svc().store().put(s);
-            });
+            // CAS-law: single-field only — a detached full put here would revert a
+            // concurrent bridge CAS (state) taken at the same dialog end.
+            svc().store().byDialogId(dialogId).ifPresent(s ->
+                    svc().store().setDialogAlive(s.correlationId(), false));
         } catch (Throwable ignored) { }
     }
 
@@ -303,6 +311,20 @@ public final class MapUssdParentSbb implements Sbb, SleeEventHandler {
         Optional<VirtualSession> inbound = svc().store().byDialogId(d.dialogId());
         if (inbound.isPresent()) {
             VirtualSession s = inbound.get();
+            // S2 outcome for a late (bridged) push: the push dialog id is the corr,
+            // never an MO dialog id. CLOSE/RELEASE = Notify delivered → retire;
+            // TIMEOUT retries, abort goes to fallback (P1-5 via the bridge).
+            if (s.state() == VirtualSessionState.PUSH_PENDING
+                    && d.dialogId() != null && d.dialogId().equals(s.correlationId())) {
+                boolean hardAbort = d.kind() == Ss7MapEvent.Kind.USER_ABORT
+                        || d.kind() == Ss7MapEvent.Kind.PROVIDER_ABORT
+                        || d.kind() == Ss7MapEvent.Kind.TIMEOUT;
+                if (!hardAbort) {
+                    return "s2-push-close " + svc().bridge().onNiPushDelivered(s.correlationId());
+                }
+                return "s2-push-abort "
+                        + svc().bridge().onNiPushError(s.correlationId(), d.kind().name());
+            }
             boolean hardAbort = d.kind() == Ss7MapEvent.Kind.USER_ABORT
                     || d.kind() == Ss7MapEvent.Kind.PROVIDER_ABORT
                     || d.kind() == Ss7MapEvent.Kind.TIMEOUT;
@@ -328,12 +350,12 @@ public final class MapUssdParentSbb implements Sbb, SleeEventHandler {
             return;
         }
         try {
-            svc().store().get(correlationId).ifPresent(s -> {
-                if (s.map2mapHopOutstanding()) {
-                    s.setMap2mapHopOutstanding(false);
-                    svc().store().put(s);
-                }
-            });
+            // CAS-law: single-field clear only — a detached full put here would revert a
+            // concurrent gate CAS (state) or abort (dialogAlive) taken at the deadline.
+            if (svc().store().get(correlationId)
+                    .map(VirtualSession::map2mapHopOutstanding).orElse(false)) {
+                svc().store().setMap2mapHopOutstanding(correlationId, false);
+            }
         } catch (Throwable ignored) { }
     }
 
@@ -631,11 +653,13 @@ public final class MapUssdParentSbb implements Sbb, SleeEventHandler {
         VirtualSession s = opt.get();
         if (msg instanceof UnstructuredSSNotifyResponse ntfy) {
             try {
-                s.setInvokeId(ntfy.getInvokeId());
+                // CAS-law: caller-owned invokeId singly — never a detached full put over a
+                // concurrent abort's dialogAlive=false.
+                svc().store().setInvokeId(s.correlationId(), ntfy.getInvokeId());
             } catch (Throwable ignored) { }
         }
-        s.setDialogAlive(true);
-        svc().store().put(s);
+        // Peer answered Notify RESULT: positive liveness evidence on this single field.
+        svc().store().setDialogAlive(s.correlationId(), true);
         if (!svc().niHttpPark().isHttpNi(s.correlationId())) {
             return "notify-ack-not-http-ni";
         }
@@ -661,7 +685,15 @@ public final class MapUssdParentSbb implements Sbb, SleeEventHandler {
 
     private String onUserContinue(String dialogId, UnstructuredSSResponse resp) {
         Optional<VirtualSession> opt = resolveNiSession(dialogId);
-        if (opt.isEmpty()) return "no-session";
+        if (opt.isEmpty()) {
+            // P1-2: the row is gone (TTL reclaim / restart) but the MAP dialog is
+            // still open and the UE is waiting. Never stay silent — end hard so the
+            // handset shows a redialable failure instead of hanging to network timeout.
+            try {
+                MapDialogHelper.replyAndEnd(ss7, dialogId, resp.getInvokeId(), hardFailMessage());
+            } catch (Throwable ignored) { }
+            return "no-session-hard-fail";
+        }
         VirtualSession s = opt.get();
         // jSS7 can deliver the same unstructuredSSRequest_Response twice (~ms apart).
         // Dual AS pull loses BPLUS dialog/language (Amharic root → English menu).

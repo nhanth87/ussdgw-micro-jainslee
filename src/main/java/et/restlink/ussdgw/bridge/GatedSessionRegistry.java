@@ -21,6 +21,8 @@ public class GatedSessionRegistry {
 
     /** Default retention for a gated hint (classic bridgeStateTtlSec-ish). */
     public static final long DEFAULT_TTL_MS = 180_000L;
+    /** Hard bound: hints are best-effort telemetry, never an unbounded leak (P1-9). */
+    public static final int MAX_ENTRIES = 10_000;
 
     private final ConcurrentHashMap<String, GatedSessionMeta> byCorr = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<String, String> msisdnScToCorr = new ConcurrentHashMap<>();
@@ -36,6 +38,12 @@ public class GatedSessionRegistry {
             return;
         }
         String corr = meta.correlationId().trim();
+        if (!byCorr.containsKey(corr) && byCorr.size() >= MAX_ENTRIES) {
+            sweepExpired();
+            if (!byCorr.containsKey(corr) && byCorr.size() >= MAX_ENTRIES) {
+                evictOne();
+            }
+        }
         GatedSessionMeta prior = byCorr.put(corr, meta);
         if (prior != null) {
             dropSecondary(prior);
@@ -96,6 +104,41 @@ public class GatedSessionRegistry {
         return byCorr.size();
     }
 
+    /**
+     * Drop expired hints across all three maps. Runs periodically from
+     * {@code BridgeGateScheduler.reclaimExpiredTx} (P1-9) — {@link #size()} alone
+     * has no production caller.
+     */
+    public void sweepExpired() {
+        long now = System.currentTimeMillis();
+        Iterator<Map.Entry<String, GatedSessionMeta>> it = byCorr.entrySet().iterator();
+        while (it.hasNext()) {
+            Map.Entry<String, GatedSessionMeta> e = it.next();
+            GatedSessionMeta m = e.getValue();
+            if (m.stampedAtMs() > 0 && (now - m.stampedAtMs()) > ttlMs) {
+                it.remove();
+                dropSecondary(m);
+            }
+        }
+    }
+
+    /** Last resort at the cap: drop one arbitrary entry (oldest-first is best-effort). */
+    private void evictOne() {
+        Iterator<Map.Entry<String, GatedSessionMeta>> it = byCorr.entrySet().iterator();
+        Map.Entry<String, GatedSessionMeta> oldest = null;
+        while (it.hasNext()) {
+            Map.Entry<String, GatedSessionMeta> e = it.next();
+            if (oldest == null || e.getValue().stampedAtMs() < oldest.getValue().stampedAtMs()) {
+                oldest = e;
+            }
+        }
+        if (oldest != null && byCorr.remove(oldest.getKey(), oldest.getValue())) {
+            dropSecondary(oldest.getValue());
+            LOG.warn("GatedSessionRegistry at cap {} — evicted oldest corr={}",
+                    MAX_ENTRIES, oldest.getKey());
+        }
+    }
+
     public void clear() {
         byCorr.clear();
         msisdnScToCorr.clear();
@@ -144,19 +187,6 @@ public class GatedSessionRegistry {
         }
         if (meta.jsessionId() != null && !meta.jsessionId().isBlank()) {
             jsessionToCorr.remove(meta.jsessionId().trim(), meta.correlationId());
-        }
-    }
-
-    private void sweepExpired() {
-        long now = System.currentTimeMillis();
-        Iterator<Map.Entry<String, GatedSessionMeta>> it = byCorr.entrySet().iterator();
-        while (it.hasNext()) {
-            Map.Entry<String, GatedSessionMeta> e = it.next();
-            GatedSessionMeta m = e.getValue();
-            if (m.stampedAtMs() > 0 && (now - m.stampedAtMs()) > ttlMs) {
-                it.remove();
-                dropSecondary(m);
-            }
         }
     }
 

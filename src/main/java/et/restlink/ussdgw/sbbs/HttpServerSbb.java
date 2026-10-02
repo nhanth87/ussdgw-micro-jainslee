@@ -30,6 +30,7 @@ import com.microjainslee.ra.httpserver.command.HttpServerCommand;
 import com.microjainslee.ra.httpserver.events.HttpWebRequestEvent;
 
 import java.nio.charset.StandardCharsets;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
@@ -63,6 +64,7 @@ public final class HttpServerSbb implements Sbb, SleeEventHandler {
         String detail;
         try {
             svc().niHttpPark().bindHttp(() -> http);
+            svc().niHttpPark().bindSs7(() -> ss7);
             detail = handle(req);
         } catch (Throwable t) {
             detail = "error=" + t.getClass().getSimpleName()
@@ -244,6 +246,9 @@ public final class HttpServerSbb implements Sbb, SleeEventHandler {
 
         ClassicNiHttpPark.ParkRecord rec = park.park(
                 req.getSessionId(), jsessionId, corr, format, networkId, false);
+        // P1-1: a Request menu waits on the human — park on the UI budget, not the
+        // 25s AS ceiling. The flag travels on the record (re-armed per AS hop).
+        rec.setRequestUi(!ingress.notifyOnly());
         routeNiPush(corr, msisdn, text, networkId, ingress.notifyOnly());
         if (!svc().config().mapEnabled()) {
             park.scheduleLabEcho(corr, text, LAB_ECHO_DELAY_MS);
@@ -272,33 +277,39 @@ public final class HttpServerSbb implements Sbb, SleeEventHandler {
 
         if (endOrEmpty) {
             // Classic pushToDevice: abort choice → abort; else close(prearrangedEnd).
-            if (abort) {
-                MapDialogHelper.abort(ss7, corr);
-            } else {
-                MapDialogHelper.niClose(ss7, corr, resolvePrearrangedEnd(body));
+            // CAS-law: win the terminal transition before the MAP close — a concurrent
+            // bridge claim/gate owns the dialog otherwise. Already-terminal rows were
+            // closed by their owner; do not close twice.
+            boolean owned = svc().store().compareAndTransitionAny(corr,
+                    List.of(VirtualSessionState.ACTIVE, VirtualSessionState.AWAITING_AS,
+                            VirtualSessionState.RESPONDING, VirtualSessionState.PUSH_PENDING,
+                            VirtualSessionState.S1_RELEASED),
+                    VirtualSessionState.COMPLETED).isPresent();
+            if (owned) {
+                if (abort) {
+                    MapDialogHelper.abort(ss7, corr);
+                } else {
+                    MapDialogHelper.niClose(ss7, corr, resolvePrearrangedEnd(body));
+                }
+                svc().store().setDialogAlive(corr, false);
+                svc().store().remove(corr);
             }
             park.unpark(corr);
-            svc().store().get(corr).ifPresent(s -> {
-                s.setState(VirtualSessionState.COMPLETED);
-                s.setDialogAlive(false);
-                svc().store().put(s);
-                svc().store().remove(corr);
-            });
             String endBody = svc().wireFacade().encodeNiResponse(
                     corr, text, abort ? AsAction.ABORT : AsAction.END, false, prior.format());
             replyEx(req.getSessionId(), 200, prior.format().contentType(), endBody, setCookie(jsession));
             return abort ? "ni-abort" : "ni-end";
         }
 
-        AsResponse asResp = new AsResponse(corr, corr, 1, text, AsAction.CONTINUE, false);
-        svc().store().get(corr).ifPresent(s -> {
-            s.setState(VirtualSessionState.AWAITING_AS);
-            svc().store().put(s);
-        });
-        svc().bridge().onAsResponse(asResp, -1);
+        // HTTP-NI AS continue carries no generation (classic XML has none): the session
+        // CAS in onNiAsContinue is the authority — never force AWAITING_AS + fake gen,
+        // or the reply drops as genMismatch and the digit claim leaks in-flight (P0-1).
+        boolean accepted = svc().bridge().onNiAsContinue(corr, text);
 
         ClassicNiHttpPark.ParkRecord rec = park.park(
                 req.getSessionId(), jsession, corr, prior.format(), prior.networkId(), false);
+        // P1-1: re-arm per AS hop with the op-appropriate budget (Request → UI timeout).
+        rec.setRequestUi(!ingress.notifyOnly());
         String msisdn = svc().store().get(corr).map(VirtualSession::msisdn).orElse("");
         Optional<VirtualSession> sess = svc().store().get(corr);
         boolean reuse = sess.isPresent()
@@ -318,7 +329,8 @@ public final class HttpServerSbb implements Sbb, SleeEventHandler {
         } else {
             park.scheduleAdaptiveGate(rec);
         }
-        return reuse ? "ni-continue-reuse" : "ni-continue-parked";
+        String done = reuse ? "ni-continue-reuse" : "ni-continue-parked";
+        return accepted ? done : done + " dup";
     }
 
     private void routeNiPush(String corr, String msisdn, String text, int networkId,

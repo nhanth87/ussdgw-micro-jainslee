@@ -88,4 +88,45 @@ public final class UssdEncodingPolicy {
             }
         }
     }
+
+    /**
+     * P2-4: alphabet-aware truncation. Returns text truncated to fit USSD limits:
+     * GSM-7 = 182 septets (some chars = 2 septets), UCS-2 = 80 chars (surrogate-safe),
+     * UCS-8 = 160 octets. When alphabet is AUTO, resolves first then truncates.
+     */
+    public static String truncateToFit(String text, UssdAlphabet alphabet) {
+        if (text == null || text.isEmpty()) return text;
+        Decision d = resolve(text, alphabet);
+        if (d.alphabet().isUcs2Family()) {
+            // UCS-2: 80 chars max. Surrogate-safe: never split a surrogate pair.
+            if (text.length() <= USSD_MAX_UCS2_CHARS) return text;
+            int end = USSD_MAX_UCS2_CHARS;
+            // If we're in the middle of a surrogate pair, back up one.
+            if (end > 0 && Character.isHighSurrogate(text.charAt(end - 1))) {
+                end--;
+            }
+            return text.substring(0, end);
+        }
+        if (d.alphabet() == UssdAlphabet.UCS8) {
+            // UCS-8: 160 octets max (ISO-8859-1).
+            byte[] raw = text.getBytes(java.nio.charset.StandardCharsets.ISO_8859_1);
+            if (raw.length <= USSD_MAX_OCTETS) return text;
+            return new String(raw, 0, USSD_MAX_OCTETS, java.nio.charset.StandardCharsets.ISO_8859_1);
+        }
+        // GSM-7: 182 septets max. Some chars (extension table) = 2 septets.
+        int septets = Gsm7Alphabet.septetLength(text);
+        if (septets >= 0 && septets <= USSD_MAX_GSM7_SEPTETS) return text;
+        // Walk char-by-char counting septets; stop when we'd exceed the limit.
+        StringBuilder sb = new StringBuilder();
+        int count = 0;
+        for (int i = 0; i < text.length(); i++) {
+            char c = text.charAt(i);
+            int s = Gsm7Alphabet.septetsFor(c);
+            if (s < 0) break; // non-GSM char; stop here
+            if (count + s > USSD_MAX_GSM7_SEPTETS) break;
+            sb.append(c);
+            count += s;
+        }
+        return sb.toString();
+    }
 }

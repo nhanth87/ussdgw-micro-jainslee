@@ -91,7 +91,17 @@ public final class GrpcClientSbb implements Sbb, SleeEventHandler {
             svc().saga().onAsPullFailed(corr, "NO_GRPC_RA");
             return "no-ra";
         }
-        if (svc().asPullState().open(corr, target, System.currentTimeMillis()).isEmpty()) {
+        // P2-1: capture the session's current generation at send time (not the request's generation,
+        // which may be stale). A slow response stamped to its own turn loses the claim once the
+        // session moved on, instead of being applied to the next turn.
+        int sessionGen = 0;
+        try {
+            sessionGen = svc().store().get(corr).map(VirtualSession::generation).orElse(0);
+        } catch (RuntimeException ignored) {
+            // store not available (test stub) or session not found — fall back to 0
+        }
+        if (svc().asPullState().open(corr, target, System.currentTimeMillis(),
+                sessionGen).isEmpty()) {
             svc().asPull().recordFailure(circuitKey);
             svc().saga().onAsPullFailed(corr, "AS_PULL_STATE_SATURATED");
             return "state-saturated corr=" + corr;
@@ -145,10 +155,15 @@ public final class GrpcClientSbb implements Sbb, SleeEventHandler {
         }
         AsResponse resp = AsWireCodec.decodeResponse(done.payload(), corr);
         int wireGen = resp.generation();
-        // Classic / JSON omit or hardcode gen=1; after MS digit session may be ≥2 (Sip parity).
-        Optional<VirtualSession> sess = svc().store().get(corr);
-        if (sess.isPresent()) {
-            resp = resp.stampedToSessionGeneration(sess.get().generation());
+        // P2-1 stamp rule (see HttpClientSbb): trust wire gen > 1, else send-time turn.
+        if (wireGen <= 1) {
+            int pullGen = state == null ? 0 : state.generation();
+            // Classic / JSON omit or hardcode gen=1; after MS digit session may be ≥2 (Sip parity).
+            Optional<VirtualSession> sess = svc().store().get(corr);
+            int stampFrom = pullGen > 0 ? pullGen : sess.map(VirtualSession::generation).orElse(0);
+            if (stampFrom > 0) {
+                resp = resp.stampedToSessionGeneration(stampFrom);
+            }
         }
         svc().bridge().onAsResponse(resp, latency);
         String action = resp.action() == null ? "?" : resp.action().name();

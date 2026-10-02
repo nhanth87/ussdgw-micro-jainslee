@@ -49,6 +49,12 @@ class MapUssdParentNotifyAckTest {
                         .filter(s -> dialogId != null && dialogId.equals(s.dialogId()))
                         .findFirst();
             }
+            @Override public void setInvokeId(String corr, long invokeId) {
+                Optional.ofNullable(sessions.get(corr)).ifPresent(s -> s.setInvokeId(invokeId));
+            }
+            @Override public void setDialogAlive(String corr, boolean alive) {
+                Optional.ofNullable(sessions.get(corr)).ifPresent(s -> s.setDialogAlive(alive));
+            }
         };
 
         park = new ClassicNiHttpPark();

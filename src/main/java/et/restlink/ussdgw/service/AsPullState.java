@@ -8,9 +8,11 @@ package et.restlink.ussdgw.service;
  * @param startedAtMs   submit wall clock of the current attempt; the EWMA latency baseline
  * @param attempt       retries already spent (0 on first submit)
  * @param expiresAtMs   TTL horizon — an RA that never answers cannot pin this entry
+ * @param generation    session generation when the pull was sent (P2-1 ABA guard;
+ *                      0 = unknown)
  */
 public record AsPullState(String correlationId, AsPullTarget target,
-                          long startedAtMs, int attempt, long expiresAtMs) {
+                          long startedAtMs, int attempt, long expiresAtMs, int generation) {
 
     public AsPullState {
         if (correlationId == null || correlationId.isBlank()) {
@@ -23,7 +25,8 @@ public record AsPullState(String correlationId, AsPullTarget target,
 
     /** Re-stamped for a retry: attempt+1, fresh latency baseline, fresh TTL. */
     AsPullState retriedAt(long nowMs, long ttlMs) {
-        return new AsPullState(correlationId, target, nowMs, attempt + 1, nowMs + ttlMs);
+        return new AsPullState(correlationId, target, nowMs, attempt + 1, nowMs + ttlMs,
+                generation);
     }
 
     /**

@@ -529,6 +529,11 @@ class AsPullBeginContinueEndAndGateTest {
 
         @Override
         public void requestNiPush(VirtualSession session, String text) {
+            requestNiPush(session, text, false);
+        }
+
+        @Override
+        public void requestNiPush(VirtualSession session, String text, boolean notifyOnly) {
             pushes++;
         }
     }
