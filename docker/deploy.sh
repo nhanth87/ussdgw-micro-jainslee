@@ -244,8 +244,18 @@ if [[ "$MODE_BUILD" == 1 ]]; then
     [[ -f "$TESTLOG" ]] || die "RUN_TESTS=1 but $TESTLOG does not exist — the tests never ran"
     COUNTS="$(grep -E '^\[INFO\] Tests run:|^\[WARNING\] Tests run:|^Tests run:' "$TESTLOG" | tail -1 || true)"
     info "test evidence: ${COUNTS:-<no summary line found>} ($TESTLOG)"
-    if grep -qE 'Tests run: 0,' "$TESTLOG"; then
-      die "$TESTLOG reports 'Tests run: 0' — that looks green and proves nothing"
+    # Fail only on the per-module SUMMARY count, never on a per-class line.
+    # JUnit5 @Nested containers (e.g. Map2MapAsWireContractExamplesTest, whose
+    # tests all live in @Nested classes) legitimately report
+    # "Tests run: 0 ... in <OuterClass>" while the module summary says 669.
+    # Matching any 'Tests run: 0,' line mistook that container row for "no tests
+    # ran" and killed a green 669-test build on the Digicom host.
+    TOTAL="$(echo "$COUNTS" | grep -oE 'Tests run: [0-9]+' | grep -oE '[0-9]+' || echo 0)"
+    if [[ "${TOTAL:-0}" == 0 ]]; then
+      die "$TESTLOG reports 'Tests run: 0' in its summary — that looks green and proves nothing"
+    fi
+    if echo "$COUNTS" | grep -qE 'Failures: [1-9]|Errors: [1-9]'; then
+      die "$TESTLOG summary reports failures/errors: $COUNTS"
     fi
   else
     warn "--skip-tests: NO test evidence for this build. $TESTLOG is from a previous run or absent."
