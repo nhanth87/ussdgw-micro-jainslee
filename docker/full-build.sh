@@ -67,6 +67,17 @@ for arg in "$@"; do
   esac
 done
 
+# --- compute TAG before loading .env, so the tag always drives the deploy --
+GIT_SHA="$(git rev-parse --short HEAD)"
+DIRTY=""
+if [[ -n "$(git status --porcelain 2>/dev/null || true)" ]]; then
+  DIRTY="-dirty"
+  [[ "$ALLOW_DIRTY" == 1 || "$MODE_BUILD" == 0 ]] \
+    || die "the working tree is uncommitted, so a tag of $GIT_SHA would not identify what was built.
+     Commit first, or pass --allow-dirty (the tag then becomes ${GIT_SHA}-dirty)."
+fi
+TAG="${TAG:-${GIT_SHA}${DIRTY}}"
+
 # --- load .env (site-specific), created from the example on first run -------------
 ENV_FILE="$HERE/.env"
 if [[ ! -f "$ENV_FILE" ]]; then
@@ -92,26 +103,21 @@ if [[ -n "${USSD_ADMIN_API_KEY:-}" && "$USSD_ADMIN_API_KEY" == "ussd-admin" ]]; 
   info "  placeholder, not this deployment's key (the key in force is in ussdgw_admin_key)"
 fi
 
-STACK_NAME="${STACK_NAME:-ussdgw}"
-DATA_ROOT="${DATA_ROOT:-/srv/ussdgw}"
-BUILD_ROOT="${BUILD_ROOT:-/srv/ussdgw-build}"
-SOURCE_ROOT="${SOURCE_ROOT:-$BUILD_ROOT/src}"
-OUT="${OUT:-$BUILD_ROOT/out}"
-CONFIG_SRC="${CONFIG_SRC:-$DATA_ROOT/configs}"
-DEST="${DEST:-$DATA_ROOT/configs}"
-DEPLOY_PROFILE="${DEPLOY_PROFILE:-test}"
-SOURCE_MODE="${SOURCE_MODE:-local}"
-READY_TIMEOUT="${READY_TIMEOUT:-300}"
-GIT_SHA="$(git rev-parse --short HEAD)"
-DIRTY=""
-if [[ -n "$(git status --porcelain 2>/dev/null || true)" ]]; then
-  DIRTY="-dirty"
-  [[ "$ALLOW_DIRTY" == 1 || "$MODE_BUILD" == 0 ]] \
-    || die "the working tree is uncommitted, so a tag of $GIT_SHA would not identify what was built.
-     Commit first, or pass --allow-dirty (the tag then becomes ${GIT_SHA}-dirty)."
+# Pin the three images to the tag just computed, in the shell AND in .env,
+# so docker stack deploy (which reads .env from the repo root, not docker/)
+# cannot resolve `latest` to something older. Compose interpolation prefers
+# the exported environment over the .env file; rewriting .env keeps a later
+# manual `docker stack deploy` on the same artifact.
+USSDGW_IMAGE="ussdgw:$TAG"; NGINX_IMAGE="ussdgw-nginx:$TAG"; POSTGRES_IMAGE="ussdgw-postgres:$TAG"
+export USSDGW_IMAGE NGINX_IMAGE POSTGRES_IMAGE
+if [[ -w "$ENV_FILE" && "$MODE_CHECK" == 0 ]]; then
+  tmp="$(mktemp)"
+  sed -e "s|^USSDGW_IMAGE=.*|USSDGW_IMAGE=$USSDGW_IMAGE|" \
+      -e "s|^NGINX_IMAGE=.*|NGINX_IMAGE=$NGINX_IMAGE|" \
+      -e "s|^POSTGRES_IMAGE=.*|POSTGRES_IMAGE=$POSTGRES_IMAGE|" "$ENV_FILE" > "$tmp"
+  cat "$tmp" > "$ENV_FILE"; rm -f "$tmp"
+  info "$ENV_FILE pinned to :$TAG"
 fi
-TAG="${TAG:-${GIT_SHA}${DIRTY}}"
-export TAG
 
 # ==================================================================================
 step "0/6 preflight — host, swarm, kernel SCTP, directories"
@@ -533,20 +539,8 @@ make_secret ussdgw_admin_key
 # ==================================================================================
 step "5/6 deploy stack '$STACK_NAME' (profile $DEPLOY_PROFILE, images :$TAG)"
 # ==================================================================================
-# Pin the three images to the tag just built, in the shell AND in .env, so the stack
-# cannot resolve `latest` to something older. Compose interpolation prefers the
-# exported environment over the .env file; rewriting .env keeps a later manual
-# `docker stack deploy` on the same artifact.
-USSDGW_IMAGE="ussdgw:$TAG"; NGINX_IMAGE="ussdgw-nginx:$TAG"; POSTGRES_IMAGE="ussdgw-postgres:$TAG"
-export USSDGW_IMAGE NGINX_IMAGE POSTGRES_IMAGE
-if [[ -w "$ENV_FILE" && "$MODE_CHECK" == 0 ]]; then
-  tmp="$(mktemp)"
-  sed -e "s|^USSDGW_IMAGE=.*|USSDGW_IMAGE=$USSDGW_IMAGE|" \
-      -e "s|^NGINX_IMAGE=.*|NGINX_IMAGE=$NGINX_IMAGE|" \
-      -e "s|^POSTGRES_IMAGE=.*|POSTGRES_IMAGE=$POSTGRES_IMAGE|" "$ENV_FILE" > "$tmp"
-  cat "$tmp" > "$ENV_FILE"; rm -f "$tmp"
-  info "$ENV_FILE pinned to :$TAG"
-fi
+# Image vars already pinned + exported before .env load (step 0).
+# Rewriting .env keeps a later manual `docker stack deploy` on the same artifact.
 
 if [[ "$MODE_CHECK" == 1 ]]; then
   info "dry run: would run  docker stack deploy -c ./docker/stack.yml -c $OVERLAY $STACK_NAME"
@@ -554,7 +548,7 @@ if [[ "$MODE_CHECK" == 1 ]]; then
     docker image inspect "$img" >/dev/null 2>&1 && info "  image present: $img" || warn "  image MISSING: $img"
   done
 else
-  docker stack deploy -c ./docker/stack.yml -c "$OVERLAY" "$STACK_NAME"
+  docker stack deploy --resolve-image always -c ./docker/stack.yml -c "$OVERLAY" "$STACK_NAME"
 fi
 
 # ==================================================================================
