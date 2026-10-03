@@ -46,8 +46,11 @@ die() { echo "build-images: ERROR: $*" >&2; exit 1; }
 
 echo "build-images: tag = $TAG"
 
-docker build -f docker/ussdgw/Dockerfile  -t "ussdgw:$TAG" .
-ok "ussdgw:$TAG"
+# All three images come from docker/docker-bake.hcl — one file, one tag, one
+# command. The probes below are why this script still exists: bake builds,
+# this script proves each image before the stack may reference it.
+TAG="$TAG" docker buildx bake -f docker/docker-bake.hcl
+ok "ussdgw:$TAG + ussdgw-nginx:$TAG + ussdgw-postgres:$TAG"
 
 # --- fail closed on the app image's liveness probe -------------------------------
 # Run the probe in the built image with NOTHING listening on 8088. It must refuse.
@@ -79,11 +82,7 @@ grep -q '^jdk\.sctp@' <<<"$jmods" \
        open a socket. Add jdk.sctp to the jlink module list in docker/ussdgw/Dockerfile."
 ok "JRE carries $(grep -o '^jdk\.sctp@[^ ]*' <<<"$jmods") — NETTY_KERNEL can bind kernel SCTP"
 
-docker build -f docker/nginx/Dockerfile   -t "ussdgw-nginx:$TAG" .
-ok "ussdgw-nginx:$TAG"
-
-docker build -f docker/postgres/Dockerfile -t "ussdgw-postgres:$TAG" .
-ok "ussdgw-postgres:$TAG"
+# (nginx + postgres images were built by the bake call above alongside ussdgw.)
 
 # --- fail closed on the postgres image ------------------------------------------
 # Do not trust that the build did what the Dockerfile says. Ask the image.
