@@ -590,8 +590,12 @@ info "container $CID"
 
 # Ready == :8088 answers. systemd/swarm "running" is not ready: Flyway and the profile
 # tables run before the port binds, which is why start_period is 120s.
+# ANY HTTP code counts as answering — including 401. /admin/status.json requires
+# X-USSD-Admin-Key, so an unauthenticated curl gets 401; with `curl -f` that used
+# to look like "not up" and the loop below spun until READY_TIMEOUT on a healthy
+# gateway. 000 (no TCP) is the only "not answering".
 deadline=$(( $(date +%s) + READY_TIMEOUT ))
-until curl -fsS -o /dev/null "http://127.0.0.1:8088/admin/status.json" 2>/dev/null; do
+until [[ "$(curl -sS -o /dev/null -w '%{http_code}' "http://127.0.0.1:8088/admin/status.json" 2>/dev/null)" != 000 ]]; do
   (( $(date +%s) < deadline )) || {
     echo "--- last 60 log lines ---" >&2
     docker logs --tail 60 "$CID" >&2 2>&1 || true
