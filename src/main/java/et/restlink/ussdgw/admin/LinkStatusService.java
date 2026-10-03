@@ -43,6 +43,15 @@ public class LinkStatusService {
         ss7AppliedDetail = "stopped";
     }
 
+    /**
+     * True after an operator Stop until the next bind. The SS7 watchdog must
+     * never re-wire a stack the operator stopped on purpose — a Stop that
+     * heals itself is not a Stop.
+     */
+    public boolean isSs7IntentionallyStopped() {
+        return ss7IntentionallyStopped;
+    }
+
     public void setSs7AppliedDetail(String detail) {
         this.ss7AppliedDetail = detail == null ? "" : detail;
     }
