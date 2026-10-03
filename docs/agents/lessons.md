@@ -10,6 +10,9 @@ Short memory for Digicom footguns. Prefer this + OTA peer [`lessons.md`](../../.
 
 | Mistake | Rule | Detail |
 |---------|------|--------|
+| **Docker jlink JRE missing `jdk.compiler`** | Diameter RA needs `javax.tools.JavaFileManager` at `raActive()` — even with `ussd.diameter.enabled=false`. jlink `--add-modules` must include `jdk.compiler` alongside `jdk.jsobject`. | § 2026-10-03 · `docker/ussdgw/Dockerfile` |
+| **SS7 watchdog re-wire loop** | `Ss7Watchdog` aggressive re-wire (180s) interrupts M3UA FSM recovery from duplicate peer messages → stuck PENDING. Disable: `ussd.ss7.watchdog.enabled=false`. | § 2026-10-03 · `Ss7Watchdog` |
+| **Memory congestion level 2** | JVM heap 4GB tight for SS7+Diameter+HTTP. Keep `-Xms2g -Xmx4g` on shared hosts; monitor `memory.heap.usedPercent`; do not co-run OTA 8G + USSDGW 8G. | § 2026-10-03 · `run-dist.sh` |
 | Treating SIP listen as AS trunk UP | Trunks are peer+URI rows; NI requires matched **enabled** trunk. Soft free-text → pull-reply first (`SipUssiSbb`); SIP park via `AsPullRouter.armSipPullBridge`. From-host ≠ digest auth. | [sip-trunk.md](../as-contract/sip-trunk.md) |
 | Assuming V6 `short_code` UNIQUE alone covers app-user multi-rule | Do not assume V6 alone — use **V8** composite UNIQUE `(short_code, app_username)`; unbound `app_username` is stored as `''`, not NULL. | `V8__short_code_app_username_unique.sql` |
 | Committing Digicom **carrier** SS7 / props to **nhanth87** | **Keep** Digicom seeds for Digicom deploys; **dual-push** with [`./build/push-dual.sh`](../../build/push-dual.sh): `main`→`origin` = lab only (`ss7-lab.json`); `digicom`→`digicom-et/main` = lab + `ss7-digicom-balance.json` / `application-digicom.properties`. Never force-add Digicom paths onto public `main`. Host `configs/` still operator SoT for live secrets. | root [AGENTS.md](../../AGENTS.md) § dual push |
@@ -34,7 +37,10 @@ Short memory for Digicom footguns. Prefer this + OTA peer [`lessons.md`](../../.
 | Debugging against a **stale** dist / old PID | After package: one `quarkus-run.jar` PID; jar **mtime** vs source; `jar tf` / `strings` for new symbols (`GATE_ARMED`, `UssdUserProfile`, …); wait for bootstrap. Green `mvn test` ≠ Digicom. | [skills.md](skills.md) § Dist · Digicom redeploy |
 | **Green unit tests / new test class → claim Digicom fixed** (operator still sees old UI/bug) | **Forbidden (SIẾT).** `mvn test` never proves remote runtime. Digicom jar/html can lag days behind green laptop tests (classic: CDR pipe dump + no `CdrServiceStatuses` while tests pass). Must complete the full gate: package-dist → rsync jars/`lib`/`quarkus`/`app/html` only → restart → wait `:8088` status.json **200** → prove **jar tf / mtime / NewClass** + running PID classpath on Digicom **and** live hit on the broken `/admin/...` (status.json alone ≠ UI/API prove). Saying “fixed” / “redeployed OK” / “done” after tests-only or package-without-host-prove = **agent failure**. | root [AGENTS.md](../../AGENTS.md) § Prove the artifact · [skills.md](skills.md) § Digicom |
 | Trusting **`systemctl` active** right after Digicom restart | systemd may show **active** before Quarkus binds **`:8088`**. After restart: wait ~25s (or journal bootstrap) then **one-shot** curl `--connect-timeout 3 --max-time 10` to `/admin/status.json` — **not** a 60× poll loop. Exact redeploy: [skills.md](skills.md) § Digicom compile + redeploy. | [skills.md](skills.md) § Digicom compile + redeploy |
-| **`flock -n` + `KillMode=mixed`** on `ussdgw.service` restart | Stop must clear the cgroup (`KillMode=control-group`) and **wait** for `/tmp/ussdgw.lock` (`flock --timeout 45`, never `-n`). Else SIGKILL/java linger → immediate ExecStart exit 1 → RestartSec=5 double-start; `:8088` down in the window. Unit: `build/systemd/ussdgw.service` + `install-on-digicom.sh`. | `build/systemd/ussdgw.service` |
+| **`flock -n` + `KillMode=mixed`** on `ussdgw.service` restart | Stop must clear the cgroup (`KillMode=control-group`) and **wait** for the lock (`flock --timeout 45`, never `-n`). Else SIGKILL/java linger → immediate ExecStart exit 1 → RestartSec=5 double-start; `:8088` down in the window. Unit: `build/systemd/ussdgw.service` + `install-on-digicom.sh`. | `build/systemd/ussdgw.service` |
+| **Deleting the `flock`** because "we want 2 nodes now" | The lock is a **restart-race guard, not a host-wide single-instance guard**. Removing it re-creates the proven Digicom crash-loop above. ADR 0007 P1 fixed it correctly: lock path is **namespaced per node** (`/tmp/ussdgw-%i.lock`), so N nodes coexist and each still self-protects against double-start. | `build/systemd/ussdgw@.service` |
+| Enabling `ussdgw.service` **and** `ussdgw@node1` together | Harmless by design — both take `/tmp/ussdgw-node1.lock`, so the second start fails fast instead of double-binding `:8088`. Prefer `ussdgw.service` for node1, `ussdgw@<id>` for every extra node. | `build/systemd/install-on-digicom.sh` |
+| Deriving the node id from `identityHashCode` / a random UUID | The cluster node id is the identity the **dialog-lease boot-epoch fence** keys on; a value that changes per restart breaks ownership reclaim and makes leases untraceable in logs. Set `USSD_NODE_ID` (unit) + `microjainslee.container.cluster-node-id` (config). | ADR 0007 D3 |
 | Expecting **`ussdUser`** to survive restart / cross-JVM | ProfileFacility table `ussdUser` (PK=MSISDN) is **JVM-local** until clustering — not Digicom JDBC (same family as `ussdTx`). | [map2map.md](../as-contract/map2map.md) § ussdUser |
 | Using `ussdUser` menu fields as AS/BPLUS session resurrect | Menu snapshot (`lastDigit`/`lastGeneration`/`lastMenuAsUssd`) is ops + EWMA seed only. In-flight = **`ussdTx`** corr; never reuse `lastCorrId` for AS localId. | [map2map.md](../as-contract/map2map.md) § ussdUser |
 | Trusting **`mvn -q test`** exit 0 alone | Read `Tests run:` — zero tests can look green. | OTA lessons |
@@ -720,6 +726,110 @@ climbing (611 and counting — bridge armed at boot, no admin Start); container 
 (`cdr.file.recentEvents = 0`). The candidate is the loopback lab link
 `L3-LAB-SIM 127.0.0.1:8023 ← 127.0.0.1:8024` with `tools/ss7-simulator` — **never**
 inject MAP toward the live carrier peers to make a metric move.
+
+## 2026-10-03 — Docker jlink JRE missing jdk.compiler + SS7 watchdog re-wire loop
+
+### Docker jlink JRE missing `jdk.compiler` — DiameterStackImpl crash
+
+**Symptom:** container exits 1 immediately after start with `NoClassDefFoundError: javax/tools/JavaFileManager$Location`. Stack trace points to `DiameterStackImpl.<init>` → `ra-diameter` → `DiameterResourceAdaptor.raActive()`. Happens even with `ussd.diameter.enabled=false` because the RA still initializes during boot.
+
+**Exact mechanism (proven in Docker logs):**
+```
+Caused by: java.lang.NoClassDefFoundError: javax/tools/JavaFileManager$Location
+  at com.mobius.software.telco.protocols.diameter.impl.DiameterStackImpl.<init>(DiameterStackImpl.java:239)
+  at com.microjainslee.ra.diameter.transport.CorsacDiameterTransport.start(CorsacDiameterTransport.java:111)
+  at com.microjainslee.ra.diameter.DiameterResourceAdaptor.raActive(DiameterResourceAdaptor.java:164)
+```
+
+`DiameterStackImpl` uses `javax.tools.JavaFileManager` (from `jdk.compiler` module) to compile Diameter AVP templates at runtime. The jlink JRE in `docker/ussdgw/Dockerfile` was missing `jdk.compiler` from `--add-modules`, so the class was absent at runtime.
+
+**Required jlink modules (complete list):**
+```
+java.base,java.logging,java.sql,java.naming,java.management,java.xml,java.desktop,
+java.instrument,java.net.http,java.rmi,java.security.jgss,java.security.sasl,jdk.unsupported,
+jdk.crypto.ec,jdk.crypto.cryptoki,jdk.management,jdk.sctp,jdk.localedata,jdk.jfr,jdk.zipfs,
+jdk.jsobject,jdk.compiler  ← ADDED 2026-10-03
+```
+
+**What NOT to do:**
+- Assume `jdk.jsobject` alone is enough (it is not — `jdk.compiler` is separate)
+- Disable Diameter RA to work around the crash (the RA still initializes even when `enabled=false`)
+- Rebuild without testing `raActive()` path (the crash happens at RA activation, not compile time)
+
+**Correct fix:**
+- Add `jdk.compiler` to `--add-modules` in `docker/ussdgw/Dockerfile`
+- Rebuild image: `docker build -f docker/ussdgw/Dockerfile -t ussdgw:<tag> .`
+- Verify: `docker run --rm --entrypoint /opt/jre/bin/java ussdgw:<tag> --list-modules | grep jdk.compiler`
+- Prove: container boots, `ss7.live=true`, no `NoClassDefFoundError` in logs
+
+**Verification probes (run after build):**
+1. `docker run --rm --entrypoint /opt/jre/bin/java ussdgw:<tag> --list-modules | grep jdk.compiler` → must show `jdk.compiler@25.x`
+2. `docker run --rm --entrypoint /usr/local/bin/ussdgw-healthcheck.sh ussdgw:<tag>` → must **fail** (proves probe works)
+3. Container boot → `ss7.live=true` + no `NoClassDefFoundError` in logs
+
+**Commit:** `e9c0c01 fix(docker): add jdk.compiler to jlink JRE modules` on digicom-et
+
+### SS7 watchdog re-wire loop — M3UA FSM stuck PENDING
+
+**Symptom:** `ss7.live=false` despite SCTP associations ESTABLISHED. Logs show repeated `Ss7Watchdog: M3UA route down, watching (threshold 180s)` → `re-wiring SS7` → `route back` → cycle repeats every 3-5 minutes. M3UA ASP state machine stuck in `PENDING` state, never transitions to `ACTIVE`.
+
+**Exact mechanism (proven in Docker logs):**
+```
+16:17:57 ERROR  Transition=ntfyaspending. FSM.name=AS-BP_PEER old state=PENDING, current state=PENDING
+16:17:59 WARN   PENDING timed out for As=AS-BP
+16:20:56 WARN   ss7-watchdog: M3UA route down, watching (threshold 180s)
+16:24:26 WARN   ss7-watchdog: route down 209s, re-wiring SS7 (attempt 1, cooldown 600s)
+16:24:56 INFO   ss7-watchdog: route back (was down since 2026-10-03T13:20:56Z)
+```
+
+Carrier peer sends duplicate ASP Active / CommUp messages → jSS7 M3UA FSM throws `UnknownTransitionException` (transition from ACTIVE to ACTIVE) → ASP state machine confused → peer AS stuck in `PENDING` → `Ss7Watchdog` detects route down → re-wires SS7 → cycle repeats.
+
+**Root cause:** `Ss7Watchdog` re-wire logic interferes with M3UA FSM recovery. When peer sends duplicate messages (normal during SCTP re-establishment), the FSM logs warnings but would eventually recover. The watchdog's aggressive re-wire (every 180s) interrupts this recovery and creates a loop.
+
+**What NOT to do:**
+- Assume `ss7.live=false` means SCTP is down (check `/proc/net/sctp/assocs` first)
+- Restart container repeatedly (watchdog will re-create the loop)
+- Blame carrier peer (duplicate messages are normal SCTP behavior)
+
+**Correct fix:**
+- Disable watchdog: `ussd.ss7.watchdog.enabled=false` in `configs/application.properties`
+- Restart container once (clean slate)
+- Verify: `ss7.live=true`, no `ss7-watchdog` entries in logs, `scheduler.gateTicks` climbing
+
+**When to re-enable watchdog:**
+- Only if SS7 genuinely unstable (peer flapping, network issues)
+- Increase threshold: `ussd.ss7.watchdog.threshold-ms=600000` (10 min instead of 3 min)
+- Monitor logs for `re-wiring SS7` frequency (should be rare, not every 3 min)
+
+**Prove:** after restart, wait 2-3 minutes, check:
+- `ss7.live=true`
+- `scheduler.gateTicks` climbing (e.g., 64 → 222 → 3243)
+- No `ss7-watchdog` entries in logs
+- SCTP associations ESTABLISHED (`/proc/net/sctp/assocs`)
+
+### Memory congestion level 2 — JVM heap pressure
+
+**Symptom:** `status.json` shows `memory.congestion.level=2`, `memory.heap.usedPercent=89.9`. Container memory usage climbs to 4-5GB/6GB. After restart, memory drops to 2-3GB/6GB (38-50%).
+
+**Root cause:** JVM heap 4GB (`-Xms2g -Xmx4g`) is tight for USSDGW with SS7 stack + Diameter RA + HTTP/gRPC workers. Memory congestion level 2 means heap usage > 85%, which triggers GC pressure and can cause latency spikes.
+
+**What NOT to do:**
+- Increase heap to 8GB without checking host capacity (shared host may have 15GB total)
+- Enable `AlwaysPreTouch` without `USSD_ALWAYS_PRETOUCH=1` (wastes memory at startup)
+- Co-run OTA 8GB + USSDGW 8GB on same host (OOM killer)
+
+**Correct fix:**
+- Keep default `-Xms2g -Xmx4g` for shared hosts
+- Monitor `memory.heap.usedPercent` in `status.json`
+- If consistently > 80%, consider:
+  - Reduce HTTP worker pool: `quarkus.http.worker.max-threads=256` (default 512)
+  - Reduce CDR queue size: `ussd.cdr.queue-capacity=50000` (default 100000)
+  - Move to dedicated host with more RAM
+
+**Prove:** after restart, check:
+- `memory.heap.usedPercent` < 70%
+- `memory.congestion.level=0` or `1`
+- Container memory usage stable (not climbing)
 
 ## Synced from workspace (2026-09-18)
 Cross-project footguns added to workspace [`docs/agents/lessons.md`](../../../../../docs/agents/lessons.md) from the OTA P1 SMSC-GW build — **do not paste, link**: Quarkus `@ConfigProperty(defaultValue="")` boot-breaker → `Optional<String>`; Claude Code worktree-agents branch from a stale base under uncommitted WIP (commit clean base / salvage-and-reapply); **parallel subagents share one session rate-limit** (prefer sequential in-tree); auto-mode classifier blocks remote-shell/prod-DB/inline-credential writes; Iran L2TP ship = **sequential** rsync (parallel deadlocks).

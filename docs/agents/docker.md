@@ -89,6 +89,36 @@ Building the module needs no DPDK NIC — the native sidecar is behind the `exec
 
 ---
 
+## jlink JRE must include `jdk.compiler` (2026-10-03)
+
+`docker/ussdgw/Dockerfile` builds a custom JRE with `jlink --add-modules=…`. The list
+**must include `jdk.compiler`** — Diameter RA's `DiameterStackImpl` uses
+`javax.tools.JavaFileManager` at runtime to compile AVP templates, even when
+`ussd.diameter.enabled=false` (the RA still initializes during boot).
+
+**Symptom:** container exits 1 immediately with:
+```
+NoClassDefFoundError: javax/tools/JavaFileManager$Location
+  at com.mobius.software.telco.protocols.diameter.impl.DiameterStackImpl.<init>
+```
+
+**Fix:** add `jdk.compiler` to `--add-modules` in `docker/ussdgw/Dockerfile`.
+
+**Verify after build:**
+```bash
+docker run --rm --entrypoint /opt/jre/bin/java ussdgw:$TAG --list-modules | grep jdk.compiler
+# must show: jdk.compiler@25.x
+```
+
+**What NOT to do:**
+- Assume `jdk.jsobject` alone is enough (it is not — `jdk.compiler` is separate)
+- Disable Diameter RA to work around the crash (the RA still initializes even when `enabled=false`)
+- Rebuild without testing `raActive()` path (the crash happens at RA activation, not compile time)
+
+Detail: [AGENTS.md](../../AGENTS.md) § Docker jlink JRE · [lessons.md](lessons.md) § 2026-10-03
+
+---
+
 ## `set -o pipefail` + `unzip | grep -q` fails on a MATCH
 
 `grep -q` exits at the first hit, `unzip` dies on `SIGPIPE`, and the pipeline returns
