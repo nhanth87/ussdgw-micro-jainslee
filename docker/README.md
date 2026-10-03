@@ -56,8 +56,8 @@ After `host-prep.sh` and after the operator's `configs/` + TLS certificate are i
 the whole chain is a single script:
 
 ```bash
-./docker/deploy.sh --check     # dry run: validates host/swarm/SCTP/config/secrets/images, changes nothing
-./docker/deploy.sh             # build from source (WITH tests) → 3 images → config → secrets → deploy → prove.sh
+./docker/full-build.sh --check     # dry run: validates host/swarm/SCTP/config/secrets/images, changes nothing
+./docker/full-build.sh             # build from source (WITH tests) → 3 images → config → secrets → deploy → prove.sh
 ```
 
 It is fail-closed and idempotent (safe to re-run), and it refuses to continue at each of
@@ -78,12 +78,12 @@ the points where a manual run silently skips something:
 Useful variants:
 
 ```bash
-./docker/deploy.sh --skip-build      # reuse images already built for this TAG
-./docker/deploy.sh --build-only      # build + images + asserts, deploy nothing
-./docker/deploy.sh --skip-tests      # faster, and it says out loud that there is no test evidence
-./docker/deploy.sh --fetch-sources   # clone sctp/jss7/jain-slee/corsac-diameter at the pinned SHAs first
-./docker/deploy.sh --force-config    # re-seed configs (timestamped backup first)
-DEPLOY_PROFILE=5k ./docker/deploy.sh # production overlay, gated on capacity/preflight-capacity.sh
+./docker/full-build.sh --skip-build      # reuse images already built for this TAG
+./docker/full-build.sh --build-only      # build + images + asserts, deploy nothing
+./docker/full-build.sh --skip-tests      # faster, and it says out loud that there is no test evidence
+./docker/full-build.sh --fetch-sources   # clone sctp/jss7/jain-slee/corsac-diameter at the pinned SHAs first
+./docker/full-build.sh --force-config    # re-seed configs (timestamped backup first)
+DEPLOY_PROFILE=5k ./docker/full-build.sh # production overlay, gated on capacity/preflight-capacity.sh
 ```
 
 Sections 1–6 below are what the script runs, kept as the manual/audit path and as the
