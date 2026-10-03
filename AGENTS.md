@@ -112,6 +112,78 @@ digicom = main + Digicom seeds  ──push──►  digicom-et/main  (PRIVATE)
 - **Lab heap** — `run-dist.sh` defaults **`-Xms2g -Xmx4g`** for shared hosts; **AlwaysPreTouch** only if `USSD_ALWAYS_PRETOUCH=1`; override to **8g** via `USSD_XMS`/`USSD_XMX` on bigger hosts. Do **not** co-force OTA **8G** + ussdgw **8G+PreTouch** on ~15 GiB. → [lessons](docs/agents/lessons.md)
 - **Commits** — **nhanth87 / Tran Nhan** only. No AI `Co-authored-by:` / trailers (Cursor injects — strip / clean `commit-tree`). Hooks reject; never `--no-verify`.
 
+## Docker jlink JRE missing jdk.compiler — DiameterStackImpl crash (2026-10-03)
+
+**Symptom:** container exits 1 immediately after start with `NoClassDefFoundError: javax/tools/JavaFileManager$Location`. Stack trace points to `DiameterStackImpl.<init>` → `ra-diameter` → `DiameterResourceAdaptor.raActive()`. Happens even with `ussd.diameter.enabled=false` because the RA still initializes during boot.
+
+**Exact mechanism (proven 2026-10-03 in Docker logs):**
+```
+Caused by: java.lang.NoClassDefFoundError: javax/tools/JavaFileManager$Location
+  at com.mobius.software.telco.protocols.diameter.impl.DiameterStackImpl.<init>(DiameterStackImpl.java:239)
+  at com.microjainslee.ra.diameter.transport.CorsacDiameterTransport.start(CorsacDiameterTransport.java:111)
+  at com.microjainslee.ra.diameter.DiameterResourceAdaptor.raActive(DiameterResourceAdaptor.java:164)
+```
+`DiameterStackImpl` uses `javax.tools.JavaFileManager` (from `jdk.compiler` module) to compile Diameter AVP templates at runtime. The jlink JRE in `docker/ussdgw/Dockerfile` was missing `jdk.compiler` from `--add-modules`, so the class was absent at runtime.
+
+**Which modules are required (jlink `--add-modules` list):**
+```
+java.base,java.logging,java.sql,java.naming,java.management,java.xml,java.desktop,
+java.instrument,java.net.http,java.rmi,java.security.jgss,java.security.sasl,jdk.unsupported,
+jdk.crypto.ec,jdk.crypto.cryptoki,jdk.management,jdk.sctp,jdk.localedata,jdk.jfr,jdk.zipfs,
+jdk.jsobject,jdk.compiler  ← ADDED 2026-10-03
+```
+
+**What NOT to do:**
+- Assume `jdk.jsobject` alone is enough (it is not — `jdk.compiler` is separate)
+- Disable Diameter RA to work around the crash (the RA still initializes even when `enabled=false`)
+- Rebuild without testing `raActive()` path (the crash happens at RA activation, not compile time)
+
+**Correct fix:**
+- Add `jdk.compiler` to `--add-modules` in `docker/ussdgw/Dockerfile`
+- Rebuild image: `docker build -f docker/ussdgw/Dockerfile -t ussdgw:<tag> .`
+- Verify: `docker run --rm --entrypoint /opt/jre/bin/java ussdgw:<tag> --list-modules | grep jdk.compiler`
+- Prove: container boots, `ss7.live=true`, no `NoClassDefFoundError` in logs
+
+**Verification probes (run after build):**
+1. `docker run --rm --entrypoint /opt/jre/bin/java ussdgw:<tag> --list-modules | grep jdk.compiler` → must show `jdk.compiler@25.x`
+2. `docker run --rm --entrypoint /usr/local/bin/ussdgw-healthcheck.sh ussdgw:<tag>` → must **fail** (proves probe works)
+3. Container boot → `ss7.live=true` + no `NoClassDefFoundError` in logs
+
+Detail: `docker/ussdgw/Dockerfile` · commit `e9c0c01` on digicom-et · [lessons.md](docs/agents/lessons.md) § 2026-10-03
+
+## SS7 watchdog re-wire loop — M3UA FSM stuck PENDING (2026-10-03)
+
+**Symptom:** `ss7.live=false` despite SCTP associations ESTABLISHED. Logs show repeated `Ss7Watchdog: M3UA route down, watching (threshold 180s)` → `re-wiring SS7` → `route back` → cycle repeats every 3-5 minutes. M3UA ASP state machine stuck in `PENDING` state, never transitions to `ACTIVE`.
+
+**Exact mechanism (proven 2026-10-03 in Docker logs):**
+```
+16:17:57 ERROR  Transition=ntfyaspending. FSM.name=AS-BP_PEER old state=PENDING, current state=PENDING
+16:17:59 WARN   PENDING timed out for As=AS-BP
+16:20:56 WARN   ss7-watchdog: M3UA route down, watching (threshold 180s)
+16:24:26 WARN   ss7-watchdog: route down 209s, re-wiring SS7 (attempt 1, cooldown 600s)
+16:24:56 INFO   ss7-watchdog: route back (was down since 2026-10-03T13:20:56Z)
+```
+Carrier peer sends duplicate ASP Active / CommUp messages → jSS7 M3UA FSM throws `UnknownTransitionException` (transition from ACTIVE to ACTIVE) → ASP state machine confused → peer AS stuck in `PENDING` → `Ss7Watchdog` detects route down → re-wires SS7 → cycle repeats.
+
+**Root cause:** `Ss7Watchdog` re-wire logic interferes with M3UA FSM recovery. When peer sends duplicate messages (normal during SCTP re-establishment), the FSM logs warnings but would eventually recover. The watchdog's aggressive re-wire (every 180s) interrupts this recovery and creates a loop.
+
+**What NOT to do:**
+- Assume `ss7.live=false` means SCTP is down (check `/proc/net/sctp/assocs` first)
+- Restart container repeatedly (watchdog will re-create the loop)
+- Blame carrier peer (duplicate messages are normal SCTP behavior)
+
+**Correct fix:**
+- Disable watchdog: `ussd.ss7.watchdog.enabled=false` in `configs/application.properties`
+- Restart container once (clean slate)
+- Verify: `ss7.live=true`, no `ss7-watchdog` entries in logs, `scheduler.gateTicks` climbing
+
+**When to re-enable watchdog:**
+- Only if SS7 genuinely unstable (peer flapping, network issues)
+- Increase threshold: `ussd.ss7.watchdog.threshold-ms=600000` (10 min instead of 3 min)
+- Monitor logs for `re-wiring SS7` frequency (should be rare, not every 3 min)
+
+Detail: `Ss7Watchdog` · `configs/application.properties` · [lessons.md](docs/agents/lessons.md) § 2026-10-03
+
 ## Digicom crash-loop after deploy — H2-baked jar (SIẾT)
 
 **Symptom:** every `systemctl restart` after rsync → exit **1** in ~8–20s, restart counter climbs, `:8088` never comes up. Digicom `configs/` still say PostgreSQL. Restoring previous `ussdgw-app.jar` + `lib/` + **`quarkus/`** from `/tmp/ussdgw-jar-bak-*` brings the host back.

@@ -42,6 +42,36 @@ Admin: `http://127.0.0.1:8088/admin/login` (form login), or for automation
 `ussd.admin.api-key` before the next boot — otherwise startup fails closed. Checklist:
 [docs/prod-release-path.md](docs/prod-release-path.md).
 
+### Docker build (Swarm stack)
+
+Three images: `ussdgw` (Quarkus fast-jar + jlink JRE 25), `ussdgw-nginx` (reverse proxy), `ussdgw-postgres` (PostgreSQL 16 + initdb hooks).
+
+```bash
+# 1. Package with PostgreSQL db-kind (build-time fixed)
+sed -i 's/quarkus.datasource.db-kind=h2/quarkus.datasource.db-kind=postgresql/' build/application.properties
+./build/package-dist.sh
+sed -i 's/quarkus.datasource.db-kind=postgresql/quarkus.datasource.db-kind=h2/' build/application.properties  # restore
+
+# 2. Build images
+TAG=$(git rev-parse --short HEAD)
+docker build -f docker/ussdgw/Dockerfile -t ussdgw:$TAG .
+docker build -f docker/nginx/Dockerfile -t ussdgw-nginx:$TAG .
+docker build -f docker/postgres/Dockerfile -t ussdgw-postgres:$TAG .
+
+# 3. Deploy
+export USSDGW_IMAGE=ussdgw:$TAG
+export NGINX_IMAGE=ussdgw-nginx:$TAG
+export POSTGRES_IMAGE=ussdgw-postgres:$TAG
+docker stack deploy -c docker/stack.yml ussdgw
+```
+
+**jlink JRE modules (critical):** `docker/ussdgw/Dockerfile` must include `jdk.compiler` in `--add-modules` — Diameter RA needs `javax.tools.JavaFileManager` at runtime (even with `ussd.diameter.enabled=false`). Missing module → `NoClassDefFoundError: javax/tools/JavaFileManager$Location` → container crash at startup. See [AGENTS.md](AGENTS.md) § Docker jlink JRE.
+
+**Verification probes:**
+1. `docker run --rm --entrypoint /opt/jre/bin/java ussdgw:$TAG --list-modules | grep jdk.compiler` → must show `jdk.compiler@25.x`
+2. `docker run --rm --entrypoint /usr/local/bin/ussdgw-healthcheck.sh ussdgw:$TAG` → must **fail** (proves probe works)
+3. Container boot → `ss7.live=true` + no `NoClassDefFoundError` in logs
+
 AS pull (HTTP): short-code rules → POST **XML** (default) or **JSON** (per-tenant) to AS URL.
 AS callback: `POST /as/callback`
 
