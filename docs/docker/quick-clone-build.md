@@ -15,11 +15,11 @@ sudo ./docker/host-prep.sh          # modprobe sctp, sysctl, /srv/ussdgw/*, NTP
 ```bash
 ssh digicom-nb
 cd ~/ussd-docker/ussdgw-micro-jainslee
-./docker/deploy.sh --check          # kiểm tra, KHÔNG thay đổi gì
-./docker/deploy.sh                  # build + ảnh + secrets + deploy + prove.sh
+./docker/full-build.sh --check          # kiểm tra, KHÔNG thay đổi gì
+./docker/full-build.sh                  # build + ảnh + secrets + deploy + prove.sh
 ```
 
-`deploy.sh` chạy hết chuỗi: build từ source (có `RUN_TESTS=1`) → 3 image → config →
+ `full-build.sh` chạy hết chuỗi: build từ source (có `RUN_TESTS=1`) → 3 image → config →
 secrets → `docker stack deploy` → chờ `:8088` → `prove.sh`.
 
 Cần ~40–60′ cho lần đầu (build `sctp` + `jss7` + `jain-slee` + `corsac-diameter`),
@@ -28,19 +28,19 @@ lần sau nhanh hơn (cache `/srv/ussdgw-build/m2`).
 ## 3. Nguồn upstream (`/srv/ussdgw-build/src`)
 
 Deploy cần 4 cây ở đúng SHA trong `docker/sources.lock`. Nếu host đã có sẵn thì
-`deploy.sh` tự verify và bỏ qua. Nếu chưa:
+`full-build.sh` tự verify và bỏ qua. Nếu chưa:
 
 ```bash
-./docker/deploy.sh --check --fetch-sources    # clone 4 repo + checkout SHA đã ghim
+./docker/full-build.sh --check --fetch-sources    # clone 4 repo + checkout SHA đã ghim
 ```
 
 ## 4. Biến thể
 
 ```bash
-./docker/deploy.sh --skip-build      # dùng lại image của TAG hiện tại
-./docker/deploy.sh --build-only      # chỉ build + assert, không deploy
-./docker/deploy.sh --skip-tests      # nhanh hơn (và in ra là không có test evidence)
-TAG=<sha> ./docker/deploy.sh --skip-build   # deploy image cũ
+./docker/full-build.sh --skip-build      # dùng lại image của TAG hiện tại
+./docker/full-build.sh --build-only      # chỉ build + assert, không deploy
+./docker/full-build.sh --skip-tests      # nhanh hơn (và in ra là không có test evidence)
+TAG=<sha> ./docker/full-build.sh --skip-build   # deploy image cũ
 docker service rollback ussdgw_ussdgw      # lui 1 bước
 ```
 

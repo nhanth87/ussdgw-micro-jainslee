@@ -54,7 +54,7 @@ fetch() {  # $1 = path in container, $2 = local file; returns non-zero when empt
 #   2. the key in force is `ussd.admin.api-key` in the mounted config when the deployment is
 #      configured by file rather than by secret;
 #   4. USSD_ADMIN_API_KEY in the ENVIRONMENT is trusted first — and docker/.env ships
-#      USSD_ADMIN_API_KEY=ussd-admin as a lab placeholder, which deploy.sh re-exports. So
+#      USSD_ADMIN_API_KEY=ussd-admin as a lab placeholder, which full-build.sh re-exports. So
 #      "the override wins" carried the lab default straight into the 401s on a host whose
 #      real key is a 64-char secret. A source's name says nothing about whether its value is
 #      the key in force.

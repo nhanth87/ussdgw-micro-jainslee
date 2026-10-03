@@ -15,14 +15,14 @@
 # about what the host runs (AGENTS.md, "Prove the artifact").
 #
 # Usage:
-#   ./docker/deploy.sh                    # everything: build + images + config + secrets + deploy + prove
-#   ./docker/deploy.sh --check            # dry run — validate all of it, change nothing
-#   ./docker/deploy.sh --skip-build       # reuse the images already built (config/secrets/deploy/prove)
-#   ./docker/deploy.sh --skip-tests       # build without `mvn test` — the log then says so out loud
-#   ./docker/deploy.sh --build-only       # stop after the images are built and asserted
-#   ./docker/deploy.sh --force-config     # re-seed configs (timestamped backup first)
-#   ./docker/deploy.sh --fetch-sources    # clone the four upstream trees at the pinned SHAs first
-#   ./docker/deploy.sh --allow-dirty      # build from an uncommitted tree (tag gets -dirty)
+#   ./docker/full-build.sh                    # everything: build + images + config + secrets + deploy + prove
+#   ./docker/full-build.sh --check            # dry run — validate all of it, change nothing
+#   ./docker/full-build.sh --skip-build       # reuse the images already built (config/secrets/deploy/prove)
+#   ./docker/full-build.sh --skip-tests       # build without `mvn test` — the log then says so out loud
+#   ./docker/full-build.sh --build-only       # stop after the images are built and asserted
+#   ./docker/full-build.sh --force-config     # re-seed configs (timestamped backup first)
+#   ./docker/full-build.sh --fetch-sources    # clone the four upstream trees at the pinned SHAs first
+#   ./docker/full-build.sh --allow-dirty      # build from an uncommitted tree (tag gets -dirty)
 #
 # Environment (all optional; docker/.env is loaded first and these override it):
 #   TAG                 image tag                default: git short SHA of the working tree
@@ -43,12 +43,12 @@ cd "$REPO_ROOT"
 # fail fast: `set -e` + a non-matching grep inside `$( )` exits before any message
 # (that was a real defect in entrypoint.sh step 4b). So the trap prints the line, and a
 # second EXIT trap removes the config snapshot — which holds a 0600 datasource password.
-trap 'echo "deploy: FAILED at line $LINENO (exit $?)" >&2' ERR
+trap 'echo "full-build: FAILED at line $LINENO (exit $?)" >&2' ERR
 trap '[[ -n "${SNAP:-}" && -d ${SNAP:-} ]] && rm -rf "$SNAP"; :' EXIT
 
-die()  { echo "deploy: ERROR: $*" >&2; exit 1; }
-info() { echo "deploy: $*"; }
-warn() { echo "deploy: WARN: $*" >&2; }
+die()  { echo "full-build: ERROR: $*" >&2; exit 1; }
+info() { echo "full-build: $*"; }
+warn() { echo "full-build: WARN: $*" >&2; }
 step() { echo; echo "=== $* ==="; }
 
 SNAP=""   # read-only snapshot of the live config; empty until one is staged
