@@ -92,5 +92,7 @@ exec java \
   "${JAVA_OPTS_DEFAULT[@]}" \
   "${EXTRA_JAVA_OPTS[@]}" \
   -Dussd.log.dir="$USSD_LOG_DIR" \
+  -Dussd.cdr.roll-max-files="${USSD_CDR_ROLL_MAX_FILES:-6}" \
+  -Dussd.cdr.roll-max-age="${USSD_CDR_ROLL_MAX_AGE:-30d}" \
   -Dquarkus.config.locations="file:$APP_HOME/configs/application.properties" \
   -jar "$APP_HOME/quarkus-run.jar"
