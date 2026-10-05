@@ -90,6 +90,11 @@ if [[ ! -f "$ENV_FILE" ]]; then
   fi
 fi
 [[ -f "$ENV_FILE" ]] && { set -a; . "$ENV_FILE"; set +a; }
+: "${STACK_NAME:=ussdgw}"
+BUILD_ROOT="${BUILD_ROOT:-/srv/ussdgw-build}"
+SOURCE_ROOT="${SOURCE_ROOT:-$BUILD_ROOT/src}"
+OUT="${OUT:-$BUILD_ROOT/out}"
+SOURCE_MODE="${SOURCE_MODE:-local}"
 
 # USSD_ADMIN_API_KEY is not part of this deployment's configuration and must not become
 # one by accident. It used to ship in .env as `USSD-admin` lab placeholder; `set -a` above
@@ -379,8 +384,8 @@ volume_host_path() {  # $1 = service, $2 = container path
     /etc/nginx/certs)    printf '%s' "${CERT_DIR:-$DATA_ROOT/nginx/certs}" ;;
   esac
 }
-configs_source() { volume_host_path "${STACK_NAME}_ussdgw" /opt/ussdgw/configs; }
-certs_source()   { volume_host_path "${STACK_NAME}_nginx" /etc/nginx/certs; }
+configs_source() { volume_host_path "${STACK_NAME:-ussdgw}_ussdgw" /opt/ussdgw/configs; }
+certs_source()   { volume_host_path "${STACK_NAME:-ussdgw}_nginx" /etc/nginx/certs; }
 LIVE_CONFIGS="$(configs_source)"; LIVE_CONFIGS="${LIVE_CONFIGS%/}"
 
 # install-config must READ application.properties, and that file is 0600 owned by the
@@ -393,8 +398,8 @@ stage_live_snapshot() {
   local dir="$1" cid dst
   [[ -n "$dir" ]] || return 1
   [[ -r "$dir/application.properties" ]] && return 0        # readable directly: no copy
-  cid="$(docker ps -q --filter "name=${STACK_NAME}_ussdgw" | head -1 || true)"
-  [[ -n "$cid" ]] || { warn "cannot read $dir/application.properties and no running ${STACK_NAME}_ussdgw container to read it through"; return 1; }
+  cid="$(docker ps -q --filter "name=${STACK_NAME:-ussdgw}_ussdgw" | head -1 || true)"
+  [[ -n "$cid" ]] || { warn "cannot read $dir/application.properties and no running ${STACK_NAME:-ussdgw}_ussdgw container to read it through"; return 1; }
   SNAP="$(mktemp -d "${TMPDIR:-/tmp}/ussdgw-cfgsnap.XXXXXX")" || return 1
   chmod 0755 "$SNAP"
   dst="$SNAP/configs"; mkdir -p "$dst"; chmod 0755 "$dst"
@@ -457,7 +462,7 @@ fi
 # false negative on a live :443.
 LIVE_CERTS="$(certs_source)"; LIVE_CERTS="${LIVE_CERTS%/}"
 if ! stat -c %a "$LIVE_CERTS/fullchain.pem" >/dev/null 2>&1; then
-  NCID="$(docker ps -q --filter "name=${STACK_NAME}_nginx" | head -1 || true)"
+  NCID="$(docker ps -q --filter "name=${STACK_NAME:-ussdgw}_nginx" | head -1 || true)"
   [[ -n "$SNAP" ]] || { SNAP="$(mktemp -d "${TMPDIR:-/tmp}/ussdgw-cfgsnap.XXXXXX")"; chmod 0755 "$SNAP"; }
   if [[ -n "$NCID" ]]; then
     mkdir -p "$SNAP/certs"
@@ -555,12 +560,12 @@ fi
 step "6/6 wait for ready, then prove the RUNNING container"
 # ==================================================================================
 if [[ "$MODE_CHECK" == 1 ]]; then
-  CID="$(docker ps -q --filter "name=${STACK_NAME}_ussdgw" | head -1 || true)"
+  CID="$(docker ps -q --filter "name=${STACK_NAME:-ussdgw}_ussdgw" | head -1 || true)"
   if [[ -n "$CID" ]]; then
     info "currently running: $(docker inspect --format '{{.Config.Image}} ({{.Image}})' "$CID")"
     ./docker/prove.sh "$CID" || die "prove.sh failed on the currently running container"
   else
-    warn "no running ${STACK_NAME}_ussdgw container to prove"
+    warn "no running ${STACK_NAME:-ussdgw}_ussdgw container to prove"
   fi
   step "dry run complete â€” nothing was changed"
   exit 0
@@ -571,12 +576,12 @@ fi
 # serving. So check tasks and image agreement, not just the service table.
 deadline=$(( $(date +%s) + READY_TIMEOUT )); CID=""
 while [[ -z "$CID" ]]; do
-  CID="$(docker ps -q --filter "name=${STACK_NAME}_ussdgw" | head -1 || true)"
+  CID="$(docker ps -q --filter "name=${STACK_NAME:-ussdgw}_ussdgw" | head -1 || true)"
   [[ -n "$CID" ]] && break
   if (( $(date +%s) >= deadline )); then
     echo "--- docker stack ps $STACK_NAME ---" >&2
     docker stack ps "$STACK_NAME" --no-trunc >&2 || true
-    die "no ${STACK_NAME}_ussdgw container after ${READY_TIMEOUT}s (tasks above)"
+    die "no ${STACK_NAME:-ussdgw}_ussdgw container after ${READY_TIMEOUT}s (tasks above)"
   fi
   sleep 3
 done
@@ -630,5 +635,5 @@ deploy: admin UI      https://<host>/admin/    (and cleartext on :80 by design â
 deploy: status        curl -s 127.0.0.1:8088/admin/status.json -H "X-USSD-Admin-Key: \$(docker exec $CID cat /run/secrets/ussdgw_admin_key)"
 deploy: logs          docker exec $CID tail -f /opt/ussdgw/logs/ussdgw.log
 deploy: CDR ledger    tail -f $DATA_ROOT/logs/ussd-cdr.log
-deploy: rollback      docker service rollback ${STACK_NAME}_ussdgw   (or docker stack rm $STACK_NAME, then start host postgresql/nginx/gmlc in that order)
+deploy: rollback      docker service rollback ${STACK_NAME:-ussdgw}_ussdgw   (or docker stack rm $STACK_NAME, then start host postgresql/nginx/gmlc in that order)
 EOF

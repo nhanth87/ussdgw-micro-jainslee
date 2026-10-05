@@ -27,13 +27,13 @@
 # The commit SHA is authoritative. Branch names are documentation only and are
 # IGNORED by the verifier — a moved branch cannot silently change what we build.
 
-sctp|https://github.com/nhanth87/sctp.git|java25-upgrade|18097d68c977951dbe7a402a1d512128effd0c59
+sctp|https://github.com/digicom-et/sctp.git|java25-upgrade|18097d68c977951dbe7a402a1d512128effd0c59
 
-jss7|https://github.com/nhanth87/jss7.git|release/9.2.9-j25|dfac9bbe1f785cdb002ff06847c368d3d52e3eeb
+jss7|https://github.com/digicom-et/jss7.git|release/9.2.9-j25|dfac9bbe1f785cdb002ff06847c368d3d52e3eeb
 
-jain-slee|https://github.com/nhanth87/jain-slee.git|micro-jainslee-2|0538b082fe2de073926945120ca7292c2f9019a3
+jain-slee|https://github.com/digicom-et/jain-slee.git|micro-jainslee-2|0538b082fe2de073926945120ca7292c2f9019a3
 
-corsac-diameter|https://github.com/mobius-software-ltd/corsac-diameter.git|diameter-parent-10.0.0-41|0bc4629186a7153ab365568c3c8d7e340c77d862
+corsac-diameter|https://github.com/digicom-et/corsac-diameter.git|diameter-parent-10.0.0-41|0bc4629186a7153ab365568c3c8d7e340c77d862
 
 # NOTE on corsac-diameter (plan.md §1.1):
 #   ra-diameter needs `10.0.0-41-SNAPSHOT`, which is NOT on Maven Central (HTTP 404)
