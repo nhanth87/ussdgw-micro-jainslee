@@ -18,8 +18,11 @@
   Tunable at launch (run.sh -D...):
     ussd.log.dir        directory           (default logs)
     ussd.log.max-size   per-file roll size  (default 200MB)
-    ussd.log.max-files  kept per pattern    (default 120 daily files)
-    ussd.log.max-age    age sweep           (default 120d)
+    ussd.log.max-files  kept per pattern    (default 120 daily files)  [APP + SLEE only]
+    ussd.log.max-age    age sweep           (default 120d)             [APP + SLEE only]
+    ussd.cdr.roll-max-files  weekly CDR files kept (default 6  ~= 1 month)
+    ussd.cdr.roll-max-age    CDR hard cut-off      (default 30d)
+  CDR keeps its own knobs so the text logs are never truncated by the CDR window.
 -->
 <Configuration status="WARN">
   <Properties>
@@ -62,20 +65,27 @@
       ledger reads (CdrFileLedger). The timestamp lives in field 0 of each line, so the pattern
       is bare %m%n — a %d prefix would prepend a second timestamp and break the parser.
       Do not add level/thread/logger here: CdrFileLedger.parse() would reject the line.
-      Daily rollover matters MORE here than for the text logs: the admin ledger tails the
-      newest file, so a size-only rollover used to split recent sessions across files.
+
+      RETENTION (operator choice): roll WEEKLY, keep ONE MONTH.
+        interval="7" modulate="true"  -> ussd-cdr-<date>-N.log.gz once per 7 days
+        max=6                          -> 6 weekly files ~= 1 month (not MAX_FILES: 120 weekly
+                                          files would be ~2 years of CDR on disk)
+        IfLastModified age="30d"       -> hard 1-month cut-off regardless of max
+      SizeBasedTriggeringPolicy stays as a safety valve for a traffic spike inside one week.
+      The admin ledger tails the newest files, so a weekly split is still read correctly:
+      CdrFileLedger.ledgerFiles() walks ussd-cdr-*.log oldest-first.
     -->
     <RollingFile name="CDR" fileName="${LOG_DIR}/ussd-cdr.log"
                  filePattern="${LOG_DIR}/ussd-cdr-%d{yyyy-MM-dd}-%i.log.gz">
       <PatternLayout pattern="%m%n"/>
       <Policies>
-        <TimeBasedTriggeringPolicy/>
+        <TimeBasedTriggeringPolicy interval="7" modulate="true"/>
         <SizeBasedTriggeringPolicy size="${MAX_SIZE}"/>
       </Policies>
-      <DefaultRolloverStrategy max="${MAX_FILES}">
+      <DefaultRolloverStrategy max="${sys:ussd.cdr.roll-max-files:-6}">
         <Delete basePath="${LOG_DIR}" maxDepth="1">
           <IfFileName glob="ussd-cdr-*.log.gz"/>
-          <IfLastModified age="${MAX_AGE}"/>
+          <IfLastModified age="${sys:ussd.cdr.roll-max-age:-30d}"/>
         </Delete>
       </DefaultRolloverStrategy>
     </RollingFile>

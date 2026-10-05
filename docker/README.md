@@ -191,6 +191,35 @@ pinned upstream commit in `sources.lock` — a commit whose `pom.xml` genuinely 
 `10.0.0-41-SNAPSHOT`. If that dependency ever disappears from the classpath, check this
 first; it is not a Docker problem.
 
+### jlink JRE modules (the one that will crash your container)
+
+`docker/ussdgw/Dockerfile` builds a custom JRE with `jlink --add-modules=…`. The list
+**must include `jdk.compiler`** — Diameter RA's `DiameterStackImpl` uses
+`javax.tools.JavaFileManager` at runtime to compile AVP templates, even when
+`ussd.diameter.enabled=false` (the RA still initializes during boot).
+
+Missing `jdk.compiler` → container exits 1 immediately with:
+```
+NoClassDefFoundError: javax/tools/JavaFileManager$Location
+  at com.mobius.software.telco.protocols.diameter.impl.DiameterStackImpl.<init>
+```
+
+**Required modules (complete list):**
+```
+java.base,java.logging,java.sql,java.naming,java.management,java.xml,java.desktop,
+java.instrument,java.net.http,java.rmi,java.security.jgss,java.security.sasl,jdk.unsupported,
+jdk.crypto.ec,jdk.crypto.cryptoki,jdk.management,jdk.sctp,jdk.localedata,jdk.jfr,jdk.zipfs,
+jdk.jsobject,jdk.compiler  ← DO NOT REMOVE
+```
+
+**Verify after build:**
+```bash
+docker run --rm --entrypoint /opt/jre/bin/java ussdgw:$TAG --list-modules | grep jdk.compiler
+# must show: jdk.compiler@25.x
+```
+
+See [AGENTS.md](../AGENTS.md) § Docker jlink JRE and [lessons.md](../docs/agents/lessons.md) § 2026-10-03.
+
 ---
 
 ## 2. Runtime images
