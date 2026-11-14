@@ -35,7 +35,7 @@ sctp|https://github.com/nhanth87/sctp.git|fix/2.27.33-stale-channel|3947dd2d6ba0
 
 jss7|https://github.com/nhanth87/jss7.git|j25|59b800e99a19fb729664bf380b0ec63cc129a337
 
-jain-slee|https://github.com/nhanth87/jain-slee.git|micro-jainslee-2|4115450a4e5b384869d6d5e968b3b65f2bc2f6a6
+jain-slee|https://github.com/nhanth87/jain-slee.git|micro-jainslee-2|4342936610f45121a4510bd4e5198cdf024e05ae
 
 corsac-diameter|https://github.com/mobius-software-ltd/corsac-diameter.git|diameter-parent-10.0.0-41|0bc4629186a7153ab365568c3c8d7e340c77d862
 
@@ -51,12 +51,13 @@ corsac-diameter|https://github.com/mobius-software-ltd/corsac-diameter.git|diame
 #                           replaced channel's late close no longer takes the live
 #                           association down after an STP SCTP RESTART)
 #     jss7       59b800e99  j25  9.2.10-j25 (release/9.2.10-j25 merged back into j25)
-#     jain-slee  4115450a4  micro-jainslee-2  1.2.2-SNAPSHOT, ss7.version 9.2.10-j25
+#     jain-slee  434293661  micro-jainslee-2  1.2.2-SNAPSHOT, ss7.version 9.2.10-j25
 #                           (5e07ec6fc: JSR 240 root-entity removal, O(1) entity
 #                           registration, SYNC overflow, per-call CPU cuts;
 #                           eef61e75e: profile index no longer leaks empty buckets;
 #                           b0b02f96e: idle entity slots / timer wheel use no CPU;
-#                           4115450a4: ra-jss7 GSM8 charset + 160-octet USSD fit)
+#                           4115450a4: ra-jss7 GSM8 charset + 160-octet USSD fit;
+#                           434293661: ra-http-client request/response headers (AS cookies))
 #     corsac     unchanged  ra-diameter 1.2.2 still pins 10.0.0-41-SNAPSHOT; upstream is
 #                           at 10.0.0-50 but moving needs a ra-diameter change first.
 #   jss7 and ra-jss7 still declare sctp.version 2.27.32 in their poms, so build-all.sh

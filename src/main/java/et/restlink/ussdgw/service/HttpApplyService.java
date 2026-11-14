@@ -91,11 +91,15 @@ public class HttpApplyService {
             ra.setConnectTimeoutMs(config.httpConnectTimeoutMs());
             ra.setRequestTimeoutMs(config.httpRequestTimeoutMs());
             ra.setMaxPoolSize(config.httpClientMaxPoolSize());
+            // The RA's own default re-sends a POST twice on 5xx/timeout; on top of the pull
+            // retry that hit the AS up to 6 times per USSD turn. Classic never re-sent.
+            ra.setMaxRetries(config.httpClientMaxRetries());
             clientEndpoint = new HttpCallbackRaEndpoint(ra);
             container.registerRa(clientEndpoint, clientEndpoint);
             detail.append("http-client=wired;connectMs=").append(config.httpConnectTimeoutMs())
                     .append(";requestMs=").append(config.httpRequestTimeoutMs())
-                    .append(";pool=").append(config.httpClientMaxPoolSize()).append(';');
+                    .append(";pool=").append(config.httpClientMaxPoolSize())
+                    .append(";raRetries=").append(config.httpClientMaxRetries()).append(';');
         } else {
             detail.append("http-client=off;");
         }

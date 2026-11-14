@@ -163,7 +163,7 @@ class HttpClientSbbPullStateTest {
         completer.onEvent(fail("c-3", 500, null), aci());
 
         assertThat(ra.commands).hasSize(2);
-        HttpCallbackCommand.JsonPostRequest retry = lastPost();
+        HttpCallbackCommand.PostRequest retry = lastPost();
         assertThat(retry.body()).isEqualTo(firstBody).contains("c-3");
         assertThat(retry.url()).isEqualTo(URL);
         assertThat(retry.sessionId()).isEqualTo("c-3");
@@ -329,8 +329,8 @@ class HttpClientSbbPullStateTest {
                 + "\"generation\":1,\"text\":\"ok\",\"action\":\"END\",\"async\":false}";
     }
 
-    private HttpCallbackCommand.JsonPostRequest lastPost() {
-        return (HttpCallbackCommand.JsonPostRequest) ra.commands.get(ra.commands.size() - 1);
+    private HttpCallbackCommand.PostRequest lastPost() {
+        return (HttpCallbackCommand.PostRequest) ra.commands.get(ra.commands.size() - 1);
     }
 
     private static void set(Object target, String field, Object value) {

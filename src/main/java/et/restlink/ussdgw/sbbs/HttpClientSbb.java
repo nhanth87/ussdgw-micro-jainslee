@@ -1,5 +1,9 @@
 package et.restlink.ussdgw.sbbs;
 
+import et.restlink.ussdgw.api.AsCookieJar;
+import java.util.LinkedHashMap;
+import java.util.Map;
+
 import et.restlink.ussdgw.api.AsHttpWireFormat;
 import et.restlink.ussdgw.api.AsRequest;
 import et.restlink.ussdgw.api.AsResponse;
@@ -110,8 +114,9 @@ public final class HttpClientSbb implements Sbb, SleeEventHandler {
         }
         AsHttpWireFormat format = GatedAsNotifyService.wireFormat();
         try {
-            port.sendCommand(new HttpCallbackCommand.JsonPostRequest(
-                    sessionId, gated.asUrl(), gated.xmlBody(), format.contentType()));
+            port.sendCommand(new HttpCallbackCommand.PostRequest(
+                    sessionId, gated.asUrl(), gated.xmlBody(), format.contentType(),
+                    asRequestHeaders(corr, format)));
         } catch (RuntimeException e) {
             svc().asPull().recordFailure(gated.asUrl());
             throw e;
@@ -168,6 +173,7 @@ public final class HttpClientSbb implements Sbb, SleeEventHandler {
 
     private String onCompleted(HttpCallbackCompletedEvent done) {
         String corr = done.getSessionId();
+        rememberAsCookies(corr, done);
         // Gated AS notify completions are advisory — never drive bridge/saga.
         if (corr != null && corr.startsWith("gated-")) {
             int status = done.getStatusCode();
@@ -294,9 +300,76 @@ public final class HttpClientSbb implements Sbb, SleeEventHandler {
         }
     }
 
-    private static void submitPost(RaCommandPort port, String corr, AsPullTarget.Http target) {
-        port.sendCommand(new HttpCallbackCommand.JsonPostRequest(
-                corr, target.url(), target.body(), target.format().contentType()));
+    private void submitPost(RaCommandPort port, String corr, AsPullTarget.Http target) {
+        port.sendCommand(new HttpCallbackCommand.PostRequest(
+                corr, target.url(), target.body(), target.format().contentType(),
+                asRequestHeaders(corr, target.format())));
+    }
+
+    /**
+     * Request headers the classic gateway sent on every AS POST (restcomm http-client RA,
+     * ussdgateway HttpClientSbb.doPost):
+     * <ul>
+     *   <li>{@code Accept} — {@code text/xml} for the classic wire;</li>
+     *   <li>{@code Cookie} — this dialog's jar, so a servlet AS finds its {@code HttpSession}
+     *       (JSESSIONID) on every menu turn of the same USSD dialog and on no other dialog;</li>
+     *   <li>{@code X-Ussd-Correlation-Id} / {@code X-Ussd-Request-Id} when the HTTP client
+     *       bridge is on (classic SessionBridgeSupport).</li>
+     * </ul>
+     */
+    private Map<String, String> asRequestHeaders(String corr, AsHttpWireFormat format) {
+        Map<String, String> h = new LinkedHashMap<>();
+        h.put("Accept", format == AsHttpWireFormat.JSON ? "application/json" : "text/xml");
+        String cookie = null;
+        try {
+            var store = svc().store();
+            cookie = store == null ? null : store.asCookie(corr);
+        } catch (RuntimeException ignored) {
+            // no store (unit stub) — no cookie, never fail the send
+        }
+        if (cookie != null && !cookie.isBlank()) {
+            h.put("Cookie", cookie);
+        }
+        boolean bridge = false;
+        try {
+            bridge = svc().config() != null && svc().config().httpClientBridgeEnabled();
+        } catch (RuntimeException ignored) {
+            // config unavailable in a stub — classic default: no correlation headers
+        }
+        if (bridge && corr != null) {
+            String requestId = safeSession(corr).map(VirtualSession::requestId)
+                    .filter(r -> r != null && !r.isBlank()).orElse(corr);
+            h.put("X-Ussd-Correlation-Id", corr);
+            h.put("X-Ussd-Request-Id", requestId);
+        }
+        return h;
+    }
+
+    /**
+     * Fold the AS's {@code Set-Cookie} into this dialog's jar ({@code ussdTx.asCookie}). The
+     * jar keys on the USSD correlation id; a gated completion ({@code gated-<corr>}) belongs to
+     * the same dialog. Never throws — losing a cookie must not lose the AS response.
+     */
+    private void rememberAsCookies(String sessionId, HttpCallbackCompletedEvent done) {
+        try {
+            if (sessionId == null || done == null) {
+                return;
+            }
+            java.util.List<String> setCookies = done.getHeaderValues("Set-Cookie");
+            if (setCookies.isEmpty()) {
+                return;
+            }
+            String corr = sessionId.startsWith("gated-") ? sessionId.substring("gated-".length()) : sessionId;
+            var store = svc().store();
+            if (store == null) {
+                return;
+            }
+            String merged = AsCookieJar.merge(store.asCookie(corr), setCookies);
+            store.setAsCookie(corr, merged);
+        } catch (RuntimeException e) {
+            org.apache.logging.log4j.LogManager.getLogger(HttpClientSbb.class)
+                    .debug("AS cookie not stored session={}: {}", sessionId, e.toString());
+        }
     }
 
     /** Advisory CDR for gated-{corr} HTTP completion (does not touch bridge/saga). */

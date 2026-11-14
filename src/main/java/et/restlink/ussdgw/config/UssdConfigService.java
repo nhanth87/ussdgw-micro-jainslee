@@ -67,6 +67,16 @@ public class UssdConfigService {
     int httpConnectMsProp;
     @ConfigProperty(name = "ussd.http.client.request-timeout-ms", defaultValue = "15000")
     int httpRequestMsProp;
+    /**
+     * Transport-level re-sends of an AS POST inside the HTTP client RA. Default 0 = classic
+     * ussdgateway behaviour: a POST that reached the AS is never sent again (a USSD menu step can
+     * be a transaction). Pull retries are the visible, per-turn {@code ussd.as.pull.max-retries}.
+     */
+    @ConfigProperty(name = "ussd.http.client.max-retries", defaultValue = "0")
+    int httpClientMaxRetries;
+
+    public int httpClientMaxRetries() { return Math.max(0, httpClientMaxRetries); }
+
     @ConfigProperty(name = "ussd.http.client.max-pool-size", defaultValue = "2048")
     int httpClientMaxPoolProp;
     @ConfigProperty(name = "ussd.http.callback-path", defaultValue = "/as/callback")

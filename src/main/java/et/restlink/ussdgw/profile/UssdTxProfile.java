@@ -93,6 +93,18 @@ public final class UssdTxProfile extends ProfileAbstractCmp {
         set(s("pendingText"), v);
     }
 
+    /**
+     * AS cookie jar for this dialog, as a {@code Cookie} header value (JSESSIONID & co). Written
+     * only by single-field updates from the HTTP client path; the full-row mapper never touches it.
+     */
+    public String getAsCookie() {
+        return str(g("asCookie"));
+    }
+
+    public void setAsCookie(String v) {
+        set(s("asCookie"), v);
+    }
+
     public String getPendingAlphabet() {
         return str(g("pendingAlphabet"));
     }

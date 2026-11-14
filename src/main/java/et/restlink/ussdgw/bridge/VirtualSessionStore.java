@@ -489,6 +489,24 @@ public class VirtualSessionStore {
         updateField(correlationId, "pullStartedAtMs", pullStartedAtMs);
     }
 
+    /** Store the AS cookie jar (Cookie header value) for this dialog; null clears it. */
+    public void setAsCookie(String correlationId, String cookieHeader) {
+        updateField(correlationId, "asCookie", cookieHeader);
+    }
+
+    /** AS cookie jar for this dialog, or null. Never throws. */
+    public String asCookie(String correlationId) {
+        if (correlationId == null || correlationId.isBlank()) return null;
+        ProfileFacility f = facility();
+        if (f == null) return null;
+        try {
+            ProfileLocalObject plo = f.getProfile(new ProfileID(UssdTxProfile.TABLE_NAME, correlationId));
+            return plo == null ? null : ((UssdTxProfile) plo.getProfile()).getAsCookie();
+        } catch (RuntimeException e) {
+            return null;
+        }
+    }
+
     public void setPendingText(String correlationId, String pendingText) {
         updateField(correlationId, "pendingText", pendingText);
     }
