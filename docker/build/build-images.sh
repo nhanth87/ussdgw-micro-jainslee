@@ -50,7 +50,7 @@ echo "build-images: tag = $TAG"
 # command. The probes below are why this script still exists: bake builds,
 # this script proves each image before the stack may reference it.
 TAG="$TAG" docker buildx bake -f docker/docker-bake.hcl
-ok "ussdgw:$TAG + ussdgw-nginx:$TAG + ussdgw-postgres:$TAG"
+ok "ussdgw:$TAG + ussdgw-nginx:$TAG + ussdgw-postgres:$TAG + ussdgw-clickhouse:$TAG"
 
 # --- fail closed on the app image's liveness probe -------------------------------
 # Run the probe in the built image with NOTHING listening on 8088. It must refuse.
@@ -195,10 +195,40 @@ entry="$(docker image inspect -f '{{json .Config.Entrypoint}} {{json .Config.Cmd
        wrapper (re-applies tuning on every start) with CMD [\"postgres\"]."
 ok "postgres image starts through ussdgw-pg-entrypoint.sh (tuning re-applied on every start)"
 
+# --- fail closed on the ClickHouse image --------------------------------------------
+# Config present != config read. Start the real server from the real image and read the
+# answers back from it: the sockets it actually bound (/proc/net/tcp*, LISTEN = 0A) must all
+# be loopback — the upstream image binds 0.0.0.0/:: and on hostnet that is every interface of
+# the carrier host — and the stock `default` user must be gone.
+ch_cid="$(docker run -d --rm -e CLICKHOUSE_USER=ussdgw -e CLICKHOUSE_PASSWORD=probe \
+  --ulimit nofile=262144:262144 "ussdgw-clickhouse:$TAG")" \
+  || die "ussdgw-clickhouse:$TAG does not start"
+trap 'docker rm -f "$ch_cid" >/dev/null 2>&1 || true' EXIT
+for _ in $(seq 1 60); do
+  docker exec "$ch_cid" clickhouse-client -u ussdgw --password probe -q 'SELECT 1' >/dev/null 2>&1 && break
+  sleep 1
+done
+docker exec "$ch_cid" clickhouse-client -u ussdgw --password probe -q 'SELECT 1' >/dev/null 2>&1 \
+  || die "ussdgw-clickhouse:$TAG did not answer within 60s: $(docker logs --tail 20 "$ch_cid" 2>&1)"
+listen="$(docker exec "$ch_cid" sh -c 'awk "NR>1 && \$4==\"0A\" {print \$2}" /proc/net/tcp /proc/net/tcp6')"
+bad="$(printf '%s\n' "$listen" | grep -v -E '^(0100007F|00000000000000000000000001000000):' || true)"
+[[ -z "$bad" ]] || die "ussdgw-clickhouse:$TAG listens on a non-loopback address: $bad
+       (all LISTEN sockets: $(echo $listen)). The upstream docker_related_config.xml binds 0.0.0.0;
+       docker/clickhouse/config.d/docker_related_config.xml must replace it."
+printf '%s\n' "$listen" | grep -q ':1FBB$' \
+  || die "ussdgw-clickhouse:$TAG is not listening on 127.0.0.1:8123 (the gateway's CDR endpoint)"
+if docker exec "$ch_cid" clickhouse-client -u default -q 'SELECT 1' >/dev/null 2>&1; then
+  die "ussdgw-clickhouse:$TAG still accepts the passwordless 'default' user"
+fi
+docker rm -f "$ch_cid" >/dev/null 2>&1 || true
+trap - EXIT
+ok "clickhouse image binds loopback only (read back from the running server), 'default' user removed"
+
 echo
 echo "build-images: next — point docker/.env at these tags and deploy:"
 echo "  USSDGW_IMAGE=ussdgw:$TAG"
 echo "  NGINX_IMAGE=ussdgw-nginx:$TAG"
 echo "  POSTGRES_IMAGE=ussdgw-postgres:$TAG"
+echo "  CLICKHOUSE_IMAGE=ussdgw-clickhouse:$TAG"
 echo
 echo "  docker stack deploy -c docker/stack.yml -c docker/stack.test.yml ussdgw"

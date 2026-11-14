@@ -120,12 +120,14 @@ fi
 #     set -a; . docker/.env; set +a; docker stack deploy -c docker/stack.yml … ussdgw
 # A bare manual `docker stack deploy` without that falls back to the :latest defaults.
 USSDGW_IMAGE="ussdgw:$TAG"; NGINX_IMAGE="ussdgw-nginx:$TAG"; POSTGRES_IMAGE="ussdgw-postgres:$TAG"
-export USSDGW_IMAGE NGINX_IMAGE POSTGRES_IMAGE
+CLICKHOUSE_IMAGE="ussdgw-clickhouse:$TAG"
+export USSDGW_IMAGE NGINX_IMAGE POSTGRES_IMAGE CLICKHOUSE_IMAGE
 if [[ -w "$ENV_FILE" && "$MODE_CHECK" == 0 ]]; then
   tmp="$(mktemp)"
   sed -e "s|^USSDGW_IMAGE=.*|USSDGW_IMAGE=$USSDGW_IMAGE|" \
       -e "s|^NGINX_IMAGE=.*|NGINX_IMAGE=$NGINX_IMAGE|" \
-      -e "s|^POSTGRES_IMAGE=.*|POSTGRES_IMAGE=$POSTGRES_IMAGE|" "$ENV_FILE" > "$tmp"
+      -e "s|^POSTGRES_IMAGE=.*|POSTGRES_IMAGE=$POSTGRES_IMAGE|" \
+      -e "s|^CLICKHOUSE_IMAGE=.*|CLICKHOUSE_IMAGE=$CLICKHOUSE_IMAGE|" "$ENV_FILE" > "$tmp"
   cat "$tmp" > "$ENV_FILE"; rm -f "$tmp"
   info "$ENV_FILE pinned to :$TAG"
 fi
@@ -184,7 +186,7 @@ fi
 # No sctp module = the gateway boots, logs, and then fails at the first SCTP socket.
 [[ -d /proc/net/sctp ]] || die "/proc/net/sctp is absent — the sctp kernel module is not loaded.
      Run: sudo ./docker/host-prep.sh   (a container cannot modprobe)"
-for d in configs logs data pgdata; do
+for d in configs logs data pgdata clickhouse; do
   if [[ -d "$DATA_ROOT/$d" ]]; then :;
   elif [[ "$MODE_CHECK" == 1 ]]; then
     warn "$DATA_ROOT/$d missing — a real deploy needs: sudo ./docker/host-prep.sh"
@@ -205,7 +207,7 @@ if [[ ! -d "$DATA_ROOT/nginx/certs" ]]; then
     fi
   fi
 fi
-info "kernel SCTP present; $DATA_ROOT/{configs,logs,data,pgdata} present"
+info "kernel SCTP present; $DATA_ROOT/{configs,logs,data,pgdata,clickhouse} present"
 
 # Log4j2 writes to $DATA_ROOT/logs (ussd.log.dir). If a log is not appearing there,
 # check this before anything else: a file that exists but is never written to is worse
@@ -335,7 +337,7 @@ if [[ "$MODE_BUILD" == 1 || "$MODE_DEPLOY" == 1 ]]; then
     # every later step (provenance, --skip-build, deploy) looks for an image that does not exist.
     TAG="$TAG" ./docker/build/build-images.sh
   else
-    for img in ussdgw ussdgw-nginx ussdgw-postgres; do
+    for img in ussdgw ussdgw-nginx ussdgw-postgres ussdgw-clickhouse; do
       docker image inspect "$img:$TAG" >/dev/null 2>&1 \
         || die "--skip-build but $img:$TAG does not exist. Build it, or set TAG to a tag that exists
      (present ussdgw tags: $(docker images ussdgw --format '{{.Tag}}' | tr '\n' ' '))"
@@ -592,6 +594,9 @@ make_secret() {
   case "$name" in
     ussdgw_db_password)       val="$(openssl rand -base64 32)" ;;
     ussdgw_pg_super_password) val="$(openssl rand -base64 24 | tr -d '\n=')" ;;
+    # Hex: it lands inside the CDATA of ClickHouse's generated users.d XML and in an HTTP
+    # header; no character of it needs escaping in either.
+    ussdgw_clickhouse_password) val="$(openssl rand -hex 24)" ;;
     ussdgw_admin_key)
       val="$(config_admin_key || true)"
       [[ -n "$val" ]] || die "cannot create $name: no readable ussd.admin.api-key in
@@ -615,6 +620,7 @@ make_secret() {
 openssl rand -hex 1 >/dev/null 2>&1 || die "openssl is required to generate missing secrets"
 make_secret ussdgw_db_password
 make_secret ussdgw_pg_super_password
+make_secret ussdgw_clickhouse_password
 make_secret ussdgw_admin_key
 
 # An EXISTING ussdgw_admin_key may predate the mirror rule (random value) or the operator may
@@ -644,7 +650,7 @@ step "5/6 deploy stack '$STACK_NAME' (profile $DEPLOY_PROFILE, images :$TAG)"
 
 if [[ "$MODE_CHECK" == 1 ]]; then
   info "dry run: would run  docker stack deploy -c ./docker/stack.yml -c $OVERLAY $STACK_NAME"
-  for img in "$USSDGW_IMAGE" "$NGINX_IMAGE" "$POSTGRES_IMAGE"; do
+  for img in "$USSDGW_IMAGE" "$NGINX_IMAGE" "$POSTGRES_IMAGE" "$CLICKHOUSE_IMAGE"; do
     docker image inspect "$img" >/dev/null 2>&1 && info "  image present: $img" || warn "  image MISSING: $img"
   done
 else

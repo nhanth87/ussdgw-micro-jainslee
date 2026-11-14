@@ -510,8 +510,9 @@ ss -ln --sctp; cat /proc/net/sctp/assocs
 The operator's live `application.properties` carried a **6-character** database
 password. For the **new, empty** container database I generated a 28-character
 password, set the swarm secret, and **commented the hard-coded lines out of the seeded
-config** so the secret is the single source (Quarkus env ordinal 300 outranks the file
-at 250). An operator's existing credentials are **not** to be changed without asking —
+config** so the secret is the single source. (The reason once given here — "env ordinal
+300 outranks the file at 250" — did not hold when measured on 2026-11-15: a literal key in
+`configs/application.properties` beat the env var. Commenting the line out is what works.) An operator's existing credentials are **not** to be changed without asking —
 but a database being created from scratch has no existing consumer, and leaving a
 6-character password on a carrier host is not a defensible default. A stale literal in
 the config is also a **silent fallback** if the secret ever fails to load.
@@ -857,3 +858,20 @@ Detail: workspace [`docs/agents/lessons.md`](../../../../../docs/agents/lessons.
 - **Root SBB entities are never removed when their activity ends**, and `releaseEntity` from the entity's own thread deadlocks. Without an IES every event makes a new entity (see the 2026-10-14 runtime lesson). Watch entity count over a long run.
 - `RegistrationOrder` fix (O(1) entity registration) is in micro-jainslee 1.2.2-SNAPSHOT — older jars slow down with uptime.
 - Shared helpers (tenant hierarchy ADMIN > GD > USER via `jainslee-authz`, write-behind, TTL cache, tenant TPS guard) belong in micro-jainslee — reuse, do not fork per product.
+
+## 2026-11-15 — codec, CDR → ClickHouse, dependency bump
+
+| Mistake | Rule | Detail |
+|---------|------|--------|
+| GSM-7 basic table **missing the 0x1B (ESC) slot** | Every septet from `Æ` up was off by one (`A`→0x40 = `¡`). Round-trip tests can never catch a shifted table — test **absolute** TS 23.038 positions, and cross-check against jSS7 `USSDStringImpl` (the MAP wire). | `Gsm7Alphabet` · `Ts23038ConformanceTest` |
+| Septet 0x09 is `Ç` (TS 23.038) but `ç` in jSS7 `GSMCharset` | jSS7 turns `Ç` into a space. `Gsm7Alphabet.forJss7` maps `Ç`→`ç` before MAP; both encode to 0x09. | `MapDialogHelper` |
+| `USSDStringImpl(text, dcs, null)` for GSM8 (0x44) | jSS7 throws "gsm8Charset is not defined" → `ucs8` replies never left. Pass ISO-8859-1 on encode **and** `getString(ISO_8859_1)` on MO decode. | ra-jss7 `MapUssdOutbound.ussdString` |
+| `clip()` at 160 **characters** | MAP USSD-String is 160 **octets**: UCS-2 = 80 units. Fit by encoded length (binary search on the jSS7 encoder), surrogate-safe. GSM-7 keeps all 182 septets. | `MapUssdOutbound.fitUssd` |
+| SMPP `short_message` decoded as **packed** GSM-7 by heuristic | SMPP never packs septets. `data_coding` per SMPP 3.4 §5.2.19 (`DataCodingSchemes.smppCharset`); USSD-over-SMPP encode = one unpacked `short_message`, USSD limits, no UDH. | `SmsTextCodec.encodeSmppUssd` |
+| Env var did **not** override a key written literally in `configs/application.properties` | With `-Dquarkus.config.locations=file:…/configs/application.properties`, a literal there beat `USSD_CDR_CLICKHOUSE_ENABLED` (measured 2026-11-15). Any key the Docker stack sets by env must be **absent** from the operator file or written `key=${ENV:default}` (repo convention, e.g. `ussd.admin.api-key`). | `dist/configs/application.properties` § ClickHouse |
+| Test jars in `lib/main` | `sctp-impl` (TestNG 6.2), jSS7 / corsac (junit) declare test libs in **compile** scope. Quarkus' resolver ignores a managed `<scope>test</scope>`, so use **exclusions**; `ls dist/lib/main | grep -i -E 'junit|testng|hamcrest'` must be empty. Surefire 3.6 refuses TestNG < 6.14.3 and JUnit ≤ 4.11 on the test classpath. | `pom.xml` |
+| jss7 / ra-jss7 still say `sctp.version=2.27.32` | Building sctp 2.27.33 alone breaks them on a cold `/m2`. `build-all.sh` / `dist-package-script.sh` pass `-Dsctp.version=<built>`. | `docker/build/build-all.sh` |
+| `pkill -f '<path>/quarkus-run.jar'` from a shell whose own argv contains that string | Kills the calling shell (exit 144). Use `pkill -f '[d]ist/quarkus-run.jar'`. | — |
+
+- **CDR store of record = ClickHouse** (`ussd.cdr.clickhouse.*`, `CdrClickHouseSink`). Table `ussd.cdr_event`, monthly partitions, `TTL … + toIntervalMonth(N)` with N ≥ 3 enforced in code, `ttl_only_drop_parts` → effective retention N…N+1 months. Writes are batched off the hot path; while ClickHouse is down batches are spooled to `data/cdr-spool` and replayed with `insert_deduplication_token` (no double count). The log4j `ussd-cdr.log` ledger stays as the local spool of last resort. Prove on the host with `docker/prove.sh` § 4b (TTL read from `system.tables`, sockets from `/proc/net/tcp`).
+- **ClickHouse image binds loopback only.** The upstream `config.d/docker_related_config.xml` listens on `0.0.0.0`/`::` — on hostnet that is every interface of the carrier host (same class as B17). `docker/clickhouse/` replaces that file; `build-images.sh` proves it against a running server and fails on the upstream image (negative control run 2026-11-15).

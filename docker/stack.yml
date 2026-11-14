@@ -46,6 +46,14 @@ volumes:
       type: none
       o: bind
       device: /srv/ussdgw/pgdata
+  # ClickHouse CDR store. Bind-mounted so it survives `docker stack rm`, image upgrades and
+  # node reboots — the >= 3-month CDR retention lives here, not in a container layer.
+  chdata:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /srv/ussdgw/clickhouse
   nginx-certs:
     driver: local
     driver_opts:
@@ -65,6 +73,8 @@ secrets:
   # initialised while the gateway waits for it forever.
   #   openssl rand -base64 24 | tr -d '\n=' | docker secret create ussdgw_pg_super_password -
   ussdgw_pg_super_password:
+    external: true
+  ussdgw_clickhouse_password:
     external: true
 
 services:
@@ -168,6 +178,11 @@ services:
         uid: "10001"
         gid: "10001"
         mode: 0400
+      - source: ussdgw_clickhouse_password
+        target: ussdgw_clickhouse_password
+        uid: "10001"
+        gid: "10001"
+        mode: 0400
     # LIVENESS ONLY — and the reason this block exists is a gateway that was killed for
     # being healthy. The image's own HEALTHCHECK sent
     #
@@ -215,12 +230,21 @@ services:
       USSD_DB_PASSWORD_FILE: /run/secrets/ussdgw_db_password
       PG_HOST: 127.0.0.1
       PG_PORT: "5432"
+      # CDR store of record: ClickHouse on loopback (hostnet). Rows are spooled under
+      # data/cdr-spool while it is unreachable and replayed — never lost.
+      USSD_CDR_CLICKHOUSE_ENABLED: "true"
+      USSD_CDR_CLICKHOUSE_URL: http://127.0.0.1:8123
+      USSD_CDR_CLICKHOUSE_DATABASE: ussd
+      USSD_CDR_CLICKHOUSE_USER: ussdgw
+      USSD_CDR_CLICKHOUSE_PASSWORD_FILE: /run/secrets/ussdgw_clickhouse_password
+      USSD_CDR_CLICKHOUSE_RETENTION_MONTHS: ${CDR_RETENTION_MONTHS:-3}
+      USSD_CDR_CLICKHOUSE_SPOOL_DIR: /opt/ussdgw/data/cdr-spool
       # Heap: lab-safe defaults per AGENTS.md. A shared SS7 host cannot spare 8 GB
       # to one container. Raise only on a dedicated node.
       USSD_XMS: ${USSD_XMS:-2g}
       USSD_XMX: ${USSD_XMX:-4g}
       TZ: Africa/Addis_Ababa
-    depends_on: [postgres]
+    depends_on: [postgres, clickhouse]
     # Give live MAP dialogs time to end/abort cleanly on SIGTERM instead of being
     # SIGKILLed mid-dialog. In swarm this is a top-level service key, NOT under
     # deploy (the schema rejects it there, which is a useful failure).
@@ -269,6 +293,57 @@ services:
         hard: 1048576
     # No privileged, no extra capabilities: the host network means SCTP is reachable
     # without CAP_NET_ADMIN, and the ports are all > 1024.
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "5"
+
+  clickhouse:
+    image: ${CLICKHOUSE_IMAGE:-ussdgw-clickhouse:latest}
+    # Host network like the rest of the stack; the image binds 127.0.0.1/::1 only
+    # (docker/clickhouse/config.d/docker_related_config.xml, proven by build-images.sh).
+    networks: [hostnet]
+    volumes:
+      - chdata:/var/lib/clickhouse
+    secrets:
+      - source: ussdgw_clickhouse_password
+        target: ussdgw_clickhouse_password
+        uid: "101"
+        gid: "101"
+        mode: 0400
+    environment:
+      CLICKHOUSE_DB: ussd
+      CLICKHOUSE_USER: ussdgw
+      CLICKHOUSE_PASSWORD_FILE: /run/secrets/ussdgw_clickhouse_password
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "0"
+      TZ: UTC
+    healthcheck:
+      test: ["CMD-SHELL", "clickhouse-client -u ussdgw --password \"$$(cat /run/secrets/ussdgw_clickhouse_password)\" -q 'SELECT 1' >/dev/null"]
+      interval: 30s
+      timeout: 10s
+      start_period: 60s
+      retries: 3
+    ulimits:
+      nofile:
+        soft: 262144
+        hard: 262144
+    stop_grace_period: 60s
+    deploy:
+      replicas: 1
+      placement:
+        constraints: [node.labels.ussdgw == true]
+      resources:
+        limits:
+          memory: ${CLICKHOUSE_MEM_LIMIT:-3g}
+      restart_policy:
+        condition: on-failure
+        delay: 10s
+        max_attempts: 5
+        window: 120s
+      update_config:
+        order: stop-first
+        parallelism: 1
     logging:
       driver: json-file
       options:

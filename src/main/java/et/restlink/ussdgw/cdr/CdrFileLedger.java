@@ -222,6 +222,16 @@ public class CdrFileLedger {
         return session;
     }
 
+    /** Same rollup the ledger uses, for other event sources (ClickHouse). Oldest-first input. */
+    public static CdrEntity rollUpSession(String corr, List<CdrEntity> eventsOldestFirst) {
+        return rollUp(corr == null ? "" : corr, eventsOldestFirst);
+    }
+
+    /** Ordering key of a rolled-up session (newest event). */
+    public static Instant sessionNewestAt(CdrEntity e) {
+        return newestAt(e);
+    }
+
     private static Instant newestAt(CdrEntity e) {
         return e.updatedAt != null ? e.updatedAt : (e.recordedAt != null ? e.recordedAt : Instant.EPOCH);
     }

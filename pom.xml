@@ -31,6 +31,16 @@
                 <type>pom</type>
                 <scope>import</scope>
             </dependency>
+            <!-- jSS7 / corsac-diameter poms declare junit in COMPILE scope. Which version wins
+                 depends on the resolution path (4.13.2 here, 4.11 on a from-source /m2), and
+                 surefire 3.6 refuses JUnit <= 4.11. Managing it as test scope fixes the version
+                 for every path and keeps junit/hamcrest out of lib/main. -->
+            <dependency>
+                <groupId>junit</groupId>
+                <artifactId>junit</artifactId>
+                <version>4.13.2</version>
+                <scope>test</scope>
+            </dependency>
         </dependencies>
     </dependencyManagement>
     <dependencies>
@@ -48,7 +58,7 @@
         <dependency><groupId>io.micrometer</groupId><artifactId>micrometer-registry-prometheus</artifactId><version>1.17.2</version></dependency>
         <dependency><groupId>com.fasterxml.jackson.core</groupId><artifactId>jackson-databind</artifactId></dependency>
         <dependency><groupId>com.fasterxml.jackson.dataformat</groupId><artifactId>jackson-dataformat-xml</artifactId></dependency>
-        <dependency><groupId>com.microjainslee</groupId><artifactId>ra-jss7</artifactId><version>${microjainslee.version}</version></dependency>
+        <dependency><groupId>com.microjainslee</groupId><artifactId>ra-jss7</artifactId><version>${microjainslee.version}</version><exclusions><exclusion><groupId>junit</groupId><artifactId>junit</artifactId></exclusion><exclusion><groupId>org.hamcrest</groupId><artifactId>hamcrest-core</artifactId></exclusion></exclusions></dependency>
         <!--
             Kernel SCTP oracle (org.mobicents.protocols.sctp.netty.NettySctpManagementImpl).
             ra-jss7 ships only sctp-api/core/backend-fstack, so sctp-impl otherwise resolves to a
@@ -66,9 +76,9 @@
                 <exclusion><groupId>org.testng</groupId><artifactId>testng</artifactId></exclusion>
             </exclusions>
         </dependency>
-        <dependency><groupId>com.microjainslee</groupId><artifactId>jainslee-cluster</artifactId><version>${microjainslee.version}</version></dependency>
-        <dependency><groupId>com.microjainslee</groupId><artifactId>ra-diameter</artifactId><version>${microjainslee.version}</version></dependency>
-        <dependency><groupId>com.microjainslee</groupId><artifactId>ra-sip-servlet</artifactId><version>${microjainslee.version}</version></dependency>
+        <dependency><groupId>com.microjainslee</groupId><artifactId>jainslee-cluster</artifactId><version>${microjainslee.version}</version><exclusions><exclusion><groupId>junit</groupId><artifactId>junit</artifactId></exclusion><exclusion><groupId>org.hamcrest</groupId><artifactId>hamcrest-core</artifactId></exclusion></exclusions></dependency>
+        <dependency><groupId>com.microjainslee</groupId><artifactId>ra-diameter</artifactId><version>${microjainslee.version}</version><exclusions><exclusion><groupId>junit</groupId><artifactId>junit</artifactId></exclusion><exclusion><groupId>org.hamcrest</groupId><artifactId>hamcrest-core</artifactId></exclusion></exclusions></dependency>
+        <dependency><groupId>com.microjainslee</groupId><artifactId>ra-sip-servlet</artifactId><version>${microjainslee.version}</version><exclusions><exclusion><groupId>junit</groupId><artifactId>junit</artifactId></exclusion><exclusion><groupId>org.hamcrest</groupId><artifactId>hamcrest-core</artifactId></exclusion></exclusions></dependency>
         <dependency><groupId>com.microjainslee</groupId><artifactId>ra-http-server</artifactId><version>${microjainslee.version}</version></dependency>
         <dependency><groupId>com.microjainslee</groupId><artifactId>ra-http-client</artifactId><version>${microjainslee.version}</version></dependency>
         <dependency><groupId>com.microjainslee</groupId><artifactId>ra-grpc-client</artifactId><version>${microjainslee.version}</version></dependency>

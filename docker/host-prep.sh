@@ -61,9 +61,11 @@ fi
 # --- 3. persistent directories --------------------------------------------------
 # uid 10001 matches the ussdgw image, so files stay writable across deploys.
 ok "creating $DATA_ROOT (uid 10001)"
-mkdir -p "$DATA_ROOT"/{configs,configs/ss7-persist,logs,data,pgdata,nginx/certs,backup}
+mkdir -p "$DATA_ROOT"/{configs,configs/ss7-persist,logs,data,pgdata,clickhouse,nginx/certs,backup}
 chown -R 10001:10001 "$DATA_ROOT"/{configs,logs,data}
 chown -R 999:999 "$DATA_ROOT"/pgdata        # postgres uid in the official image
+chown -R 101:101 "$DATA_ROOT"/clickhouse    # clickhouse uid in the official image (CDR, >= 3 months)
+chmod 750 "$DATA_ROOT"/clickhouse
 chmod 775 "$DATA_ROOT"/{configs,logs,data}
 # The admin UI saves SS7 stack JSON back into configs/ — it must stay writable.
 chmod 775 "$DATA_ROOT/configs" "$DATA_ROOT/configs/ss7-persist"

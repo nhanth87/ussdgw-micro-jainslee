@@ -25,13 +25,10 @@ public final class UssdEncodingPolicy {
                         "AUTO: ethiopic → UCS-2 (AS omitted alphabet)");
             }
             if (Gsm7Alphabet.canEncode(text)) {
-                int septets = Gsm7Alphabet.septetLength(text);
-                if (septets >= 0 && septets <= USSD_MAX_GSM7_SEPTETS) {
-                    return new Decision(UssdAlphabet.UCS7, SmsTextCodec.CBS_GSM7,
-                            "AUTO: GSM-7+ext (AS omitted alphabet)");
-                }
-                return new Decision(UssdAlphabet.UNICODE, SmsTextCodec.CBS_UCS2,
-                        "AUTO: too long for GSM-7 USSD → UCS-2");
+                // Even when longer than 182 septets: UCS-2 holds only 80 characters, so
+                // switching alphabet would lose more text than truncating GSM-7 does.
+                return new Decision(UssdAlphabet.UCS7, SmsTextCodec.CBS_GSM7,
+                        "AUTO: GSM-7+ext (AS omitted alphabet)");
             }
             return new Decision(UssdAlphabet.UNICODE, SmsTextCodec.CBS_UCS2,
                     "AUTO: non-GSM → UCS-2");
@@ -44,9 +41,22 @@ public final class UssdEncodingPolicy {
             return new Decision(UssdAlphabet.UCS7, SmsTextCodec.CBS_GSM7, "AS alphabet=ucs7");
         }
         if (h == UssdAlphabet.UCS8) {
+            if (!fitsLatin1(text)) {
+                return new Decision(UssdAlphabet.UNICODE, SmsTextCodec.CBS_UCS2,
+                        "AS asked ucs8 but text not ISO-8859-1 → UCS-2 fallback");
+            }
             return new Decision(UssdAlphabet.UCS8, SmsTextCodec.CBS_GSM8, "AS alphabet=ucs8");
         }
         return new Decision(UssdAlphabet.UNICODE, SmsTextCodec.CBS_UCS2, "AS alphabet=unicode");
+    }
+
+    /** True when every character survives ISO-8859-1 (the 8-bit USSD/SMPP octet set). */
+    public static boolean fitsLatin1(String text) {
+        if (text == null) return true;
+        for (int i = 0; i < text.length(); i++) {
+            if (text.charAt(i) > 0xFF) return false;
+        }
+        return true;
     }
 
     public static boolean containsEthiopic(String text) {

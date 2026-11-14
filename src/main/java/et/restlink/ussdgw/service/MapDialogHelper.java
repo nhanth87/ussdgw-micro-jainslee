@@ -2,6 +2,7 @@ package et.restlink.ussdgw.service;
 
 import et.restlink.ussdgw.api.UssdAlphabet;
 import et.restlink.ussdgw.codec.SmsTextCodec;
+import et.restlink.ussdgw.codec.UssdEncodingPolicy;
 import et.restlink.ussdgw.config.UssdConfigService;
 
 import com.microjainslee.api.RaCommandPort;
@@ -20,7 +21,7 @@ public final class MapDialogHelper {
     public static String ussdString(ProcessUnstructuredSSRequest req) {
         try {
             if (req == null || req.getUSSDString() == null) return "";
-            return req.getUSSDString().getString(null);
+            return req.getUSSDString().getString(java.nio.charset.StandardCharsets.ISO_8859_1);
         } catch (Exception e) {
             return "";
         }
@@ -45,7 +46,12 @@ public final class MapDialogHelper {
             LOG.warn("replyAndEnd: no ra-jss7");
             return;
         }
-        int dcs = SmsTextCodec.chooseCbsDataCoding(text, alphabet);
+        UssdEncodingPolicy.Decision fit = UssdEncodingPolicy.resolve(text, alphabet);
+        text = UssdEncodingPolicy.truncateToFit(text, fit.alphabet());
+        if (fit.alphabet().isGsm7Family()) {
+            text = et.restlink.ussdgw.codec.Gsm7Alphabet.forJss7(text);
+        }
+        int dcs = fit.cbsDcs();
         ss7.sendCommand(new Ss7Command.MapProcessUnstructuredSsResponse(
                 dialogId, invokeId, text, true, dcs));
     }
@@ -60,7 +66,12 @@ public final class MapDialogHelper {
             LOG.warn("replyContinue: no ra-jss7");
             return;
         }
-        int dcs = SmsTextCodec.chooseCbsDataCoding(text, alphabet);
+        UssdEncodingPolicy.Decision fit = UssdEncodingPolicy.resolve(text, alphabet);
+        text = UssdEncodingPolicy.truncateToFit(text, fit.alphabet());
+        if (fit.alphabet().isGsm7Family()) {
+            text = et.restlink.ussdgw.codec.Gsm7Alphabet.forJss7(text);
+        }
+        int dcs = fit.cbsDcs();
         ss7.sendCommand(new Ss7Command.MapProcessUnstructuredSsResponse(
                 dialogId, invokeId, text, false, dcs));
     }
@@ -80,7 +91,12 @@ public final class MapDialogHelper {
             LOG.warn("niContinue: no ra-jss7");
             return;
         }
-        int dcs = SmsTextCodec.chooseCbsDataCoding(text, alphabet == null ? UssdAlphabet.AUTO : alphabet);
+        UssdEncodingPolicy.Decision fit = UssdEncodingPolicy.resolve(text, alphabet == null ? UssdAlphabet.AUTO : alphabet);
+        text = UssdEncodingPolicy.truncateToFit(text, fit.alphabet());
+        if (fit.alphabet().isGsm7Family()) {
+            text = et.restlink.ussdgw.codec.Gsm7Alphabet.forJss7(text);
+        }
+        int dcs = fit.cbsDcs();
         ss7.sendCommand(new Ss7Command.MapUnstructuredSsContinue(
                 correlationId, text, notifyOnly, dcs));
     }
@@ -141,7 +157,12 @@ public final class MapDialogHelper {
         }
         Ss7Address msc = Ss7Address.of(mscGt == null || mscGt.isBlank() ? "0" : mscGt, mscSsn);
         Ss7Address local = Ss7Address.of(localGt == null || localGt.isBlank() ? "100" : localGt, localSsn);
-        int dcs = SmsTextCodec.chooseCbsDataCoding(text, alphabet);
+        UssdEncodingPolicy.Decision fit = UssdEncodingPolicy.resolve(text, alphabet);
+        text = UssdEncodingPolicy.truncateToFit(text, fit.alphabet());
+        if (fit.alphabet().isGsm7Family()) {
+            text = et.restlink.ussdgw.codec.Gsm7Alphabet.forJss7(text);
+        }
+        int dcs = fit.cbsDcs();
         // preferredAsp/remotePc require ra-jss7 with pin ctor — Digicom classpath may lag; ignore pins.
         if (preferredAspName != null && !preferredAspName.isBlank()) {
             LOG.debug("niPush: peer-route pin ignored asp={} pc={}", preferredAspName, remotePc);
@@ -173,7 +194,12 @@ public final class MapDialogHelper {
         }
         Ss7Address hop = Ss7Address.of(hopGt == null || hopGt.isBlank() ? "0" : hopGt, hopSsn);
         Ss7Address local = Ss7Address.of(localGt == null || localGt.isBlank() ? "100" : localGt, localSsn);
-        int dcs = SmsTextCodec.chooseCbsDataCoding(text, alphabet == null ? UssdAlphabet.AUTO : alphabet);
+        UssdEncodingPolicy.Decision fit = UssdEncodingPolicy.resolve(text, alphabet == null ? UssdAlphabet.AUTO : alphabet);
+        text = UssdEncodingPolicy.truncateToFit(text, fit.alphabet());
+        if (fit.alphabet().isGsm7Family()) {
+            text = et.restlink.ussdgw.codec.Gsm7Alphabet.forJss7(text);
+        }
+        int dcs = fit.cbsDcs();
         if (preferredAspName != null && !preferredAspName.isBlank()) {
             LOG.debug("map2mapProcessHop: peer-route pin ignored asp={} pc={}", preferredAspName, remotePc);
         }

@@ -1,0 +1,9 @@
+<clickhouse>
+    <!--
+      Replaces the upstream file of the same name, which listens on :: and 0.0.0.0.
+      On the host network that would expose the CDR store on every interface of the carrier
+      host. config.xml already listens on ::1 and 127.0.0.1; listen_try tolerates a host
+      without IPv6 loopback.
+    -->
+    <listen_try>1</listen_try>
+</clickhouse>

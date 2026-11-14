@@ -67,39 +67,52 @@ public final class SmsTextCodec {
 
     /**
      * Map SMPP {@code data_coding} (PDU octet) → {@link UssdAlphabet}.
-     * AS ESME chooses the coding; GW does not hardcode.
+     * AS ESME chooses the coding; GW does not hardcode. See {@link DataCodingSchemes#smppCharset}.
      */
     public static UssdAlphabet alphabetFromSmppDcs(byte dataCoding) {
-        int dcs = dataCoding & 0xFF;
-        if (dcs == 0x08 || dcs == 0x18 || (dcs & 0x0C) == 0x08) {
-            return UssdAlphabet.UNICODE;
-        }
-        // Message class / general 8-bit
-        if (dcs == 0x03 || dcs == 0x04 || dcs == 0xF5 || dcs == 0xF6
-                || dcs == 0x44 || dcs == 0x54 || dcs == 0x55 || dcs == 0x56 || dcs == 0x57) {
-            return UssdAlphabet.UCS8;
-        }
-        // Default / GSM-7 / IA5
-        return UssdAlphabet.UCS7;
+        return DataCodingSchemes.alphabetOfSmpp(dataCoding);
     }
 
+    /**
+     * Decode an SMPP {@code short_message} / {@code message_payload} (SMPP 3.4 §5.2.19).
+     * SMPP carries GSM 7-bit <b>unpacked</b> (one septet per octet) — it is never bit-packed,
+     * so there is no packed/unpacked guessing here.
+     */
     public static String decode(byte[] payload, byte dataCoding) {
         if (payload == null || payload.length == 0) return "";
-        UssdAlphabet a = alphabetFromSmppDcs(dataCoding);
-        if (a.isUcs2Family()) {
-            return new String(payload, StandardCharsets.UTF_16BE);
+        return switch (DataCodingSchemes.smppCharset(dataCoding)) {
+            case UCS2 -> new String(payload, StandardCharsets.UTF_16BE);
+            case LATIN1, BINARY_8BIT -> new String(payload, StandardCharsets.ISO_8859_1);
+            case IA5 -> new String(payload, StandardCharsets.US_ASCII);
+            case CYRILLIC -> new String(payload, Charset.forName("ISO-8859-5"));
+            case HEBREW -> new String(payload, Charset.forName("ISO-8859-8"));
+            case GSM7_UNPACKED -> Gsm7Alphabet.fromSeptets(payload);
+        };
+    }
+
+    /** One USSD-over-SMPP {@code short_message}: {@code data_coding} + octets (no UDH). */
+    public record SmppUssdText(byte dataCoding, byte[] shortMessage, String sentText,
+                               UssdAlphabet alphabet) { }
+
+    /**
+     * Encode USSD text for SMPP {@code submit_sm}. USSD has no concatenation, so the text is
+     * fitted to the USSD limits of the chosen alphabet (182 GSM-7 septets / 160 octets /
+     * 80 UCS-2 units) instead of being split: GSM-7 → {@code data_coding} 0x00 with unpacked
+     * septets, 8-bit → 0x03 ISO-8859-1, UCS-2 → 0x08 UTF-16BE.
+     */
+    public static SmppUssdText encodeSmppUssd(String text, UssdAlphabet alphabet) {
+        String t = text == null ? "" : text;
+        var decision = UssdEncodingPolicy.resolve(t, alphabet);
+        String fitted = UssdEncodingPolicy.truncateToFit(t, decision.alphabet());
+        if (decision.alphabet().isUcs2Family()) {
+            return new SmppUssdText(DCS_UCS2, fitted.getBytes(StandardCharsets.UTF_16BE), fitted,
+                    UssdAlphabet.UNICODE);
         }
-        if (a == UssdAlphabet.UCS8) {
-            return new String(payload, StandardCharsets.ISO_8859_1);
+        if (decision.alphabet() == UssdAlphabet.UCS8) {
+            return new SmppUssdText(DCS_LATIN1, fitted.getBytes(StandardCharsets.ISO_8859_1), fitted,
+                    UssdAlphabet.UCS8);
         }
-        // Prefer packed GSM-7 unpack when short_message looks binary-packed;
-        // ESME often sends unpacked septets as ISO-8859-1 — keep Latin-1 fallback.
-        try {
-            byte[] septets = unpackGsm7(payload, estimateSeptetCount(payload));
-            String viaGsm = Gsm7Alphabet.fromSeptets(septets);
-            if (!viaGsm.isBlank()) return viaGsm;
-        } catch (RuntimeException ignored) { }
-        return new String(payload, StandardCharsets.ISO_8859_1).trim();
+        return new SmppUssdText(DCS_GSM7, Gsm7Alphabet.toSeptets(fitted), fitted, UssdAlphabet.UCS7);
     }
 
     public static boolean canGsm7(String text) {
@@ -161,10 +174,6 @@ public final class SmsTextCodec {
             bitOffset += 7;
         }
         return out;
-    }
-
-    private static int estimateSeptetCount(byte[] packed) {
-        return packed.length * 8 / 7;
     }
 
     static byte[] unpackGsm7(byte[] packed, int septetCount) {

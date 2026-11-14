@@ -70,6 +70,7 @@ public class AdminHttpHandler {
     @Inject LinkStatusService linkStatus;
     @Inject CdrService cdr;
     @Inject CdrFileLedger cdrFileLedger;
+    @Inject et.restlink.ussdgw.cdr.clickhouse.CdrClickHouseSink cdrClickHouse;
     @Inject VirtualSessionBridge bridge;
     @Inject VirtualSessionStore store;
     @Inject AdaptiveTimeout adaptive;
@@ -957,6 +958,9 @@ public class AdminHttpHandler {
             m.put("cdr.file.recentEvents", cdrFileLedger.size());
             m.put("cdr.file.dropped", cdrFileLedger.droppedCount());
             m.put("cdr.file.warmed", cdrFileLedger.warmedCount());
+        }
+        if (cdrClickHouse != null) {
+            m.putAll(cdrClickHouse.status());
         }
         return HttpReply.json(200, m);
     }

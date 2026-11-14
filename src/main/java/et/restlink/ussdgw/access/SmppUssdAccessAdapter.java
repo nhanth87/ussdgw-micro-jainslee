@@ -60,13 +60,11 @@ public class SmppUssdAccessAdapter implements UssdAccessPort {
             return;
         }
         try {
-            var encoded = SmsTextCodec.encode(
-                    text == null ? "" : text, session.pendingAlphabet(), 1);
-            byte[] tpUd = encoded.parts().isEmpty()
-                    ? new byte[0] : encoded.parts().getFirst().tpUd();
-            boolean udhi = !encoded.parts().isEmpty() && encoded.parts().getFirst().udhi();
+            // USSD over SMPP: one short_message, USSD length limits, GSM-7 unpacked (SMPP never
+            // packs septets). The SMS codec (packed TP-UD + concatenation UDH) is wrong here.
+            var encoded = SmsTextCodec.encodeSmppUssd(text, session.pendingAlphabet());
             SmppCommand.SubmitSm cmd = SmppCommand.SubmitSm.text(
-                    session.msisdn(), tpUd, udhi, encoded.dataCoding());
+                    session.msisdn(), encoded.shortMessage(), false, encoded.dataCoding());
             sendSubmitSm(client, cmd);
             cdr.write(session.correlationId(), CdrPhase.S2_PUSH, session.msisdn(),
                     session.shortCode(), "SUBMITTED",

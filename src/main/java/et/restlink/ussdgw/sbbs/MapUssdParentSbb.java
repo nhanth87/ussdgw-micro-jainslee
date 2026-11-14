@@ -559,7 +559,7 @@ public final class MapUssdParentSbb implements Sbb, SleeEventHandler {
     private static String ussdText(ProcessUnstructuredSSResponse resp) {
         try {
             return resp == null || resp.getUSSDString() == null
-                    ? "" : resp.getUSSDString().getString(null);
+                    ? "" : resp.getUSSDString().getString(java.nio.charset.StandardCharsets.ISO_8859_1);
         } catch (Exception e) {
             return "";
         }
@@ -568,7 +568,7 @@ public final class MapUssdParentSbb implements Sbb, SleeEventHandler {
     private static String ussdText(UnstructuredSSResponse resp) {
         try {
             return resp == null || resp.getUSSDString() == null
-                    ? "" : resp.getUSSDString().getString(null);
+                    ? "" : resp.getUSSDString().getString(java.nio.charset.StandardCharsets.ISO_8859_1);
         } catch (Exception e) {
             return "";
         }
@@ -727,7 +727,7 @@ public final class MapUssdParentSbb implements Sbb, SleeEventHandler {
         s.setDialogAlive(true);
         String ussd;
         try {
-            ussd = resp.getUSSDString() == null ? "" : resp.getUSSDString().getString(null);
+            ussd = resp.getUSSDString() == null ? "" : resp.getUSSDString().getString(java.nio.charset.StandardCharsets.ISO_8859_1);
         } catch (Exception e) {
             ussd = "";
         }

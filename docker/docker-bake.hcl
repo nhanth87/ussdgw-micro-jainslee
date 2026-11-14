@@ -1,6 +1,6 @@
 # docker/docker-bake.hcl — THE main build file.
 #
-# One command builds all three images under one tag (HEAD SHA, never :latest):
+# One command builds all four images under one tag (HEAD SHA, never :latest):
 #
 #   TAG=$(git rev-parse --short HEAD) docker buildx bake -f docker/docker-bake.hcl
 #
@@ -18,7 +18,7 @@ variable "TAG" {
 }
 
 group "default" {
-  targets = ["ussdgw", "ussdgw-nginx", "ussdgw-postgres"]
+  targets = ["ussdgw", "ussdgw-nginx", "ussdgw-postgres", "ussdgw-clickhouse"]
 }
 
 target "ussdgw" {
@@ -37,4 +37,10 @@ target "ussdgw-postgres" {
   dockerfile = "docker/postgres/Dockerfile"
   context    = "."
   tags       = ["ussdgw-postgres:${TAG}"]
+}
+
+target "ussdgw-clickhouse" {
+  dockerfile = "docker/clickhouse/Dockerfile"
+  context    = "."
+  tags       = ["ussdgw-clickhouse:${TAG}"]
 }

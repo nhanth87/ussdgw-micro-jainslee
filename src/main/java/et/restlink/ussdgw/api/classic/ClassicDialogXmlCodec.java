@@ -531,22 +531,12 @@ public final class ClassicDialogXmlCodec {
         return new ElementPayload(true, text == null ? "" : text, dcs);
     }
 
-    /** CBS DCS on AS MAP message → {@link UssdAlphabet}; unknown / omitted → AUTO. */
+    /** CBS DCS on AS MAP message → {@link UssdAlphabet} (TS 23.038 §5); omitted → AUTO. */
     static UssdAlphabet alphabetFromCbsDcs(Integer dcs) {
         if (dcs == null) {
             return UssdAlphabet.AUTO;
         }
-        int v = dcs & 0xFF;
-        if (v == SmsTextCodec.CBS_UCS2 || v == 0x08 || v == 72) {
-            return UssdAlphabet.UNICODE;
-        }
-        if (v == SmsTextCodec.CBS_GSM8 || v == 0x44) {
-            return UssdAlphabet.UCS8;
-        }
-        if (v == SmsTextCodec.CBS_GSM7 || v == 0x0F || v == 15 || v == 0) {
-            return UssdAlphabet.UCS7;
-        }
-        return UssdAlphabet.AUTO;
+        return et.restlink.ussdgw.codec.DataCodingSchemes.alphabetOfCbsDcs(dcs);
     }
 
     private static String extractNamedString(JsonNode root, String element) {

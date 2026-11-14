@@ -415,6 +415,64 @@ code="$(curl -sS --connect-timeout 3 --max-time 10 -o /dev/null -w '%{http_code}
   && ok "nginx /healthz 200 (:80 in front of :8088)" \
   || echo "  note  nginx not answering on :80 (expected if not deployed yet)"
 
+# --- 4b. CDR store of record: ClickHouse (>= 3 months) --------------------------
+# Every answer here comes from the running server or the running gateway, never from a file
+# in the repo: the TTL is read from system.tables, the bind from the kernel, the flow from
+# the gateway's own counters.
+head_ "CDR store: ClickHouse"
+if [[ -s "$TMPD/status.json" ]]; then
+  python3 - "$TMPD/status.json" > "$TMPD/ch-status.txt" <<'PY' || true
+import json, sys
+d = json.load(open(sys.argv[1]))
+for k in ("cdr.clickhouse.enabled", "cdr.clickhouse.schemaReady", "cdr.clickhouse.retentionMonths",
+          "cdr.clickhouse.inserted", "cdr.clickhouse.spooledRows", "cdr.clickhouse.spoolBytes",
+          "cdr.clickhouse.droppedQueueFull", "cdr.clickhouse.droppedSpoolFull", "cdr.clickhouse.lastError"):
+    print(f"{k}={d.get(k)}")
+PY
+  sed 's/^/    /' "$TMPD/ch-status.txt"
+  grep -q '^cdr.clickhouse.enabled=True$' "$TMPD/ch-status.txt" \
+    && ok "gateway writes CDR to ClickHouse (cdr.clickhouse.enabled)" \
+    || bad "cdr.clickhouse.enabled is not true — CDR only reaches the file ledger"
+  grep -q '^cdr.clickhouse.schemaReady=True$' "$TMPD/ch-status.txt" \
+    && ok "gateway created/validated ussd.cdr_event (schemaReady)" \
+    || bad "ClickHouse schema not ready — rows are being spooled, see cdr.clickhouse.lastError"
+  grep -q '^cdr.clickhouse.droppedQueueFull=0$' "$TMPD/ch-status.txt" \
+    && grep -q '^cdr.clickhouse.droppedSpoolFull=0$' "$TMPD/ch-status.txt" \
+    && ok "no CDR row dropped on the way to ClickHouse" \
+    || bad "CDR rows were dropped before ClickHouse (queue or spool full) — see counters above"
+fi
+ch_cid="$(docker ps -q --filter "label=com.docker.swarm.service.name=${STACK_NAME:-ussdgw}_clickhouse" 2>/dev/null | head -1)"
+if [[ -z "$ch_cid" ]]; then
+  bad "no running ${STACK_NAME:-ussdgw}_clickhouse task — the CDR store is down"
+else
+  ch_q() {  # password from the task's own secret, via stdin-free env, never argv on the host
+    docker exec "$ch_cid" sh -c 'clickhouse-client -u ussdgw --password "$(cat /run/secrets/ussdgw_clickhouse_password)" -q "$1"' _ "$1" 2>&1
+  }
+  ttl="$(ch_q "SELECT engine_full FROM system.tables WHERE database='ussd' AND name='cdr_event'")"
+  months="$(grep -oE 'toIntervalMonth\([0-9]+\)' <<<"$ttl" | grep -oE '[0-9]+' | head -1 || true)"
+  if [[ -n "$months" && "$months" -ge 3 ]]; then
+    ok "ussd.cdr_event TTL = $months months (read from ClickHouse; requirement >= 3)"
+  else
+    bad "ussd.cdr_event TTL not >= 3 months (got: '${months:-none}') — $ttl"
+  fi
+  grep -q 'ttl_only_drop_parts = 1' <<<"$ttl" \
+    && ok "expiry drops whole monthly partitions only (ttl_only_drop_parts)" \
+    || bad "ttl_only_drop_parts missing — TTL would rewrite parts instead of dropping old months"
+  rows="$(ch_q "SELECT count() FROM ussd.cdr_event" | tail -1)"
+  [[ "$rows" =~ ^[0-9]+$ ]] \
+    && ok "ussd.cdr_event holds $rows CDR row(s)" \
+    || bad "cannot count ussd.cdr_event: $rows"
+  mnt="$(docker inspect -f '{{range .Mounts}}{{if eq .Destination "/var/lib/clickhouse"}}{{.Type}} {{.Source}}{{end}}{{end}}' "$ch_cid")"
+  [[ "$mnt" == volume* || "$mnt" == bind* ]] \
+    && ok "ClickHouse data on a persistent mount ($mnt)" \
+    || bad "ClickHouse /var/lib/clickhouse is not on a persistent mount — CDR dies with the container"
+  wild="$(docker exec "$ch_cid" sh -c 'awk "NR>1 && \$4==\"0A\" {print \$2}" /proc/net/tcp /proc/net/tcp6' \
+          | grep -v -E '^(0100007F|00000000000000000000000001000000):' || true)"
+  [[ -z "$wild" ]] \
+    && ok "ClickHouse listens on loopback only (kernel sockets of the running task)" \
+    || bad "ClickHouse listens beyond loopback on the carrier host: $wild"
+fi
+
 # --- 5. runtime files the operator depends on -----------------------------------
 head_ "persisted files"
 docker exec "$CONTAINER" sh -c 'test -f /opt/ussdgw/logs/ussdgw.log' \

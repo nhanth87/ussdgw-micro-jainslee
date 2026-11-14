@@ -52,6 +52,7 @@ public class CdrService {
 
     @Inject CdrDbFlusher flusher;
     @Inject CdrFileLedger ledger;
+    @Inject et.restlink.ussdgw.cdr.clickhouse.CdrClickHouseSink clickhouse;
     @Inject EntityManager em;
     @Inject DataSource dataSource;
 
@@ -119,6 +120,10 @@ public class CdrService {
         // 1) durable file ledger (SoT) + 2) hot read model. Never blocks on disk.
         CDR.info(row.csvLine);
         ledger.append(row);
+        // 2b) ClickHouse = CDR store of record (batched, spooled when down). Non-blocking.
+        if (clickhouse != null) {
+            clickhouse.offer(row);
+        }
 
         // 3) opt-in legacy PG mirror — off by default.
         if (!dbEnabled) {
@@ -181,6 +186,14 @@ public class CdrService {
         String corrFilter = normalizeCorrFilter(correlationId);
         StatusFilter stFilter = normalizeStatusFilter(status);
 
+        if (clickhouse != null && clickhouse.readable()) {
+            try {
+                return clickhouse.sessions(lim, tid, msisdnFilter, corrFilter,
+                        e -> matches(e, null, null, null, stFilter), stFilter != null);
+            } catch (java.io.IOException | RuntimeException e) {
+                LOG.warn("CDR list from ClickHouse failed, using the file ledger: {}", e.toString());
+            }
+        }
         List<CdrEntity> fromFile = ledger.sessions(lim, e -> matches(e, tid, msisdnFilter,
                 corrFilter, stFilter));
         if (!dbEnabled) {

@@ -1,0 +1,15 @@
+<clickhouse>
+    <!--
+      The entrypoint creates CLICKHOUSE_USER (ussdgw) with networks ::/0. The server only
+      listens on loopback, but pin the account to loopback too, so a future listen_host change
+      alone cannot open the CDR store to the network. Merges into the generated user.
+    -->
+    <users>
+        <ussdgw>
+            <networks replace="replace">
+                <ip>127.0.0.1</ip>
+                <ip>::1</ip>
+            </networks>
+        </ussdgw>
+    </users>
+</clickhouse>

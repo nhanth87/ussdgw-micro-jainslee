@@ -547,3 +547,53 @@ tail -f /srv/ussdgw/logs/ussdgw.log
   `USSDGW_REPLICAS=0` first. (The entrypoint also refuses to start while `:8088` is held.)
 - `docker volume rm`, `docker secret rm ussdgw_db_password|ussdgw_pg_super_password`,
   `docker service scale ussdgw_postgres=…`.
+
+## CDR store: ClickHouse (≥ 3 months)
+
+`ussdgw-clickhouse` is the fourth image: the official ClickHouse **26.8 LTS** image pinned by
+digest (`docker/sources.lock` → `base-clickhouse`) plus `docker/clickhouse/` config:
+
+- **Loopback only** — the upstream image listens on `0.0.0.0`/`::`; on hostnet that is every
+  interface of the carrier host. `config.d/docker_related_config.xml` replaces it, and
+  `build-images.sh` starts the image and reads the bound sockets back from the kernel.
+- MySQL/PostgreSQL/interserver ports removed; caches sized for a 15 GiB host; the
+  high-volume `system.*_log` tables disabled, `query_log` kept 7 days.
+- The stock passwordless `default` user is removed; the gateway's user `ussdgw` is pinned to
+  loopback; its password is the swarm secret `ussdgw_clickhouse_password` (created by
+  `full-build.sh`, hex, never printed).
+- Data: bind mount `/srv/ussdgw/clickhouse` (uid 101, `host-prep.sh`) — survives
+  `docker stack rm` and upgrades.
+
+The gateway creates `ussd.cdr_event` itself (one row per CDR milestone, `PARTITION BY
+toYYYYMM`, `TTL toDateTime(recorded_at) + toIntervalMonth(N)`, `ttl_only_drop_parts = 1`).
+`N = CDR_RETENTION_MONTHS` (`.env`, default 3); values below 3 are raised to 3. Whole months are
+dropped only when every row in them has expired, so the effective retention is N to N+1 months.
+
+While ClickHouse is unreachable the gateway spools batches to `/srv/ussdgw/data/cdr-spool` and
+replays them (deduplicated by token) when it answers; `/admin/status.json` → `cdr.clickhouse.*`
+shows `inserted`, `spooledRows`, `spoolBytes`, `dropped*` and `lastError`. `prove.sh` § 4b
+checks enabled + schema + TTL ≥ 3 months + persistent mount + loopback bind on the running stack.
+
+Ad-hoc queries on the host:
+
+```bash
+CH=$(docker ps -q --filter name=ussdgw_clickhouse | head -1)
+docker exec -it "$CH" sh -c 'clickhouse-client -u ussdgw --password "$(cat /run/secrets/ussdgw_clickhouse_password)"'
+#   SELECT toDate(recorded_at) d, count() FROM ussd.cdr_event GROUP BY d ORDER BY d DESC LIMIT 7;
+```
+
+**Sizing — read before a load test.** One row per CDR milestone, ~10 milestones per session:
+
+    rows/month  = TPS × 10 × 2.59 M
+    disk/month ≈ rows/month × (compressed bytes/row — measure: SELECT sum(data_compressed_bytes)/sum(rows)
+                                FROM system.parts WHERE database='ussd' AND active)
+
+| sustained TPS | rows / month | disk / month at ~60 B/row | N+1 = 4 months |
+|---|---|---|---|
+| 50 | 1.3 B | ~80 GB | ~320 GB |
+| 1 000 | 26 B | ~1.6 TB | ~6 TB |
+| 10 000 | 259 B | ~16 TB | ~62 TB |
+
+A 96 GB root disk (Digicom test host, 56 GB free) holds 3+ months only at tens of TPS. A 10k TPS
+deployment needs dedicated ClickHouse storage (or fewer milestones per session) — size it
+before raising `CDR_RETENTION_MONTHS`, and before any sustained load test on a shared host.
