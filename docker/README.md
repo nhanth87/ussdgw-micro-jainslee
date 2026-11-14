@@ -91,6 +91,20 @@ explanation of each step.
 
 ---
 
+### Getting the latest code
+
+```bash
+./docker/build/update-sources.sh --dry-run   # which pinned branches moved, nothing written
+./docker/full-build.sh --latest --build-only  # pull this repo, re-pin the chain to the newest heads,
+                                             # sync pom.xml / builder ARGs from the trees, build (-dirty tag)
+git diff docker/sources.lock pom.xml docker/build/   # review, run tests, commit, build/push-dual.sh
+```
+
+`update-sources.sh` reads versions from the trees at the new SHAs (jain-slee BOM, ra-jss7
+`ss7.version`, `sctp-parent`), so the pom never disagrees with the lock; a tag-pinned entry
+(corsac-diameter) is left alone. SHAs stay authoritative — "latest" is a reviewed bump, not a
+floating branch.
+
 ## 1. Build
 
 ```bash
@@ -563,6 +577,11 @@ digest (`docker/sources.lock` → `base-clickhouse`) plus `docker/clickhouse/` c
   `full-build.sh`, hex, never printed).
 - Data: bind mount `/srv/ussdgw/clickhouse` (uid 101, `host-prep.sh`) — survives
   `docker stack rm` and upgrades.
+
+All ClickHouse I/O on the write path lives in the resource adaptor `cdr-clickhouse-ra`
+(`ra/cdr/CdrClickHouseRaEndpoint`, micro-jainslee 3-port contract: lifecycle starts the writer and
+the schema, `CdrStoreCommand.Record` is the only command, SBBs never touch the socket). The admin
+CDR page reads through `CdrClickHouseReader` on the admin plane.
 
 The gateway creates `ussd.cdr_event` itself (one row per CDR milestone, `PARTITION BY
 toYYYYMM`, `TTL toDateTime(recorded_at) + toIntervalMonth(N)`, `ttl_only_drop_parts = 1`).

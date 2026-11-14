@@ -23,6 +23,10 @@
 #   ./docker/full-build.sh --force-config     # re-seed configs (timestamped backup first)
 #   ./docker/full-build.sh --fetch-sources    # clone the four upstream trees at the pinned SHAs first
 #   ./docker/full-build.sh --allow-dirty      # build from an uncommitted tree (tag gets -dirty)
+#   ./docker/full-build.sh --latest           # first move to the LATEST code: git pull this repo (ff-only),
+#                                             # docker/build/update-sources.sh (newest head of every pinned
+#                                             # branch → sources.lock, digicom lock, pom.xml, builder ARGs,
+#                                             # source trees). Implies --allow-dirty until you commit the bump.
 #
 # Environment (all optional; docker/.env is loaded first and these override it):
 #   TAG                 image tag                default: git short SHA of the working tree
@@ -52,7 +56,7 @@ warn() { echo "full-build: WARN: $*" >&2; }
 step() { echo; echo "=== $* ==="; }
 
 SNAP=""   # read-only snapshot of the live config; empty until one is staged
-MODE_BUILD=1; MODE_TESTS=1; MODE_DEPLOY=1; MODE_CHECK=0; MODE_FORCE_CONFIG=0; MODE_FETCH=0; ALLOW_DIRTY=0
+MODE_BUILD=1; MODE_TESTS=1; MODE_DEPLOY=1; MODE_CHECK=0; MODE_FORCE_CONFIG=0; MODE_FETCH=0; ALLOW_DIRTY=0; MODE_LATEST=0
 for arg in "$@"; do
   case "$arg" in
     --check)          MODE_CHECK=1; MODE_BUILD=0; MODE_DEPLOY=0 ;;
@@ -62,10 +66,30 @@ for arg in "$@"; do
     --force-config)   MODE_FORCE_CONFIG=1 ;;
     --fetch-sources)  MODE_FETCH=1 ;;
     --allow-dirty)    ALLOW_DIRTY=1 ;;
+    --latest)         MODE_LATEST=1; ALLOW_DIRTY=1 ;;
     -h|--help)        sed -n '2,40p' "$0"; exit 0 ;;
     *)                die "unknown argument: $arg (try --help)" ;;
   esac
 done
+
+# --- --latest: move to the newest code BEFORE the tag is computed --------------------------
+# The tag must describe what is built, so this runs first. This repo is fast-forwarded when its
+# upstream is reachable (a host without GitHub credentials just keeps its checkout and says so);
+# the source chain is moved by update-sources.sh, which re-pins SHAs and syncs every version.
+if [[ "$MODE_LATEST" == 1 ]]; then
+  if git rev-parse --abbrev-ref --symbolic-full-name '@{u}' >/dev/null 2>&1; then
+    if timeout 120 git pull -q --ff-only; then
+      info "--latest: $(git rev-parse --abbrev-ref HEAD) fast-forwarded to $(git rev-parse --short HEAD)"
+    else
+      warn "--latest: cannot pull this repo (no credentials / diverged) — building $(git rev-parse --short HEAD)"
+    fi
+  else
+    warn "--latest: $(git rev-parse --abbrev-ref HEAD) has no upstream — building $(git rev-parse --short HEAD)"
+  fi
+  SOURCE_ROOT="${SOURCE_ROOT:-${BUILD_ROOT:-/srv/ussdgw-build}/src}" ./docker/build/update-sources.sh \
+    || die "--latest: update-sources.sh failed"
+  git --no-pager diff --stat -- docker/sources.lock docker/build/fetch-sources-digicom.sh pom.xml docker/build/Dockerfile || true
+fi
 
 # --- compute TAG before loading .env, so the tag always drives the deploy --
 GIT_SHA="$(git rev-parse --short HEAD)"
