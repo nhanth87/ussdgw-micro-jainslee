@@ -1,0 +1,49 @@
+[Unit]
+Description=Digicom-ET USSDGW node %i (micro-jainslee / Quarkus)
+Documentation=file:/home/app/ota-push-services/ussdgw-%i/docs/agents/lessons.md
+After=network-online.target postgresql.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=app
+Group=app
+# Per-node work tree. Two nodes on one host must NOT share APP_HOME: run.sh
+# hardcodes $APP_HOME/configs/application.properties, data/ and logs/, and the
+# durable profile store would collide on data/.
+WorkingDirectory=/home/app/ota-push-services/ussdgw-%i
+Environment=HOME=/home/app
+Environment=PATH=/home/app/.local/bin:/home/app/.local/share/mise/installs/java/zulu-25/bin:/usr/bin:/bin
+Environment=JAVA_HOME=/home/app/.local/share/mise/installs/java/zulu-25
+# Node id for the active/active cluster. Must be STABLE across restarts: it is
+# the identity the dialog-lease boot-epoch fence keys on. Never derive it from
+# identityHashCode / a random UUID.
+Environment=USSD_NODE_ID=%i
+# Digicom capacity: 6g heap. Two nodes on one host → 2g/4g each (see lessons.md).
+Environment=USSD_XMS=6g
+Environment=USSD_XMX=6g
+ExecStartPre=/bin/bash -lc 'test -x "$JAVA_HOME/bin/java"'
+# Single-instance lock PER NODE.
+#
+# This is NOT a "one instance per host" guard — it is a RESTART-RACE guard, and
+# removing it reintroduces a proven Digicom crash-loop: a SIGKILLed JVM or a
+# lingering cgroup keeps the lock for a few seconds, ExecStart would exit 1
+# immediately, and RestartSec=5 turns that into a double-start with :8088 down
+# in the window. Never `flock -n` here; always wait.
+#
+# ADR 0007 P1: the lock path is namespaced by node so N nodes can coexist on one
+# host. The old shared /tmp/ussdgw.lock made a second node impossible by
+# construction.
+ExecStart=/usr/bin/flock --timeout 45 /tmp/ussdgw-%i.lock /home/app/ota-push-services/ussdgw-%i/run.sh
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=90
+# KillMode=control-group is mandatory: it tears down flock + java together so the
+# lock holder can never outlive stop.
+KillMode=control-group
+SendSIGKILL=yes
+StandardOutput=append:/tmp/ussdgw-%i.service.log
+StandardError=append:/tmp/ussdgw-%i.service.log
+
+[Install]
+WantedBy=multi-user.target
