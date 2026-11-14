@@ -91,6 +91,11 @@ if [[ ! -f "$ENV_FILE" ]]; then
 fi
 [[ -f "$ENV_FILE" ]] && { set -a; . "$ENV_FILE"; set +a; }
 : "${STACK_NAME:=ussdgw}"
+DATA_ROOT="${DATA_ROOT:-/srv/ussdgw}"
+DEST="${DEST:-/srv/ussdgw/configs}"
+CONFIG_SRC="${CONFIG_SRC:-$DATA_ROOT/configs}"
+DEPLOY_PROFILE="${DEPLOY_PROFILE:-test}"
+READY_TIMEOUT="${READY_TIMEOUT:-300}"
 BUILD_ROOT="${BUILD_ROOT:-/srv/ussdgw-build}"
 SOURCE_ROOT="${SOURCE_ROOT:-$BUILD_ROOT/src}"
 OUT="${OUT:-$BUILD_ROOT/out}"
@@ -157,7 +162,12 @@ fi
 [[ -d /proc/net/sctp ]] || die "/proc/net/sctp is absent — the sctp kernel module is not loaded.
      Run: sudo ./docker/host-prep.sh   (a container cannot modprobe)"
 for d in configs logs data pgdata; do
-  [[ -d "$DATA_ROOT/$d" ]] || die "$DATA_ROOT/$d missing — run: sudo ./docker/host-prep.sh"
+  if [[ -d "$DATA_ROOT/$d" ]]; then :;
+  elif [[ "$MODE_CHECK" == 1 ]]; then
+    warn "$DATA_ROOT/$d missing — a real deploy needs: sudo ./docker/host-prep.sh"
+  else
+    die "$DATA_ROOT/$d missing — run: sudo ./docker/host-prep.sh"
+  fi
 done
 # Same three states as the cert check itself: absent, unreadable, or fine. `[[ -d ]]` is a
 # stat, so on the Digicom host (/srv/ussdgw/nginx is drwxr-x--- messagebus) this printed
@@ -188,7 +198,7 @@ for svc in "${STACK_NAME}_ussdgw" "${STACK_NAME}_nginx" "${STACK_NAME}_postgres"
   docker service inspect "$svc" --format \
     '{{range .Spec.TaskTemplate.ContainerSpec.Mounts}}{{if .Source}}{{.Source}}{{if .VolumeOptions.DriverConfig.Options.device}} = {{.VolumeOptions.DriverConfig.Options.device}}{{end}} -> {{.Target}};{{end}}{{end}}' \
     2>/dev/null | tr ';' '\n'
-done | grep . | sed 's/^/deploy: mount: /'
+done | grep . | sed 's/^/deploy: mount: /' || true
 
 # Ports. Only a *first* deploy needs them free: an update of our own stack is expected
 # to hold them. Fail-closed, because a host postgres/nginx left running means the
@@ -221,6 +231,10 @@ fi
 for s in sctp jss7 jain-slee corsac-diameter; do
   if [[ ! -d "$SOURCE_ROOT/$s" ]]; then
     if [[ "$MODE_FETCH" == 1 ]]; then continue; fi
+    if [[ "$MODE_CHECK" == 1 ]]; then
+      warn "$SOURCE_ROOT/$s missing — a real build needs an audited tree there or --fetch-sources"
+      continue
+    fi
     die "$SOURCE_ROOT/$s missing. Either hand over an audited source tree there, or re-run with
      --fetch-sources (SOURCE_MODE=git clones each repo at the SHA pinned in docker/sources.lock)."
   fi
@@ -488,8 +502,13 @@ fi
 if [[ "$MODE_CHECK" == 1 || "$CONFIG_SRC" != "$DEST" ]]; then
   # Read-only: either a dry run, or a snapshot — and a snapshot means the gateway is already
   # running from a seeded config, so there is nothing to write. Validated, never written.
-  ./docker/install-config.sh --check
-  [[ "$CONFIG_SRC" == "$DEST" ]] || info "config validated, not written (read through the running gateway)"
+  if [[ ! -f "$CONFIG_SRC/application.properties" && "$MODE_CHECK" == 1 ]]; then
+    warn "no $CONFIG_SRC/application.properties on this host — nothing to validate here (a real
+    deploy validates the handed-over operator tree or the snapshot read through the gateway)"
+  else
+    ./docker/install-config.sh --check
+    [[ "$CONFIG_SRC" == "$DEST" ]] || info "config validated, not written (read through the running gateway)"
+  fi
 else
   if [[ "$MODE_FORCE_CONFIG" == 1 ]]; then
     warn "--force-config: backing up $DEST before overwriting"
