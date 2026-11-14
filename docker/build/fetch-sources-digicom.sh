@@ -33,7 +33,7 @@ corsac-diameter|git@github.com-digicom:digicom-et/corsac-diameter.git|diameter-p
 base-ubuntu|docker.io/library/ubuntu:26.04|sha256:61ebaa5cc23ca45450db85eac015435199ec569e28ec222ea13f2aed2110b8a6
 base-postgres|docker.io/library/postgres:16|sha256:2c72031ac25606bf94fd2fece7c35efdf263a48b08446950034f0725653f4efc
 base-nginx|docker.io/library/nginx:1.27-alpine|sha256:65645c7bb6a0661892a8b03b89d0743208a18dd2f3f17a54ef4b76fb8e2f2a10
-base-clickhouse|docker.io/clickhouse/clickhouse-server:26.8.37.168|sha256:a56702852d7c8055a021a42a3a60f49daa49e9204a949ea033e51bb327948648
+base-clickhouse|docker.io/clickhouse/clickhouse-server:26.3.63.123|sha256:9a7eef96121925a9ff162b6f36db27822a5b95d9b021b7b0511ea9f4b52bf257
 EOF
 
 echo "✓ Created $LOCK_FILE"

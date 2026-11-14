@@ -105,10 +105,11 @@ base-postgres|docker.io/library/postgres:16|sha256:2c72031ac25606bf94fd2fece7c35
 #   docker buildx imagetools inspect nginx:1.27-alpine
 base-nginx|docker.io/library/nginx:1.27-alpine|sha256:65645c7bb6a0661892a8b03b89d0743208a18dd2f3f17a54ef4b76fb8e2f2a10
 
-# ClickHouse CDR store (2026-11-15) — 26.8 LTS, latest patch at the time. Digest verified with
-#   docker buildx imagetools inspect clickhouse/clickhouse-server:26.8.37.168  (and a real pull)
+# ClickHouse CDR store (2026-11-15) — 26.3 LTS latest patch (26.8 SIGILLs on the Digicom
+# QEMU vCPU: no AVX). Digest verified with
+#   docker buildx imagetools inspect clickhouse/clickhouse-server:26.3.63.123  (+ a real pull and run on digicom-nb)
 # docker/clickhouse/Dockerfile FROMs this exact digest.
-base-clickhouse|docker.io/clickhouse/clickhouse-server:26.8.37.168|sha256:a56702852d7c8055a021a42a3a60f49daa49e9204a949ea033e51bb327948648
+base-clickhouse|docker.io/clickhouse/clickhouse-server:26.3.63.123|sha256:9a7eef96121925a9ff162b6f36db27822a5b95d9b021b7b0511ea9f4b52bf257
 
 # Do NOT add a base-* line with a digest that has not been verified by a real pull
 # (docker buildx imagetools inspect <image>).

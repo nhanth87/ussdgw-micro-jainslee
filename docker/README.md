@@ -564,8 +564,10 @@ tail -f /srv/ussdgw/logs/ussdgw.log
 
 ## CDR store: ClickHouse (≥ 3 months)
 
-`ussdgw-clickhouse` is the fourth image: the official ClickHouse **26.8 LTS** image pinned by
-digest (`docker/sources.lock` → `base-clickhouse`) plus `docker/clickhouse/` config:
+`ussdgw-clickhouse` is the fourth image: the official ClickHouse **26.3 LTS** image pinned by
+digest (`docker/sources.lock` → `base-clickhouse`) plus `docker/clickhouse/` config. Not 26.8:
+its binary needs AVX and dies with SIGILL on the Digicom KVM vCPU (`QEMU Virtual CPU 2.5+`).
+
 
 - **Loopback only** — the upstream image listens on `0.0.0.0`/`::`; on hostnet that is every
   interface of the carrier host. `config.d/docker_related_config.xml` replaces it, and
