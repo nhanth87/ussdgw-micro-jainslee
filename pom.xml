@@ -15,10 +15,10 @@
         <maven.compiler.source>25</maven.compiler.source>
         <maven.compiler.target>25</maven.compiler.target>
         <maven.compiler.release>25</maven.compiler.release>
-        <quarkus.platform.version>3.37.3</quarkus.platform.version>
-        <microjainslee.version>1.2.1-SNAPSHOT</microjainslee.version>
-        <sctp.version>2.27.32</sctp.version>
-        <surefire.version>3.5.4</surefire.version>
+        <quarkus.platform.version>3.40.1.2</quarkus.platform.version>
+        <microjainslee.version>1.2.2-SNAPSHOT</microjainslee.version>
+        <sctp.version>2.27.33</sctp.version>
+        <surefire.version>3.6.1</surefire.version>
         <quarkus.build.skip>true</quarkus.build.skip>
         <quarkus.package.jar.type>fast-jar</quarkus.package.jar.type>
     </properties>
@@ -45,7 +45,7 @@
         <dependency><groupId>com.microjainslee</groupId><artifactId>jainslee-telemetry</artifactId><version>${microjainslee.version}</version></dependency>
         <dependency><groupId>com.microjainslee</groupId><artifactId>jainslee-admin-spi</artifactId><version>${microjainslee.version}</version></dependency>
         <dependency><groupId>com.microjainslee</groupId><artifactId>jainslee-monitor</artifactId><version>${microjainslee.version}</version></dependency>
-        <dependency><groupId>io.micrometer</groupId><artifactId>micrometer-registry-prometheus</artifactId><version>1.14.0</version></dependency>
+        <dependency><groupId>io.micrometer</groupId><artifactId>micrometer-registry-prometheus</artifactId><version>1.17.2</version></dependency>
         <dependency><groupId>com.fasterxml.jackson.core</groupId><artifactId>jackson-databind</artifactId></dependency>
         <dependency><groupId>com.fasterxml.jackson.dataformat</groupId><artifactId>jackson-dataformat-xml</artifactId></dependency>
         <dependency><groupId>com.microjainslee</groupId><artifactId>ra-jss7</artifactId><version>${microjainslee.version}</version></dependency>
@@ -60,6 +60,11 @@
             <groupId>org.mobicents.protocols.sctp</groupId>
             <artifactId>sctp-impl</artifactId>
             <version>${sctp.version}</version>
+            <exclusions>
+                <!-- sctp-impl declares TestNG in compile scope: it would ship in lib/main and
+                     surefire 3.6+ refuses to run with TestNG < 6.14.3 on the test classpath. -->
+                <exclusion><groupId>org.testng</groupId><artifactId>testng</artifactId></exclusion>
+            </exclusions>
         </dependency>
         <dependency><groupId>com.microjainslee</groupId><artifactId>jainslee-cluster</artifactId><version>${microjainslee.version}</version></dependency>
         <dependency><groupId>com.microjainslee</groupId><artifactId>ra-diameter</artifactId><version>${microjainslee.version}</version></dependency>
@@ -71,7 +76,7 @@
         <dependency>
             <groupId>org.restcomm.smpp</groupId>
             <artifactId>ch-smpp</artifactId>
-            <version>5.0.13</version>
+            <version>5.1.0-113</version>
         </dependency>
         <dependency><groupId>com.microjainslee</groupId><artifactId>jainslee-core</artifactId><version>${microjainslee.version}</version></dependency>
         <dependency><groupId>com.microjainslee</groupId><artifactId>jainslee-api</artifactId><version>${microjainslee.version}</version></dependency>
@@ -79,10 +84,10 @@
         <dependency><groupId>com.microjainslee</groupId><artifactId>jainslee-apt</artifactId><version>${microjainslee.version}</version><optional>true</optional></dependency>
         <dependency><groupId>com.microjainslee</groupId><artifactId>adapter-quarkus</artifactId><version>${microjainslee.version}</version></dependency>
         <dependency><groupId>org.apache.logging.log4j</groupId><artifactId>log4j-api</artifactId></dependency>
-        <dependency><groupId>org.apache.logging.log4j</groupId><artifactId>log4j-core</artifactId><version>2.26.0</version></dependency>
+        <dependency><groupId>org.apache.logging.log4j</groupId><artifactId>log4j-core</artifactId><version>2.26.1</version></dependency>
         <dependency><groupId>io.quarkus</groupId><artifactId>quarkus-junit</artifactId><scope>test</scope></dependency>
         <dependency><groupId>org.junit.jupiter</groupId><artifactId>junit-jupiter</artifactId><scope>test</scope></dependency>
-        <dependency><groupId>org.assertj</groupId><artifactId>assertj-core</artifactId><version>3.26.3</version><scope>test</scope></dependency>
+        <dependency><groupId>org.assertj</groupId><artifactId>assertj-core</artifactId><version>3.27.7</version><scope>test</scope></dependency>
     </dependencies>
     <build>
         <finalName>ussdgw-app</finalName>
@@ -90,7 +95,7 @@
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-enforcer-plugin</artifactId>
-                <version>3.5.0</version>
+                <version>3.7.0</version>
                 <executions>
                     <execution>
                         <id>enforce-java-25</id>
@@ -130,7 +135,7 @@
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-compiler-plugin</artifactId>
-                <version>3.13.0</version>
+                <version>3.16.0</version>
                 <configuration>
                     <release>25</release>
                     <annotationProcessorPaths>

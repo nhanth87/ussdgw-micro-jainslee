@@ -146,6 +146,15 @@ require_dir "$WORK_DIR/sctp"
 # transport), so skipping is correct rather than a workaround.
 mvn_in sctp -f "$WORK_DIR/sctp/pom.xml" install -DskipTests -Dmaven.test.skip=true -Dexec.skip=true
 
+# The version the step above just installed. jss7 (root pom) and ra-jss7 still declare
+# sctp.version 2.27.32, so without an override they would resolve a 2.27.32 this chain
+# never built — from a warm /m2 that "works" against the wrong transport, from a cold
+# one it fails an hour in. Pass the built version to both reactors instead.
+SCTP_VERSION="$(awk '/<artifactId>sctp-parent<\/artifactId>/{f=1;next} f&&match($0,/<version>[^<]+/){print substr($0,RSTART+9,RLENGTH-9);exit}' \
+                "$WORK_DIR/sctp/pom.xml" 2>/dev/null || true)"
+[[ -n "$SCTP_VERSION" ]] || die "cannot read the sctp-parent version from $WORK_DIR/sctp/pom.xml"
+echo "-- sctp built: $SCTP_VERSION (passed to jss7 + jain-slee as -Dsctp.version)"
+
 # ---------------------------------------------------------------------------
 step "2/6 jss7 (SS7/MAP stack)"
 # Bootstrap gotcha (AGENTS.md): leaf modules declare a parent whose default
@@ -165,8 +174,8 @@ require_dir "$WORK_DIR/jss7"
 # via 2204e8fb4, which is what unblocks ra-jss7 at jain-slee 31873d44c. The delta is in
 # the upstream history where an auditor can read it, not in a local .patch file.
 
-mvn_in jss7-parent -f "$WORK_DIR/jss7/pom.xml" -N install -DskipTests
-mvn_in jss7 -f "$WORK_DIR/jss7/pom.xml" install -DskipTests -Dmaven.test.skip=true
+mvn_in jss7-parent -f "$WORK_DIR/jss7/pom.xml" -N install -DskipTests "-Dsctp.version=$SCTP_VERSION"
+mvn_in jss7 -f "$WORK_DIR/jss7/pom.xml" install -DskipTests -Dmaven.test.skip=true "-Dsctp.version=$SCTP_VERSION"
 
 # ---------------------------------------------------------------------------
 step "3/6 corsac-diameter (not on Maven Central)"
@@ -190,7 +199,7 @@ mvn_in jain-slee-parent -f "$WORK_DIR/jain-slee/pom.xml" -N install -DskipTests
 #   Could not find artifact com.microjainslee:jainslee-cluster:jar:tests:1.2.0-SNAPSHOT
 # `-DskipTests` compiles the tests (producing the test-jars) but does not RUN them,
 # which is what a reproducible build wants anyway: no test flake in the artifact.
-mvn_in jain-slee -f "$WORK_DIR/jain-slee/pom.xml" install -DskipTests
+mvn_in jain-slee -f "$WORK_DIR/jain-slee/pom.xml" install -DskipTests "-Dsctp.version=$SCTP_VERSION"
 
 # ---------------------------------------------------------------------------
 step "5/6 ussdgw → $DIST_OUT"
@@ -281,7 +290,7 @@ sbom_for() {
   # <artifact>-cyclonedx.json") instead of writing it to sbom.outputDirectory, so the
   # configured directory stays empty. Run it, then collect whatever it produced.
   mvn "${MVN_FLAGS[@]}" -f "$pom" \
-    org.cyclonedx:cyclonedx-maven-plugin:2.9.1:makeAggregateBom \
+    org.cyclonedx:cyclonedx-maven-plugin:2.9.3:makeAggregateBom \
     -DoutputFormat=json \
     >>"$LOG_DIR/sbom-$name.log" 2>&1 \
     || { echo "-- SBOM: $name generation failed (see $LOG_DIR/sbom-$name.log) —"
@@ -325,9 +334,14 @@ pom_prop() { grep -m1 -oE "<$2>[^<]+" "$1" 2>/dev/null | cut -d'>' -f2 || true; 
             "$WORK_DIR/jain-slee/jainslee-pom/pom.xml" 2>/dev/null || true)"
   got_ss7="$(pom_prop "$WORK_DIR/jain-slee/vendor-ras/ra-jss7/pom.xml" ss7.version)"
   ussdgw_mj="$(pom_prop "$WORK_USSDGW/pom.xml" microjainslee.version)"
+  ussdgw_sctp="$(pom_prop "$WORK_USSDGW/pom.xml" sctp.version)"
   echo "-- micro-jainslee (reactor) : $got_mj"
   echo "-- jSS7         (reactor) : $got_ss7"
   echo "-- micro-jainslee (ussdgw) : $ussdgw_mj"
+  echo "-- sctp (built / ussdgw)   : $SCTP_VERSION / $ussdgw_sctp"
+  [[ "$ussdgw_sctp" == "$SCTP_VERSION" ]] \
+    || die "VERSION MISMATCH: sctp built $SCTP_VERSION but ussdgw's pom asks for sctp-impl $ussdgw_sctp.
+     Pin ussdgw's sctp.version to $SCTP_VERSION, or move the sctp entry in sources.lock."
   [[ -n "$got_mj" ]] || die "cannot read microjainslee.version from the built jain-slee pom"
   [[ "$got_mj" == "$ussdgw_mj" ]] \
     || die "VERSION MISMATCH: jain-slee built $got_mj but ussdgw's pom asks for $ussdgw_mj.

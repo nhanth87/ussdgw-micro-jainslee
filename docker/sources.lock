@@ -31,11 +31,11 @@
 # The commit SHA is authoritative. Branch names are documentation only and are
 # IGNORED by the verifier — a moved branch cannot silently change what we build.
 
-sctp|https://github.com/nhanth87/sctp.git|java25-upgrade|18097d68c977951dbe7a402a1d512128effd0c59
+sctp|https://github.com/nhanth87/sctp.git|fix/2.27.33-stale-channel|3947dd2d6ba01a84401347836e926f6520b10d78
 
-jss7|https://github.com/nhanth87/jss7.git|release/9.2.9-j25|dfac9bbe1f785cdb002ff06847c368d3d52e3eeb
+jss7|https://github.com/nhanth87/jss7.git|j25|59b800e99a19fb729664bf380b0ec63cc129a337
 
-jain-slee|https://github.com/nhanth87/jain-slee.git|micro-jainslee-2|0538b082fe2de073926945120ca7292c2f9019a3
+jain-slee|https://github.com/nhanth87/jain-slee.git|micro-jainslee-2|a0d55300e59304e41426b19ef951e0ec72d5ba64
 
 corsac-diameter|https://github.com/mobius-software-ltd/corsac-diameter.git|diameter-parent-10.0.0-41|0bc4629186a7153ab365568c3c8d7e340c77d862
 
@@ -45,6 +45,23 @@ corsac-diameter|https://github.com/mobius-software-ltd/corsac-diameter.git|diame
 #   The SHA above is the upstream "prepare for next development iteration" commit
 #   whose pom.xml literally reads 10.0.0-41-SNAPSHOT. We install it AS-IS — we are
 #   not rewriting version coordinates to fake a release.
+#
+# NOTE on the version bump (2026-11-15) — latest pushed heads of the chain:
+#     sctp       3947dd2d6  fix/2.27.33-stale-channel  2.27.33 (java25-upgrade + 1: a
+#                           replaced channel's late close no longer takes the live
+#                           association down after an STP SCTP RESTART)
+#     jss7       59b800e99  j25  9.2.10-j25 (release/9.2.10-j25 merged back into j25)
+#     jain-slee  a0d55300e  micro-jainslee-2  1.2.2-SNAPSHOT, ss7.version 9.2.10-j25
+#                           (5e07ec6fc: JSR 240 root-entity removal, O(1) entity
+#                           registration, SYNC overflow, per-call CPU cuts;
+#                           eef61e75e: profile index no longer leaks empty buckets;
+#                           b0b02f96e: idle entity slots / timer wheel use no CPU)
+#     corsac     unchanged  ra-diameter 1.2.2 still pins 10.0.0-41-SNAPSHOT; upstream is
+#                           at 10.0.0-50 but moving needs a ra-diameter change first.
+#   jss7 and ra-jss7 still declare sctp.version 2.27.32 in their poms, so build-all.sh
+#   passes -Dsctp.version=<the version the sctp step just built> to both reactors —
+#   otherwise they would resolve a 2.27.32 that this chain never built.
+#   ussdgw's pom.xml carries microjainslee.version=1.2.2-SNAPSHOT and sctp.version=2.27.33.
 #
 # NOTE on the version bump (2026-10-02):
 #   micro-jainslee 1.2.1-SNAPSHOT on jSS7 9.2.9-j25, released together and pushed

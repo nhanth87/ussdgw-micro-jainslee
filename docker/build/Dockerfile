@@ -94,8 +94,8 @@ COPY docker/sources.lock /usr/local/share/sources.lock
 # resolved a different coordinate would only surface as a confusing compile error an
 # hour into the build. These two lines make the coupling explicit and machine-checked:
 # the arguments below MUST be kept in step with sources.lock and the ussdgw pom.
-ARG MICROJAINSLLEE_VERSION=1.2.1-SNAPSHOT
-ARG SS7_VERSION=9.2.9-j25
+ARG MICROJAINSLLEE_VERSION=1.2.2-SNAPSHOT
+ARG SS7_VERSION=9.2.10-j25
 ENV USSD_EXPECT_MICROJAINSLLEE="$MICROJAINSLLEE_VERSION"
 ENV USSD_EXPECT_SS7="$SS7_VERSION"
 

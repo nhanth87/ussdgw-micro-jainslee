@@ -21,9 +21,9 @@
 #   USSD_MIRROR_LEGACY=1  passed through to package-dist.sh → RestLink/Ussdgw
 #
 # Build order:
-#   1) sctp          branch java25-upgrade  → org.mobicents.protocols.sctp:sctp-*:2.27.32
-#   2) jss7          branch j25             → org.restcomm.protocols.ss7.*:9.2.8-j25 (+ ss7-config)
-#   3) jain-slee     branch micro-jainslee-2→ com.microjainslee:*:1.2.0-SNAPSHOT
+#   1) sctp          branch fix/2.27.33-stale-channel → org.mobicents.protocols.sctp:sctp-*:2.27.33
+#   2) jss7          branch j25             → org.restcomm.protocols.ss7.*:9.2.10-j25 (+ ss7-config)
+#   3) jain-slee     branch micro-jainslee-2→ com.microjainslee:*:1.2.2-SNAPSHOT
 #        (reactor installs core/api/adapter-quarkus + vendor-ras:
 #         ra-http-server, ra-jss7, ra-sip-servlet, ra-diameter, …)
 #   4) ussdgw        branch master          → ./build/package-dist.sh → dist/
@@ -123,7 +123,7 @@ log "mvn=$(mvn -v 2>&1 | head -1)"
 
 # name|branch|dir_under_workspace
 REPOS=(
-  "sctp|java25-upgrade|sctp"
+  "sctp|fix/2.27.33-stale-channel|sctp"
   "jss7|j25|jss7"
   "jain-slee|micro-jainslee-2|jain-slee"
 )
@@ -270,23 +270,26 @@ mvn_install() {
 }
 
 if need_build "sctp" \
-  "org.mobicents.protocols.sctp:sctp-impl:2.27.32" \
-  "org.mobicents.protocols.sctp:sctp-api:2.27.32"; then
+  "org.mobicents.protocols.sctp:sctp-impl:2.27.33" \
+  "org.mobicents.protocols.sctp:sctp-api:2.27.33"; then
   mvn_install "sctp" "${SCTP_ROOT}"
 fi
 
+# jss7 and ra-jss7 still declare sctp.version 2.27.32; build them against the sctp we ship.
+SCTP_VERSION=2.27.33
+
 if need_build "jss7" \
-  "org.restcomm.protocols.ss7.config:ss7-config:9.2.8-j25" \
-  "org.restcomm.protocols.ss7.map:map-impl:9.2.8-j25"; then
-  mvn_install "jss7" "${JSS7_ROOT}" -Dmaven.test.skip=true
+  "org.restcomm.protocols.ss7.config:ss7-config:9.2.10-j25" \
+  "org.restcomm.protocols.ss7.map:map-impl:9.2.10-j25"; then
+  mvn_install "jss7" "${JSS7_ROOT}" -Dmaven.test.skip=true -Dsctp.version="${SCTP_VERSION}"
 fi
 
 if need_build "jain-slee" \
-  "com.microjainslee:jainslee-core:1.2.0-SNAPSHOT" \
-  "com.microjainslee:ra-jss7:1.2.0-SNAPSHOT" \
-  "com.microjainslee:ra-http-server:1.2.0-SNAPSHOT" \
-  "com.microjainslee:adapter-quarkus:1.2.0-SNAPSHOT"; then
-  mvn_install "jain-slee (micro-jainslee)" "${JAIN_ROOT}"
+  "com.microjainslee:jainslee-core:1.2.2-SNAPSHOT" \
+  "com.microjainslee:ra-jss7:1.2.2-SNAPSHOT" \
+  "com.microjainslee:ra-http-server:1.2.2-SNAPSHOT" \
+  "com.microjainslee:adapter-quarkus:1.2.2-SNAPSHOT"; then
+  mvn_install "jain-slee (micro-jainslee)" "${JAIN_ROOT}" -Dsctp.version="${SCTP_VERSION}"
 fi
 
 log "═══ package-dist: ${USSD_DIR} ═══"

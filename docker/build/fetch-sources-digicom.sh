@@ -21,11 +21,11 @@ cat > "$LOCK_FILE" << 'EOF'
 # sources.lock.digicom — Digicom-ET mirrors (fallback to upstream if missing)
 # Format: <name>|<url>|<branch-or-tag>|<commit-sha>
 
-sctp|git@github.com-digicom:digicom-et/sctp.git|java25-upgrade|18097d68c977951dbe7a402a1d512128effd0c59
+sctp|git@github.com-digicom:digicom-et/sctp.git|fix/2.27.33-stale-channel|3947dd2d6ba01a84401347836e926f6520b10d78
 
-jss7|git@github.com-digicom:digicom-et/jss7.git|release/9.2.9-j25|dfac9bbe1f785cdb002ff06847c368d3d52e3eeb
+jss7|git@github.com-digicom:digicom-et/jss7.git|j25|59b800e99a19fb729664bf380b0ec63cc129a337
 
-jain-slee|git@github.com-digicom:digicom-et/jain-slee.git|micro-jainslee-2|0538b082fe2de073926945120ca7292c2f9019a3
+jain-slee|git@github.com-digicom:digicom-et/jain-slee.git|micro-jainslee-2|a0d55300e59304e41426b19ef951e0ec72d5ba64
 
 corsac-diameter|git@github.com-digicom:digicom-et/corsac-diameter.git|diameter-parent-10.0.0-41|0bc4629186a7153ab365568c3c8d7e340c77d862
 
