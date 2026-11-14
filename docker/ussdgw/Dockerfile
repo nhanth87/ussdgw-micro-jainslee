@@ -29,7 +29,7 @@ FROM ussdgw-builder:probe AS jre
 RUN jlink \
       --add-modules java.base,java.logging,java.sql,java.naming,java.management,java.xml,java.desktop,\
 java.instrument,java.net.http,java.rmi,java.security.jgss,java.security.sasl,jdk.unsupported,\
-jdk.crypto.ec,jdk.crypto.cryptoki,jdk.management,jdk.sctp,jdk.localedata,jdk.jfr,jdk.zipfs,jdk.jsobject \
+jdk.crypto.ec,jdk.crypto.cryptoki,jdk.management,jdk.sctp,jdk.localedata,jdk.jfr,jdk.zipfs,jdk.jsobject,jdk.compiler \
       --strip-debug --no-header-files --no-man-pages --compress=zip-9 \
       --output /opt/jre
 
