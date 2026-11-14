@@ -50,41 +50,38 @@ the Docker version and the node label. **A container cannot do any of this** —
 
 ---
 
-## 0. One command (steps 1–6 below, automated)
-
-After `host-prep.sh` and after the operator's `configs/` + TLS certificate are in place,
-the whole chain is a single script:
+## 0. One command
 
 ```bash
-./docker/full-build.sh --check     # dry run: validates host/swarm/SCTP/config/secrets/images, changes nothing
-./docker/full-build.sh             # build from source (WITH tests) → 3 images → config → secrets → deploy → prove.sh
+./docker/full-build.sh
 ```
 
-It is fail-closed and idempotent (safe to re-run), and it refuses to continue at each of
-the points where a manual run silently skips something:
+No options. Every run: latest code (git pull + `update-sources.sh` re-pins every source to its
+newest branch head and syncs pom/builder versions) → host prep (`sudo -n host-prep.sh` when the
+sctp module or `/srv/ussdgw/*` dirs are missing; `docker swarm init` + node label when needed) →
+missing source trees cloned at the pinned SHAs → build sctp/jss7/corsac/micro-jainslee/ussdgw
+**with tests** → four images (ussdgw, nginx, postgres, clickhouse), each probed → operator config
+seeded only if absent → secrets created if missing (never rotated) → `docker stack deploy` →
+`prove.sh` against the running containers. Re-running it is safe.
+
+Only two things it cannot do for you: put the operator's `configs/application.properties` and the
+TLS certificate in place (first install), and type a sudo password — without passwordless sudo it
+stops once with the exact `sudo ./docker/host-prep.sh` line to run.
 
 | Guard | Why |
 |---|---|
 | refuses `sudo`/root | `run-build.sh` builds as `$(id -u)`; root-owned `out/` cannot be rebuilt by the operator |
-| refuses an uncommitted tree | the tag is the SHA it was built from — `--allow-dirty` tags it `<sha>-dirty` |
-| `RUN_TESTS=1` by default, then **fails on `Tests run: 0`** | the underlying default is 0, so a "passed" build once meant no test ran |
+| tag = SHA, `-dirty` when the latest-code bump changed the lock | the tag always says what was built |
+| tests always run, then **fails on `Tests run: 0`** | a "passed" build once meant no test ran |
 | asserts `BUILD-INFO.json` `sources.ussdgw` == `HEAD` | an image must never be relabelled to a SHA it was not built from |
 | runs `install-config.sh --check` every time | db-kind / non-SCTP channel / missing `sctp.backend` / dead TLS cert |
-| creates missing secrets, **never rotates existing ones** | a missing external secret is not caught by `stack deploy`; rotating one breaks the initialised database |
-| pins `USSDGW_IMAGE`/`NGINX_IMAGE`/`POSTGRES_IMAGE` to `:$TAG` in the shell **and** in `.env` | so the stack cannot resolve `latest` to an older artifact |
-| after deploy: task state + **spec image ID == running container image ID** | `docker stack services` reported 1/1 with the new image while the task was Pending and the old container kept serving (B24) |
+| creates missing secrets, **never rotates existing ones** | rotating one breaks the initialised database |
+| pins every `*_IMAGE` to `:$TAG` in the shell **and** in `.env` | so the stack cannot resolve `latest` to an older artifact |
+| after deploy: task state + **spec image ID == running container image ID** | B24: 1/1 reported while the old container kept serving |
 | ends with `prove.sh` against the running container | a green build proves nothing about the host |
 
-Useful variants:
-
-```bash
-./docker/full-build.sh --skip-build      # reuse images already built for this TAG
-./docker/full-build.sh --build-only      # build + images + asserts, deploy nothing
-./docker/full-build.sh --skip-tests      # faster, and it says out loud that there is no test evidence
-./docker/full-build.sh --fetch-sources   # clone sctp/jss7/jain-slee/corsac-diameter at the pinned SHAs first
-./docker/full-build.sh --force-config    # re-seed configs (timestamped backup first)
-DEPLOY_PROFILE=5k ./docker/full-build.sh # production overlay, gated on capacity/preflight-capacity.sh
-```
+`DEPLOY_PROFILE=5k ./docker/full-build.sh` selects the production overlay (gated on
+`capacity/preflight-capacity.sh`); everything else is fixed.
 
 Sections 1–6 below are what the script runs, kept as the manual/audit path and as the
 explanation of each step.
@@ -95,9 +92,8 @@ explanation of each step.
 
 ```bash
 ./docker/build/update-sources.sh --dry-run   # which pinned branches moved, nothing written
-./docker/full-build.sh --latest --build-only  # pull this repo, re-pin the chain to the newest heads,
-                                             # sync pom.xml / builder ARGs from the trees, build (-dirty tag)
-git diff docker/sources.lock pom.xml docker/build/   # review, run tests, commit, build/push-dual.sh
+./docker/full-build.sh                       # always pulls + re-pins to the newest heads first
+git diff docker/sources.lock pom.xml docker/build/   # then commit the bump (build/push-dual.sh)
 ```
 
 `update-sources.sh` reads versions from the trees at the new SHAs (jain-slee BOM, ra-jss7

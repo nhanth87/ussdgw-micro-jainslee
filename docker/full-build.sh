@@ -14,19 +14,20 @@
 # with prove.sh against the RUNNING container — because a green build proves nothing
 # about what the host runs (AGENTS.md, "Prove the artifact").
 #
-# Usage:
-#   ./docker/full-build.sh                    # everything: build + images + config + secrets + deploy + prove
-#   ./docker/full-build.sh --check            # dry run — validate all of it, change nothing
-#   ./docker/full-build.sh --skip-build       # reuse the images already built (config/secrets/deploy/prove)
-#   ./docker/full-build.sh --skip-tests       # build without `mvn test` — the log then says so out loud
-#   ./docker/full-build.sh --build-only       # stop after the images are built and asserted
-#   ./docker/full-build.sh --force-config     # re-seed configs (timestamped backup first)
-#   ./docker/full-build.sh --fetch-sources    # clone the four upstream trees at the pinned SHAs first
-#   ./docker/full-build.sh --allow-dirty      # build from an uncommitted tree (tag gets -dirty)
-#   ./docker/full-build.sh --latest           # first move to the LATEST code: git pull this repo (ff-only),
-#                                             # docker/build/update-sources.sh (newest head of every pinned
-#                                             # branch → sources.lock, digicom lock, pom.xml, builder ARGs,
-#                                             # source trees). Implies --allow-dirty until you commit the bump.
+# Usage — no options, one command:
+#
+#   ./docker/full-build.sh
+#
+# Every run, in order:
+#   latest code   git pull (ff-only) + update-sources.sh: newest head of every pinned branch,
+#                 versions in pom.xml / builder ARGs synced from the trees
+#   host          missing sctp module / data dirs → sudo -n host-prep.sh; swarm init + node label
+#   sources       missing trees under $BUILD_ROOT/src are cloned at the pinned SHAs
+#   build         sctp → jss7 → corsac → micro-jainslee → ussdgw, WITH tests (fails on any red test)
+#   images        ussdgw, ussdgw-nginx, ussdgw-postgres, ussdgw-clickhouse (each probed)
+#   config        operator configs seeded only when absent (never overwritten)
+#   secrets       created when missing, never rotated
+#   deploy        docker stack deploy, then prove.sh against the running containers
 #
 # Environment (all optional; docker/.env is loaded first and these override it):
 #   TAG                 image tag                default: git short SHA of the working tree
@@ -56,38 +57,31 @@ warn() { echo "full-build: WARN: $*" >&2; }
 step() { echo; echo "=== $* ==="; }
 
 SNAP=""   # read-only snapshot of the live config; empty until one is staged
-MODE_BUILD=1; MODE_TESTS=1; MODE_DEPLOY=1; MODE_CHECK=0; MODE_FORCE_CONFIG=0; MODE_FETCH=0; ALLOW_DIRTY=0; MODE_LATEST=0
-for arg in "$@"; do
-  case "$arg" in
-    --check)          MODE_CHECK=1; MODE_BUILD=0; MODE_DEPLOY=0 ;;
-    --skip-build)     MODE_BUILD=0 ;;
-    --skip-tests)     MODE_TESTS=0 ;;
-    --build-only)     MODE_DEPLOY=0 ;;
-    --force-config)   MODE_FORCE_CONFIG=1 ;;
-    --fetch-sources)  MODE_FETCH=1 ;;
-    --allow-dirty)    ALLOW_DIRTY=1 ;;
-    --latest)         MODE_LATEST=1; ALLOW_DIRTY=1 ;;
-    -h|--help)        sed -n '2,40p' "$0"; exit 0 ;;
-    *)                die "unknown argument: $arg (try --help)" ;;
-  esac
-done
+# No options (owner decision 2026-11-15: "chỉ cần chạy full-build.sh là xong").
+# The MODE_* switches stay as constants so every guarded step below keeps its meaning.
+MODE_BUILD=1; MODE_TESTS=1; MODE_DEPLOY=1; MODE_CHECK=0; MODE_FORCE_CONFIG=0; MODE_FETCH=0
+ALLOW_DIRTY=1   # the latest-code bump below edits sources.lock / pom.xml; the tag then says -dirty
+MODE_LATEST=1
+if [[ $# -gt 0 ]]; then
+  echo "full-build: WARN: full-build.sh takes no options — ignoring: $*" >&2
+fi
 
-# --- --latest: move to the newest code BEFORE the tag is computed --------------------------
+# --- latest code: move to the newest code BEFORE the tag is computed --------------------------
 # The tag must describe what is built, so this runs first. This repo is fast-forwarded when its
 # upstream is reachable (a host without GitHub credentials just keeps its checkout and says so);
 # the source chain is moved by update-sources.sh, which re-pins SHAs and syncs every version.
 if [[ "$MODE_LATEST" == 1 ]]; then
   if git rev-parse --abbrev-ref --symbolic-full-name '@{u}' >/dev/null 2>&1; then
     if timeout 120 git pull -q --ff-only; then
-      info "--latest: $(git rev-parse --abbrev-ref HEAD) fast-forwarded to $(git rev-parse --short HEAD)"
+      info "latest code: $(git rev-parse --abbrev-ref HEAD) fast-forwarded to $(git rev-parse --short HEAD)"
     else
-      warn "--latest: cannot pull this repo (no credentials / diverged) — building $(git rev-parse --short HEAD)"
+      warn "latest code: cannot pull this repo (no credentials / diverged) — building $(git rev-parse --short HEAD)"
     fi
   else
-    warn "--latest: $(git rev-parse --abbrev-ref HEAD) has no upstream — building $(git rev-parse --short HEAD)"
+    warn "latest code: $(git rev-parse --abbrev-ref HEAD) has no upstream — building $(git rev-parse --short HEAD)"
   fi
   SOURCE_ROOT="${SOURCE_ROOT:-${BUILD_ROOT:-/srv/ussdgw-build}/src}" ./docker/build/update-sources.sh \
-    || die "--latest: update-sources.sh failed"
+    || die "latest code: update-sources.sh failed"
   git --no-pager diff --stat -- docker/sources.lock docker/build/fetch-sources-digicom.sh pom.xml docker/build/Dockerfile || true
 fi
 
@@ -98,7 +92,7 @@ if [[ -n "$(git status --porcelain 2>/dev/null || true)" ]]; then
   DIRTY="-dirty"
   [[ "$ALLOW_DIRTY" == 1 || "$MODE_BUILD" == 0 ]] \
     || die "the working tree is uncommitted, so a tag of $GIT_SHA would not identify what was built.
-     Commit first, or pass --allow-dirty (the tag then becomes ${GIT_SHA}-dirty)."
+     (unreachable: full-build.sh always builds the working tree; the tag then becomes ${GIT_SHA}-dirty)."
 fi
 TAG="${TAG:-${GIT_SHA}${DIRTY}}"
 
@@ -187,7 +181,36 @@ docker info >/dev/null 2>&1 || die "cannot talk to the docker daemon (permission
      root-owned $OUT cannot be cleaned or rebuilt by the operator afterwards.
      host-prep.sh is the only step that wants sudo."
 
+# Host prep is part of the one command. host-prep.sh is idempotent (modprobe sctp, sysctls,
+# data dirs + owners) and is the only step that needs root, so it runs through sudo -n:
+# passwordless sudo does it, anything else stops here with the exact command to run once.
+need_prep=0
+[[ -d /proc/net/sctp ]] || need_prep=1
+for d in configs logs data pgdata clickhouse nginx/certs; do
+  [[ -d "$DATA_ROOT/$d" ]] || sudo -n test -d "$DATA_ROOT/$d" 2>/dev/null || need_prep=1
+done
+if [[ "$need_prep" == 1 ]]; then
+  info "host not prepared (sctp module or $DATA_ROOT dirs missing) — running host-prep.sh"
+  sudo -n env DATA_ROOT="$DATA_ROOT" ./docker/host-prep.sh \
+    || die "host-prep.sh needs root and sudo asked for a password. Run once:
+     sudo DATA_ROOT=$DATA_ROOT ./docker/host-prep.sh      then re-run ./docker/full-build.sh"
+fi
+
 SWARM_STATE="$(docker info --format '{{.Swarm.LocalNodeState}}' 2>/dev/null || true)"
+if [[ "$SWARM_STATE" == "inactive" ]]; then
+  # Single-node swarm on the host network; advertise the address of the default route.
+  adv="$(ip -4 route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<NF;i++) if($i=="src"){print $(i+1); exit}}' || true)"
+  info "swarm inactive — docker swarm init --advertise-addr ${adv:-<auto>}"
+  docker swarm init ${adv:+--advertise-addr "$adv"} >/dev/null \
+    || die "docker swarm init failed — run it by hand with --advertise-addr <node-ip>"
+  SWARM_STATE="$(docker info --format '{{.Swarm.LocalNodeState}}' 2>/dev/null || true)"
+fi
+if [[ "$SWARM_STATE" == "active" ]] \
+   && ! docker node inspect self --format '{{.Spec.Labels.ussdgw}}' 2>/dev/null | grep -q true; then
+  info "labelling this node ussdgw=true (the stack pins every service to it)"
+  docker node update --label-add ussdgw=true "$(docker node inspect self --format '{{.ID}}')" >/dev/null \
+    || die "cannot label the node: docker node update --label-add ussdgw=true \$(hostname)"
+fi
 if [[ "$SWARM_STATE" != "active" ]]; then
   if [[ "$MODE_CHECK" == 1 ]]; then
     warn "swarm is '$SWARM_STATE' — a real deploy needs: docker swarm init --advertise-addr <node-ip>"
@@ -287,6 +310,11 @@ fi
 # --- source chain ------------------------------------------------------------------
 for s in sctp jss7 jain-slee corsac-diameter; do
   if [[ ! -d "$SOURCE_ROOT/$s" ]]; then
+    # Missing tree → clone it at the pinned SHA (fetch-sources.sh in git mode verifies it).
+    MODE_FETCH=1; SOURCE_MODE=git
+    continue
+  fi
+  if [[ ! -d "$SOURCE_ROOT/$s" ]]; then
     if [[ "$MODE_FETCH" == 1 ]]; then continue; fi
     if [[ "$MODE_CHECK" == 1 ]]; then
       warn "$SOURCE_ROOT/$s missing — a real build needs an audited tree there or --fetch-sources"
@@ -308,6 +336,11 @@ if [[ "$MODE_FETCH" == 1 ]]; then
   docker run --rm --user "$(id -u):$(id -g)" -e HOME=/tmp \
     -e SOURCE_MODE="$SOURCE_MODE" -e SRC_DIR=/src ${GH_TOKEN:+-e GH_TOKEN} \
     -v "$SOURCE_ROOT:/src" ussdgw-builder:latest fetch-sources.sh
+  # The latest-code step ran before these trees existed, so it could not read versions from
+  # them; sync pom.xml / builder ARGs now (no-op when they already agree).
+  SOURCE_ROOT="$SOURCE_ROOT" ./docker/build/update-sources.sh >/dev/null \
+    || warn "update-sources.sh version sync after fetch failed — build-all.sh will report any mismatch"
+  SOURCE_MODE=local
 fi
 if [[ "$MODE_CHECK" == 1 ]]; then
   info "sources: $(for s in sctp jss7 jain-slee corsac-diameter; do [[ -d "$SOURCE_ROOT/$s" ]] && printf '%s=%s ' "$s" "$(git -C "$SOURCE_ROOT/$s" rev-parse --short HEAD 2>/dev/null || echo '?')"; done)"
