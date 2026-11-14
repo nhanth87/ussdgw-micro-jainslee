@@ -59,6 +59,23 @@ echo "stage-dist: mirroring $SRC -> $DEST/dist"
 rm -rf "$DEST/dist"
 cp -a "$SRC" "$DEST/dist"
 
+# The build must not dirty the checkout. dist/configs/* and dist/README.md are TRACKED operator
+# seeds (the ${ENV:default} production config); the builder's package-dist seeds them from the
+# lab build/application.properties instead. The image never COPYs dist/configs (the operator
+# config is mounted), so git's copy is the right one — and a dirty tree made the NEXT
+# full-build.sh refuse to run and `git pull` refuse to merge (digicom-nb, 2026-11-15).
+if git -C "$DEST" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+  git -C "$DEST" checkout -- dist/configs dist/README.md 2>/dev/null || true
+  drift="$(git -C "$DEST" status --porcelain -- dist 2>/dev/null | grep -v '^??' || true)"
+  if [[ -n "$drift" ]]; then
+    echo "stage-dist: WARN tracked files under dist/ differ from the build output (commit the" >&2
+    echo "            refreshed copy, or the next full-build.sh sees a dirty tree):" >&2
+    printf '            %s\n' "$drift" >&2
+  else
+    echo "stage-dist: ok   tracked dist/ files unchanged (checkout stays clean)"
+  fi
+fi
+
 mkdir -p "$DEST/out"
 cp -a "$BUILD_OUT/BUILD-INFO.json" "$DEST/out/BUILD-INFO.json"
 
