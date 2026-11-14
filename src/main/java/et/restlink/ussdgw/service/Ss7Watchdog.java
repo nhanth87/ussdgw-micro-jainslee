@@ -37,7 +37,13 @@ import org.eclipse.microprofile.config.inject.ConfigProperty;
  *   plus a CAS, so a slow re-wire cannot stack up).</li>
  * </ul>
  *
- * <p>Arms automatically on Quarkus boot via {@code @Scheduled} — same pattern
+ * <p><b>Off by default</b> ({@code ussd.ss7.watchdog.enabled=false}). On digicom-nb
+ * 2026-10-03 the 180 s re-wire interrupted jSS7's own M3UA FSM recovery (peer re-sends
+ * ASP Active during SCTP re-establishment, the AS sits in PENDING) and turned it into a
+ * re-wire loop every 3–5 minutes. Enable it only for a genuinely unstable peer, and then
+ * with a long threshold ({@code ussd.ss7.watchdog.down-seconds=600}).
+ *
+ * <p>When enabled it arms on Quarkus boot via {@code @Scheduled} — same pattern
  * as {@link BridgeGateScheduler}. Services log via Log4j2 (never
  * SleeEventTrace — that is for SBB/RA boundaries only).
  */
@@ -48,13 +54,13 @@ public class Ss7Watchdog {
     @Inject LinkStatusService linkStatus;
     @Inject Ss7ApplyService ss7Apply;
 
-    @ConfigProperty(name = "ussd.ss7.watchdog.enabled", defaultValue = "true")
+    @ConfigProperty(name = "ussd.ss7.watchdog.enabled", defaultValue = "false")
     boolean enabledProp;
     @ConfigProperty(name = "ussd.ss7.watchdog.tick-seconds", defaultValue = "30")
     long tickSecondsProp;
     @ConfigProperty(name = "ussd.ss7.watchdog.boot-grace-seconds", defaultValue = "180")
     long bootGraceSecondsProp;
-    @ConfigProperty(name = "ussd.ss7.watchdog.down-seconds", defaultValue = "180")
+    @ConfigProperty(name = "ussd.ss7.watchdog.down-seconds", defaultValue = "600")
     long downSecondsProp;
     @ConfigProperty(name = "ussd.ss7.watchdog.cooldown-seconds", defaultValue = "600")
     long cooldownSecondsProp;

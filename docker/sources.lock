@@ -15,11 +15,15 @@
 # TRUST BOUNDARY (plan.md §2 D1, Option A — owner-approved):
 #   Built from source : sctp, jss7, jain-slee (micro-jainslee + all RAs),
 #                       corsac-diameter, ussdgw
-#   Pinned upstream   : Ubuntu 26.04 LTS base image (by digest), OpenJDK 25 (by
-#                       digest), Maven, Maven Central dependencies, PostgreSQL 16
-#                       (by digest) and nginx 1.27-alpine (by digest).
-#   Every one of those is digest-pinned or checksum-verified, and appears in the
-#   SBOM. There is no "trust me" link in the chain.
+#   Pinned upstream   : Ubuntu 26.04 LTS base image (by digest), PostgreSQL 16 (by
+#                       digest), nginx 1.27-alpine (by digest), Maven Central
+#                       dependencies (checksums + SBOM).
+#   From the Ubuntu archive (apt, NOT digest-pinned): OpenJDK 25, Maven, libsctp.
+#                       Their exact package versions are recorded per build in
+#                       BUILD-INFO.json (toolchain.apt.*). Two builds on different
+#                       days can therefore differ there — compare BUILD-INFO.json.
+#   (An earlier revision listed an eclipse-temurin digest ending in
+#   "_FETCHED_AT_BUILD_TIME": not a digest, and no image used it. Removed.)
 
 # ---------------------------------------------------------------------------
 # IN-HOUSE GIT REPOSITORIES  (format: <name>|<url>|<branch-or-tag>|<commit-sha>)
@@ -68,7 +72,6 @@ corsac-diameter|https://github.com/mobius-software-ltd/corsac-diameter.git|diame
 #   docker buildx imagetools inspect ubuntu:26.04
 
 base-ubuntu|docker.io/library/ubuntu:26.04|sha256:61ebaa5cc23ca45450db85eac015435199ec569e28ec222ea13f2aed2110b8a6
-base-temurin|docker.io/library/eclipse-temurin:25-jdk|sha256:f1a8a92fd5da34482dd3ace226120d6a75c1c4ca0a5a364f65ec6ba430eea6d1_FETCHED_AT_BUILD_TIME
 base-postgres|docker.io/library/postgres:16|sha256:2c72031ac25606bf94fd2fece7c35efdf263a48b08446950034f0725653f4efc
 
 # The nginx edge image (owner decision 2026-10-02).
@@ -83,7 +86,5 @@ base-postgres|docker.io/library/postgres:16|sha256:2c72031ac25606bf94fd2fece7c35
 #   docker buildx imagetools inspect nginx:1.27-alpine
 base-nginx|docker.io/library/nginx:1.27-alpine|sha256:65645c7bb6a0661892a8b03b89d0743208a18dd2f3f17a54ef4b76fb8e2f2a10
 
-# base-temurin is resolved and pinned by build/build-all.sh on first run (it must
-# be fetched to learn the digest). After that the resolved digest is written back
-# into /out/sbom/BASE-IMAGES.txt so the operator can pin it themselves. Do NOT
-# hardcode a digest here that has not been verified by a real pull.
+# Do NOT add a base-* line with a digest that has not been verified by a real pull
+# (docker buildx imagetools inspect <image>).

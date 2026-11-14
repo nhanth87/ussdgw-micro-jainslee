@@ -82,6 +82,19 @@ grep -q '^jdk\.sctp@' <<<"$jmods" \
        open a socket. Add jdk.sctp to the jlink module list in docker/ussdgw/Dockerfile."
 ok "JRE carries $(grep -o '^jdk\.sctp@[^ ]*' <<<"$jmods") — NETTY_KERNEL can bind kernel SCTP"
 
+# --- the JRE can boot the Diameter RA -------------------------------------------
+# corsac-diameter's DiameterStackImpl uses javax.tools.JavaFileManager (module jdk.compiler)
+# to compile AVP templates, and ra-diameter initialises during boot even with
+# ussd.diameter.enabled=false. A JRE without jdk.compiler builds fine and then exits 1 at
+# raActive() with NoClassDefFoundError: javax/tools/JavaFileManager$Location (2026-10-03).
+# That image passed every gate in this script once; this check is the gate it slipped past.
+grep -q '^jdk\.compiler@' <<<"$jmods" \
+  || die "ussdgw:$TAG — the jlink'd JRE has no jdk.compiler module. ra-diameter's
+       DiameterStackImpl needs javax.tools at boot, so the container would exit 1 with
+       NoClassDefFoundError: javax/tools/JavaFileManager\$Location. Add jdk.compiler to the
+       jlink module list in docker/ussdgw/Dockerfile."
+ok "JRE carries $(grep -o '^jdk\.compiler@[^ ]*' <<<"$jmods") — ra-diameter can boot"
+
 # (nginx + postgres images were built by the bake call above alongside ussdgw.)
 
 # --- fail closed on the postgres image ------------------------------------------
@@ -152,6 +165,35 @@ if [ "$effective" != "127.0.0.1" ]; then
        initdb hook, not from a file we ship."
 fi
 ok "postgres image really runs listen_addresses=127.0.0.1 (hook applied, value read back from postgres)"
+
+# --- an EDITED tuning must reach an EXISTING cluster ------------------------------------
+# The hook used to stop at its marker ("already applied"), and initdb hooks only run on an
+# empty data dir — so a changed postgresql.conf never reached a cluster that already existed.
+# Run the hook twice, the second time with a different shared_buffers, and read the value
+# back from postgres: exactly one tuning block, carrying the NEW value.
+reapply="$(docker run --rm --user postgres --entrypoint bash "ussdgw-postgres:$TAG" -c '
+  set -e
+  export PGDATA=/tmp/pg-reapply
+  mkdir -p "$PGDATA"
+  cp /usr/share/postgresql/postgresql.conf.sample "$PGDATA/postgresql.conf"
+  printf "local all all trust\n" > "$PGDATA/pg_hba.conf"
+  /docker-entrypoint-initdb.d/02-operator-tuning.sh >/dev/null 2>&1
+  sed "s/^shared_buffers.*/shared_buffers = 384MB/" /etc/postgresql/postgresql.conf > /tmp/tuning-v2.conf
+  TUNING=/tmp/tuning-v2.conf /docker-entrypoint-initdb.d/02-operator-tuning.sh >/dev/null 2>&1
+  echo "blocks=$(grep -c "^# >>> ussdgw operator tuning" "$PGDATA/postgresql.conf")"
+  echo "shared=$(postgres -D "$PGDATA" -C shared_buffers 2>/dev/null | tail -1)"
+' 2>&1)" || die "ussdgw-postgres:$TAG — re-running the tuning hook failed: $reapply"
+grep -q '^blocks=1$' <<<"$reapply" && grep -q '^shared=49152$' <<<"$reapply" \
+  || die "ussdgw-postgres:$TAG — a re-run of the tuning hook did not REPLACE its block
+       (want blocks=1, shared=49152 x 8kB = 384MB), got: $(tr '\n' ' ' <<<"$reapply")
+       An edited docker/postgres/postgresql.conf would never reach an existing cluster."
+ok "postgres tuning hook replaces its block on re-run (an edited postgresql.conf reaches an existing cluster)"
+
+entry="$(docker image inspect -f '{{json .Config.Entrypoint}} {{json .Config.Cmd}}' "ussdgw-postgres:$TAG")"
+[[ "$entry" == '["ussdgw-pg-entrypoint.sh"] ["postgres"]' ]] \
+  || die "ussdgw-postgres:$TAG entrypoint/cmd is $entry — expected the ussdgw-pg-entrypoint.sh
+       wrapper (re-applies tuning on every start) with CMD [\"postgres\"]."
+ok "postgres image starts through ussdgw-pg-entrypoint.sh (tuning re-applied on every start)"
 
 echo
 echo "build-images: next — point docker/.env at these tags and deploy:"

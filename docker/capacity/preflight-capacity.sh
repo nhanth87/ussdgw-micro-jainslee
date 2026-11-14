@@ -48,21 +48,27 @@ echo "preflight: profile = 5k PRODUCTION"
 echo "preflight: host reports ${cpus} CPU, ${mem_gib} GiB RAM"
 echo "preflight: requires >= ${MIN_CPUS} CPU, >= ${MIN_MEM_GIB} GiB"
 
-[[ "${cpus:-0}" -ge "$MIN_CPUS" ]] \
-  || die "host has ${cpus} CPU, need >= ${MIN_CPUS}.
+# USSDGW_ALLOW_UNSAFE_5K=1 turns the two size failures into warnings. It used to be checked
+# AFTER both `die`s, so it could never take effect: the "proceeding on an undersized host"
+# line was unreachable. Now it is evaluated where the decision is made.
+undersized=()
+[[ "${cpus:-0}" -ge "$MIN_CPUS" ]] || undersized+=("host has ${cpus} CPU, need >= ${MIN_CPUS}.
      The 5k overlay reserves 16 CPU for ussdgw and 12 for postgres; on a smaller
-     host Swarm cannot honour the reservation and the JVM is OOM-killed mid-dialog.
-     For the test server use the TEST profile:
-       docker stack deploy -c docker/stack.yml -c docker/stack.test.yml ussdgw"
-
-[[ "${mem_gib:-0}" -ge "$MIN_MEM_GIB" ]] \
-  || die "host has ${mem_gib} GiB RAM, need >= ${MIN_MEM_GIB}.
+     host Swarm cannot honour the reservation and the JVM is OOM-killed mid-dialog.")
+[[ "${mem_gib:-0}" -ge "$MIN_MEM_GIB" ]] || undersized+=("host has ${mem_gib} GiB RAM, need >= ${MIN_MEM_GIB}.
      The 5k overlay reserves 64 GiB for ussdgw and 32 GiB for postgres. Do NOT run
-     it on the Digicom test server. Use the TEST profile:
-       docker stack deploy -c docker/stack.yml -c docker/stack.test.yml ussdgw"
+     it on the Digicom test server.")
 
-if [[ "${USSDGW_ALLOW_UNSAFE_5K:-0}" == "1" ]]; then
-  echo "preflight: WARNING USSDGW_ALLOW_UNSAFE_5K=1 — proceeding on an undersized host"
+if (( ${#undersized[@]} > 0 )); then
+  if [[ "${USSDGW_ALLOW_UNSAFE_5K:-0}" == "1" ]]; then
+    for m in "${undersized[@]}"; do echo "preflight: WARNING $m" >&2; done
+    echo "preflight: WARNING USSDGW_ALLOW_UNSAFE_5K=1 — proceeding on an undersized host" >&2
+    exit 0
+  fi
+  for m in "${undersized[@]}"; do echo "preflight: ERROR $m" >&2; done
+  die "host is too small for the 5k profile. For the test server use the TEST profile:
+       docker stack deploy -c docker/stack.yml -c docker/stack.test.yml ussdgw
+     (USSDGW_ALLOW_UNSAFE_5K=1 overrides this — lab only, never a carrier host)"
 fi
 
 ok "host is large enough for the 5k profile"

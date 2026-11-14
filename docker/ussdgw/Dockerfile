@@ -119,6 +119,11 @@ RUN set -eu; \
     fi; \
     test "$(cat "$APP_HOME/.baked-db-kind")" = postgresql \
       || { echo "REFUSING: image is not PG-baked ($(cat "$APP_HOME/.baked-db-kind")) — crash-loop on a PG host"; exit 1; }; \
+    unzip -p "$APP_HOME/quarkus/generated-bytecode.jar" | grep -aq 'org.postgresql.Driver' \
+      || { echo "REFUSING: fast-jar did not bake org.postgresql.Driver — the .baked-db-kind stamp is not the bake (GMLC 2026-10-07)"; exit 1; }; \
+    if unzip -p "$APP_HOME/quarkus/generated-bytecode.jar" | grep -aq 'org.h2.Driver'; then \
+      echo "REFUSING: fast-jar baked org.h2.Driver — crash-loop on a PG host"; exit 1; \
+    fi; \
     "$JAVA_HOME/bin/java" -version 2>&1 | grep -q 'version "25' \
       || { echo "refusing: runtime is not Java 25"; exit 1; }
 

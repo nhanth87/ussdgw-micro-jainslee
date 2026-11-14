@@ -43,6 +43,17 @@ RUN set -eu; \
     [ -z "$(tail -c 1 "$conf")" ] || { echo "FATAL: $conf must end in a newline" >&2; exit 1; }; \
     echo "postgres: authored tuning pins loopback, one key, newline-terminated"
 
+# Re-apply the operator tuning on every start of an existing cluster: initdb hooks run only
+# on an empty data directory, so without this wrapper a changed postgresql.conf never reached
+# a cluster that was already initialised. Setting ENTRYPOINT resets the inherited CMD, hence
+# the explicit CMD (a stack `command:` still overrides it).
+COPY docker/postgres/ussdgw-pg-entrypoint.sh /usr/local/bin/ussdgw-pg-entrypoint.sh
+RUN chmod 0755 /usr/local/bin/ussdgw-pg-entrypoint.sh \
+ && bash -n /usr/local/bin/ussdgw-pg-entrypoint.sh \
+ && command -v gosu >/dev/null
+ENTRYPOINT ["ussdgw-pg-entrypoint.sh"]
+CMD ["postgres"]
+
 # The gateway image reads the password from this file (see docker/ussdgw/entrypoint.sh);
 # `docker service inspect` and shell history never see it.
 # Create on the host:  printf '<password>' | docker secret create ussdgw_db_password -

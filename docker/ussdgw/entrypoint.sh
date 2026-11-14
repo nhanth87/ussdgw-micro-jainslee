@@ -145,6 +145,25 @@ else
        $SECRET_PW_FILE or set QUARKUS_DATASOURCE_PASSWORD."
 fi
 
+# --- 5b. admin key: one source of truth ---------------------------------------
+# The gateway enforces ussd.admin.api-key from application.properties. The swarm secret
+# ussdgw_admin_key only feeds the healthcheck and prove.sh, and must MIRROR the property
+# (docker/full-build.sh creates it that way). A drifted secret is not fatal — the property
+# still rules and the healthcheck accepts 401 — but an operator copying the secret as "the
+# admin key" would get 401 everywhere, so say so at boot. Values are compared, never logged.
+ADMIN_KEY_FILE="${USSD_ADMIN_API_KEY_FILE:-/run/secrets/ussdgw_admin_key}"
+if [[ -r "$ADMIN_KEY_FILE" ]]; then
+  secret_key="$(tr -d '\r\n' < "$ADMIN_KEY_FILE" || true)"
+  prop_key="$(sed -n 's/^[[:space:]]*ussd\.admin\.api-key[[:space:]]*=[[:space:]]*//p' "$cfg" | head -1 | tr -d '\r\n' || true)"
+  if [[ -n "$secret_key" && "$secret_key" == "$prop_key" ]]; then
+    log "admin key: secret ussdgw_admin_key mirrors ussd.admin.api-key ✓"
+  else
+    log "WARN admin key: secret ussdgw_admin_key differs from ussd.admin.api-key — the PROPERTY is"
+    log "     the key in force. Re-create the secret from the property (docker/full-build.sh does)."
+  fi
+  unset secret_key prop_key
+fi
+
 # --- 6. wait for PostgreSQL ---------------------------------------------------
 # Swarm has no depends_on, so the app can start first. Bounded retry: fail loudly
 # rather than crash-looping silently against a database that never appears.
@@ -173,6 +192,17 @@ done
 # still reports the service, :8088 never binds, and `docker logs` has nothing.
 exec 3>&- || true
 log "PostgreSQL reachable at $PG_HOST:$PG_PORT (after ${waited}0s)"
+
+# --- 6b. :8088 must be free: GMLC and USSDGW are mutually exclusive ----------
+# Both gateways bind :8088 and the same SCTP endpoints (2011/2019) on the shared host
+# network, and nginx proxies whichever one holds :8088. If something already answers there
+# (normally the GMLC primary), starting would at best fail to bind and at worst grab SCTP
+# associations from under the live gateway. Refuse with the reason instead.
+if (exec 3<>"/dev/tcp/127.0.0.1/8088") 2>/dev/null; then
+  die ":8088 is already held on this host — most likely the GMLC gateway is PRIMARY and
+       this USSDGW must stay STANDBY (USSDGW_REPLICAS=0). Switch roles with
+       docker/switch-primary.sh ussdgw   (never run both gateways at once)."
+fi
 
 # --- 7. writable runtime dirs -------------------------------------------------
 mkdir -p "$CONFIG_DIR/ss7-persist" "$USSD_LOG_DIR" "$APP_HOME/data"

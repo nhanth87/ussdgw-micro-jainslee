@@ -253,6 +253,25 @@ grep -q 'quarkus-run.jar' <<<"$cp_line" \
   && ok "process runs quarkus-run.jar (the launcher, not the app jar alone)" \
   || bad "unexpected command line: $cp_line"
 
+# The jlink'd JRE must carry every module some RA reaches for at boot. jdk.compiler is the
+# one that shipped missing: ra-diameter's DiameterStackImpl needs javax.tools even with
+# Diameter disabled, and the container exited 1 at raActive() (2026-10-03).
+run_mods="$(docker exec "$CONTAINER" sh -c '"$JAVA_HOME/bin/java" --list-modules' 2>/dev/null || true)"
+for m in jdk.sctp jdk.compiler; do
+  grep -q "^${m}@" <<<"$run_mods" \
+    && ok "running JRE carries $m" \
+    || bad "running JRE has no $m — see docker/ussdgw/Dockerfile jlink --add-modules"
+done
+
+# A class missing from the JRE or the classpath does not always kill the process: an RA
+# that fails inside raActive() can leave the JVM up with a dead plane. Read this boot's
+# log for the two signatures of that, instead of trusting "the container is running".
+boot_errs="$(docker logs "$CONTAINER" 2>&1 | grep -cE 'NoClassDefFoundError|ClassNotFoundException' || true)"
+[[ "${boot_errs:-0}" == 0 ]] \
+  && ok "no NoClassDefFoundError / ClassNotFoundException in this container's log" \
+  || bad "$boot_errs NoClassDefFoundError/ClassNotFoundException line(s) in this container's log —
+        docker logs $CONTAINER 2>&1 | grep -E 'NoClassDefFoundError|ClassNotFoundException'"
+
 # --- 3. preflight conditions the entrypoint enforces -----------------------------
 head_ "preflight"
 docker exec "$CONTAINER" test -e /proc/net/sctp \

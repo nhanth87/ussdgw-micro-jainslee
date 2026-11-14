@@ -800,7 +800,7 @@ Carrier peer sends duplicate ASP Active / CommUp messages → jSS7 M3UA FSM thro
 
 **When to re-enable watchdog:**
 - Only if SS7 genuinely unstable (peer flapping, network issues)
-- Increase threshold: `ussd.ss7.watchdog.threshold-ms=600000` (10 min instead of 3 min)
+- Increase threshold: `ussd.ss7.watchdog.down-seconds=600` (10 min; the key `threshold-ms` does not exist). Since 2026-10-07 the code default is `enabled=false`, `down-seconds=600`
 - Monitor logs for `re-wiring SS7` frequency (should be rare, not every 3 min)
 
 **Prove:** after restart, wait 2-3 minutes, check:
@@ -835,3 +835,23 @@ Carrier peer sends duplicate ASP Active / CommUp messages → jSS7 M3UA FSM thro
 
 ## Synced from workspace (2026-09-18)
 Cross-project footguns added to workspace [`docs/agents/lessons.md`](../../../../../docs/agents/lessons.md) from the OTA P1 SMSC-GW build — **do not paste, link**: Quarkus `@ConfigProperty(defaultValue="")` boot-breaker → `Optional<String>`; Claude Code worktree-agents branch from a stale base under uncommitted WIP (commit clean base / salvage-and-reapply); **parallel subagents share one session rate-limit** (prefer sequential in-tree); auto-mode classifier blocks remote-shell/prod-DB/inline-credential writes; Iran L2TP ship = **sequential** rsync (parallel deadlocks).
+
+## 2026-10-19 — Web UI wire: cache + compress + measure from the far end (cross-project, from GMLC)
+
+- Over our ~335 ms RTT / ~15 KB/s links a page that **renders in 6–55 ms** took **~3 s per page change** in GMLC: every asset (142 KB CSS/JS) was re-downloaded with **no `Cache-Control`, no `ETag`, no gzip**. "Next.js feels faster" was the wire, not the framework.
+- Any page this app serves: **content-hashed asset URLs + `Cache-Control: public, max-age=31536000, immutable`**; unversioned → `no-cache` + `ETag` → **304**; **gzip ≥ 1 KB** in the app (`Vary: Accept-Encoding`) — nginx `gzip on` does not compress proxied responses without `gzip_proxied any`; never pass a compressed body through `new String(...)`; **HTTP/2** on the TLS front.
+- **Measure from the user side**, before and after: `curl -w "%{time_connect} %{time_appconnect} %{time_starttransfer} %{time_total} %{size_download}"` + `curl -I` (cache-control / etag / content-encoding). Server time is not page time.
+- Law: root `AGENTS.md` § 5 · detail: root `docs/agents/lessons.md` · reference code: GMLC `AdminWire` + `AdminPageRenderer.versionStaticUrls`.
+
+- **SS7 (same date, from GMLC):** (1) sctp-impl ≤ 2.27.32 on NETTY_KERNEL: after an STP SCTP RESTART the replaced channel's late close takes the **new** association down — move to **sctp-impl 2.27.33** (`sctp` commit `3947dd2`). (2) `*.live` can stay true while one link drops every answer (`PayloadData … But ASP State=DOWN`): health per link (app vs `/proc/net/sctp/assocs`) + alarm on consecutive MAP timeouts with no answer (GMLC `Ss7LinkHealth`). (3) Do **not** run the full sctp-impl TestNG suite — GBs of log then OOM; run `-Dtest=<Class>` and delete `sctptest.log*`.
+- **digicom-nb:** `unattended-upgrades` + `needrestart` restart app services at ~06:3x UTC after library updates — read `/var/log/apt/history.log` before chasing a "crash".
+
+## Synced 2026-10-28 — runtime findings from Elisa (check here too)
+
+Detail: workspace [`docs/agents/lessons.md`](../../../../../docs/agents/lessons.md) § 2026-10-28 · micro-jainslee lessons § 2026-10-28.
+
+- **SYNC event delivery** (the default): one router thread waits per event for the SBB; an SBB that ends an activity while the ring is full deadlocks until the 30 s latch. Check `microjainslee.container.event-delivery` before any TPS claim; I/O SBBs → `async-commit`.
+- **No synchronous PG in `onEvent`** — hot store on the event thread, coalesced write-behind for PG, TTL caches for lookups. This was Elisa's ~100 CPS ceiling.
+- **Root SBB entities are never removed when their activity ends**, and `releaseEntity` from the entity's own thread deadlocks. Without an IES every event makes a new entity (see the 2026-10-14 runtime lesson). Watch entity count over a long run.
+- `RegistrationOrder` fix (O(1) entity registration) is in micro-jainslee 1.2.2-SNAPSHOT — older jars slow down with uptime.
+- Shared helpers (tenant hierarchy ADMIN > GD > USER via `jainslee-authz`, write-behind, TTL cache, tenant TPS guard) belong in micro-jainslee — reuse, do not fork per product.

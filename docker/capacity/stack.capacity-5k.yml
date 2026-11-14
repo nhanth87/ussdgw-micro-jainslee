@@ -8,7 +8,7 @@
 # Service names (ussdgw, postgres) must match docker/stack.yml. cpuset pinning is done by
 # pin-cpusets.sh (swarm has no cpuset key); limits below cap CPU/memory and reservations make the
 # scheduler refuse to place the stack on a node that cannot honor them.
-version: "3.8"
+version: "3.9"
 
 services:
   ussdgw:

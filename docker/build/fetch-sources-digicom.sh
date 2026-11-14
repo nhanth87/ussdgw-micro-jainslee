@@ -31,7 +31,6 @@ corsac-diameter|git@github.com-digicom:digicom-et/corsac-diameter.git|diameter-p
 
 # Base images (same as upstream)
 base-ubuntu|docker.io/library/ubuntu:26.04|sha256:61ebaa5cc23ca45450db85eac015435199ec569e28ec222ea13f2aed2110b8a6
-base-temurin|docker.io/library/eclipse-temurin:25-jdk|sha256:f1a8a92fd5da34482dd3ace226120d6a75c1c4ca0a5a364f65ec6ba430eea6d1_FETCHED_AT_BUILD_TIME
 base-postgres|docker.io/library/postgres:16|sha256:2c72031ac25606bf94fd2fece7c35efdf263a48b08446950034f0725653f4efc
 base-nginx|docker.io/library/nginx:1.27-alpine|sha256:65645c7bb6a0661892a8b03b89d0743208a18dd2f3f17a54ef4b76fb8e2f2a10
 EOF

@@ -39,11 +39,16 @@ export RUN_TESTS="${RUN_TESTS:-0}"
 
 die() { echo "run-build: ERROR: $*" >&2; exit 1; }
 
-if docker image inspect "$BUILDER_IMAGE" >/dev/null 2>&1; then
-  echo "run-build: reusing builder image $BUILDER_IMAGE"
-else
-  docker build -f docker/build/Dockerfile -t "$BUILDER_IMAGE" .
-fi
+# ALWAYS (re)build, never "reuse if the tag exists". build-all.sh, verify-sources.sh,
+# fetch-sources.sh and sources.lock are COPYed into this image, and `docker run … build-all.sh`
+# executes the baked copy. With reuse-if-present, editing any of them — or bumping a pin in
+# docker/sources.lock — changed nothing until someone happened to delete the image: the build
+# verified against the OLD pins and ran the OLD script while the repo said otherwise. Layer
+# cache makes an unchanged rebuild a no-op of a few seconds; a changed file re-runs only the
+# COPY layers after it.
+docker build -f docker/build/Dockerfile -t "$BUILDER_IMAGE" . \
+  || die "builder image build failed (docker/build/Dockerfile)"
+echo "run-build: builder image $BUILDER_IMAGE is current with docker/build/ + docker/sources.lock"
 # Always (re)publish the probe tag, even when the builder image was reused, so a
 # stale or missing tag can never block the runtime image build in Phase 4.
 docker tag "$BUILDER_IMAGE" "$PROBE_TAG"

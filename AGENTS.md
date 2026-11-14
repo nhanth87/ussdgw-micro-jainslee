@@ -179,7 +179,7 @@ Carrier peer sends duplicate ASP Active / CommUp messages → jSS7 M3UA FSM thro
 
 **When to re-enable watchdog:**
 - Only if SS7 genuinely unstable (peer flapping, network issues)
-- Increase threshold: `ussd.ss7.watchdog.threshold-ms=600000` (10 min instead of 3 min)
+- Increase threshold: `ussd.ss7.watchdog.down-seconds=600` (10 min; the key `threshold-ms` does not exist). Since 2026-10-07 the code default is `enabled=false`, `down-seconds=600`
 - Monitor logs for `re-wiring SS7` frequency (should be rare, not every 3 min)
 
 Detail: `Ss7Watchdog` · `configs/application.properties` · [lessons.md](docs/agents/lessons.md) § 2026-10-03

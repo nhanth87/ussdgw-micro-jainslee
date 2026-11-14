@@ -84,6 +84,11 @@ if [[ "${USSD_ALWAYS_PRETOUCH:-0}" == "1" ]]; then
 fi
 # shellcheck disable=SC2206
 EXTRA_JAVA_OPTS=( ${JAVA_OPTS:-${USSD_JAVA_OPTS:-}} )
+# Log4j2-only mandate (workspace AGENTS.md): the jboss-logging facade (Quarkus, Agroal,
+# Flyway…) is routed to Log4j2, never to jboss-logmanager. The JUL route
+# (-Djava.util.logging.manager=org.apache.logging.log4j.jul.LogManager) is NOT set here:
+# log4j-jul is not on the classpath yet, and naming a missing LogManager class breaks
+# JUL entirely. Add the log4j-jul dependency first, then the flag.
 
 echo "Starting nhanth87 USSDGW (fast-jar: quarkus-run.jar + ussdgw-app.jar + lib/)"
 echo "Data: ${APP_HOME}/data (H2 file DB by default — switch configs to postgresql for prod)"
@@ -92,6 +97,7 @@ exec java \
   "${JAVA_OPTS_DEFAULT[@]}" \
   "${EXTRA_JAVA_OPTS[@]}" \
   -Dussd.log.dir="$USSD_LOG_DIR" \
+  -Dorg.jboss.logging.provider=log4j2 \
   -Dussd.cdr.roll-max-files="${USSD_CDR_ROLL_MAX_FILES:-6}" \
   -Dussd.cdr.roll-max-age="${USSD_CDR_ROLL_MAX_AGE:-30d}" \
   -Dquarkus.config.locations="file:$APP_HOME/configs/application.properties" \

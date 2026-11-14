@@ -27,7 +27,8 @@
 # How it is applied: append the tuning to $PGDATA/postgresql.conf, which does take
 # effect (later assignments win). /etc/postgresql/postgresql.conf stays the single
 # authored source of truth and the Dockerfile still installs it, so there is exactly
-# one file to edit. Guarded by a marker so a re-run cannot append it twice.
+# one file to edit. The block is delimited by markers and REPLACED on every run, so a
+# re-run never appends it twice and an edited tuning file always takes effect.
 set -euo pipefail
 
 # Overridable only so the hook can be exercised in isolation; initdb always runs it
@@ -48,9 +49,23 @@ if [[ ! -f "$PGCONF" ]]; then
   exit 1
 fi
 
-if grep -qF "$MARKER" "$PGCONF"; then
-  echo "operator tuning: already applied"
-else
+# REPLACE, never "already applied → skip". This hook used to stop at the marker, and initdb
+# hooks only run on an EMPTY data directory — so after the first boot, editing
+# docker/postgres/postgresql.conf and shipping a new image changed nothing on any existing
+# cluster, silently. The image's entrypoint wrapper (ussdgw-pg-entrypoint.sh) now runs this
+# hook on every start of an existing cluster, and this block swaps the old tuning block out
+# for the current one. Every block this hook ever wrote starts and ends with the same
+# prefixes, whatever $TUNING path was in the marker.
+if grep -q '^# >>> ussdgw operator tuning' "$PGCONF"; then
+  tmp="$(mktemp "${PGCONF}.XXXXXX")"
+  awk '/^# >>> ussdgw operator tuning/ {skip=1}
+       !skip {print}
+       /^# <<< ussdgw operator tuning <<</ {skip=0}' "$PGCONF" > "$tmp"
+  # cat >, not mv: keeps the file's owner and mode exactly as initdb created them.
+  cat "$tmp" > "$PGCONF"; rm -f "$tmp"
+  echo "operator tuning: removed the previously applied block; re-applying from $TUNING"
+fi
+{
   # Both files must end in a newline before anything is appended, or the first
   # appended line is glued onto the last existing one.
   #
@@ -82,7 +97,7 @@ else
 
   applied="$(awk 'NF && $0 !~ /^[[:space:]]*#/' "$TUNING" | wc -l)"
   echo "operator tuning: applied $applied setting(s) to $PGCONF"
-fi
+}
 
 # --- validate by PARSING, not by grepping (this is the part that was wrong) ------
 # The previous version asserted with

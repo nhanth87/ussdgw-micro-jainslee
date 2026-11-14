@@ -110,14 +110,15 @@ SOURCE_MODE="${SOURCE_MODE:-local}"
 if [[ -n "${USSD_ADMIN_API_KEY:-}" && "$USSD_ADMIN_API_KEY" == "ussd-admin" ]]; then
   unset USSD_ADMIN_API_KEY
   info "ignoring USSD_ADMIN_API_KEY=ussd-admin from the environment: that is the lab"
-  info "  placeholder, not this deployment's key (the key in force is in ussdgw_admin_key)"
+  info "  placeholder, not this deployment's key (the key in force is ussd.admin.api-key in application.properties)"
 fi
 
-# Pin the three images to the tag just computed, in the shell AND in .env,
-# so docker stack deploy (which reads .env from the repo root, not docker/)
-# cannot resolve `latest` to something older. Compose interpolation prefers
-# the exported environment over the .env file; rewriting .env keeps a later
-# manual `docker stack deploy` on the same artifact.
+# Pin the three images to the tag just computed, in the shell AND in docker/.env.
+# `docker stack deploy` does NOT read any .env file — it interpolates ${VAR} only from
+# the calling shell's environment. So the EXPORT below is what pins this deploy, and
+# the .env rewrite only helps a later manual deploy if the operator first loads it:
+#     set -a; . docker/.env; set +a; docker stack deploy -c docker/stack.yml … ussdgw
+# A bare manual `docker stack deploy` without that falls back to the :latest defaults.
 USSDGW_IMAGE="ussdgw:$TAG"; NGINX_IMAGE="ussdgw-nginx:$TAG"; POSTGRES_IMAGE="ussdgw-postgres:$TAG"
 export USSDGW_IMAGE NGINX_IMAGE POSTGRES_IMAGE
 if [[ -w "$ENV_FILE" && "$MODE_CHECK" == 0 ]]; then
@@ -128,6 +129,28 @@ if [[ -w "$ENV_FILE" && "$MODE_CHECK" == 0 ]]; then
   cat "$tmp" > "$ENV_FILE"; rm -f "$tmp"
   info "$ENV_FILE pinned to :$TAG"
 fi
+
+# --- gateway role: GMLC primary ⇒ USSDGW standby ------------------------------------
+# GMLC and USSDGW bind the same :8088 and SCTP 2011/2019 on the shared host network, so at
+# most one may run. Owner decision 2026-10-07: GMLC runs as PRIMARY and this stack keeps
+# only the shared postgres + nginx up, with the ussdgw service at 0 replicas (STANDBY).
+# While gmlc_gmlc wants >0 replicas this deploy forces USSDGW_REPLICAS=0; moving the role
+# back is docker/switch-primary.sh ussdgw, never a plain deploy that starts both.
+GMLC_SERVICE="${GMLC_SERVICE:-gmlc_gmlc}"
+GMLC_WANT="$(docker service inspect "$GMLC_SERVICE" --format '{{.Spec.Mode.Replicated.Replicas}}' 2>/dev/null || true)"
+if [[ "${GMLC_WANT:-0}" =~ ^[1-9] ]]; then
+  if [[ "${USSDGW_REPLICAS:-}" =~ ^[1-9] ]]; then
+    die "USSDGW_REPLICAS=$USSDGW_REPLICAS but $GMLC_SERVICE is PRIMARY (replicas=$GMLC_WANT).
+     Both gateways hold :8088 + SCTP 2011/2019 — running both is never allowed.
+     Switch roles instead:  ./docker/switch-primary.sh ussdgw"
+  fi
+  USSDGW_REPLICAS=0
+  info "GMLC is PRIMARY ($GMLC_SERVICE replicas=$GMLC_WANT) — this deploy is USSDGW STANDBY:"
+  info "  shared postgres + nginx are deployed/updated, the ussdgw service stays at 0 replicas"
+fi
+USSDGW_REPLICAS="${USSDGW_REPLICAS:-1}"
+export USSDGW_REPLICAS
+STANDBY=0; [[ "$USSDGW_REPLICAS" == 0 ]] && STANDBY=1
 
 # ==================================================================================
 step "0/6 preflight — host, swarm, kernel SCTP, directories"
@@ -198,14 +221,22 @@ for svc in "${STACK_NAME}_ussdgw" "${STACK_NAME}_nginx" "${STACK_NAME}_postgres"
   docker service inspect "$svc" --format \
     '{{range .Spec.TaskTemplate.ContainerSpec.Mounts}}{{if .Source}}{{.Source}}{{if .VolumeOptions.DriverConfig.Options.device}} = {{.VolumeOptions.DriverConfig.Options.device}}{{end}} -> {{.Target}};{{end}}{{end}}' \
     2>/dev/null | tr ';' '\n'
-done | grep . | sed 's/^/deploy: mount: /' || true
+# `|| true`: with no stack deployed yet (first deploy) the loop prints nothing, `grep .`
+# exits 1, and under pipefail that killed the whole script at this line.
+done | { grep . || true; } | sed 's/^/deploy: mount: /'
 
 # Ports. Only a *first* deploy needs them free: an update of our own stack is expected
 # to hold them. Fail-closed, because a host postgres/nginx left running means the
 # container's bind mounts collide and restart_policy retires the task silently.
 STACK_TASKS="$(docker stack ps "$STACK_NAME" --format '{{.Name}}' 2>/dev/null | head -1 || true)"
-if [[ -z "$STACK_TASKS" ]]; then
-  BUSY="$(ss -lnt 2>/dev/null | awk 'NR>1{print $4}' | grep -oE ':(80|443|5432|8088)$' | sort -u | tr '\n' ' ' || true)"
+# Only a DEPLOY needs the ports: --build-only may run while the host services still serve,
+# so the cutover outage is the deploy step alone.
+if [[ "$MODE_DEPLOY" == 0 && "$MODE_CHECK" == 0 ]]; then
+  info "build-only: port check skipped"
+elif [[ -z "$STACK_TASKS" ]]; then
+  PORTS_RE=':(80|443|5432|8088)$'
+  [[ "$STANDBY" == 1 ]] && PORTS_RE=':(80|443|5432)$'   # :8088 belongs to the GMLC primary
+  BUSY="$(ss -lnt 2>/dev/null | awk 'NR>1{print $4}' | grep -oE "$PORTS_RE" | sort -u | tr '\n' ' ' || true)"
   if [[ -n "${BUSY// /}" ]]; then
     die "no $STACK_NAME stack is deployed but these ports are already held:$BUSY
      A host service is still running. Ordered rollback/start:
@@ -242,8 +273,10 @@ done
 if [[ "$MODE_FETCH" == 1 ]]; then
   step "0b/6 fetch upstream sources at the pinned SHAs (SOURCE_MODE=$SOURCE_MODE)"
   mkdir -p "$SOURCE_ROOT"
-  docker image inspect ussdgw-builder:latest >/dev/null 2>&1 \
-    || docker build -f docker/build/Dockerfile -t ussdgw-builder:latest .
+  # Always rebuild (cached): fetch-sources.sh and sources.lock are baked into this image, so
+  # reusing an existing tag would fetch against stale pins. See docker/build/run-build.sh.
+  docker build -f docker/build/Dockerfile -t ussdgw-builder:latest . \
+    || die "builder image build failed (docker/build/Dockerfile)"
   # fetch-sources.sh verifies every SHA against sources.lock and is fatal on mismatch,
   # so a moved branch cannot silently change what we build.
   docker run --rm --user "$(id -u):$(id -g)" -e HOME=/tmp \
@@ -298,7 +331,9 @@ if [[ "$MODE_BUILD" == 1 || "$MODE_DEPLOY" == 1 ]]; then
     # lib/ ships two versions of one artifact — a classpath conflict resolved at
     # runtime by whichever class sorts first.
     ./docker/build/stage-dist.sh
-    ./docker/build/build-images.sh
+    # TAG must be passed: build-images.sh otherwise recomputes it WITHOUT the -dirty suffix, and
+    # every later step (provenance, --skip-build, deploy) looks for an image that does not exist.
+    TAG="$TAG" ./docker/build/build-images.sh
   else
     for img in ussdgw ussdgw-nginx ussdgw-postgres; do
       docker image inspect "$img:$TAG" >/dev/null 2>&1 \
@@ -528,6 +563,22 @@ step "4/6 swarm secrets (all three are external: true in stack.yml)"
 # start and restart_policy retires it, while `docker stack services` still lists the
 # service. So create-what-is-missing here, and NEVER rotate an existing one — the
 # database was initialised with the value it already has.
+# ONE source of truth for the admin key: ussd.admin.api-key in the operator's
+# application.properties. That is the value the gateway enforces (UssdConfigService), and
+# nothing reads the swarm secret except the healthcheck and prove.sh. This step used to
+# generate a RANDOM ussdgw_admin_key and print it as "the X-USSD-Admin-Key" — a key the
+# gateway had never heard of, so the operator was handed a credential that 401s on every
+# call. The secret is now a MIRROR of the property, never an independent value.
+config_admin_key() {
+  local f
+  for f in "${CONFIG_SRC:-}/application.properties" "${DEST:-}/application.properties"; do
+    [[ -r "$f" ]] || continue
+    sed -n 's/^[[:space:]]*ussd\.admin\.api-key[[:space:]]*=[[:space:]]*//p' "$f" | head -1 | tr -d '\r\n'
+    return 0
+  done
+  return 1
+}
+
 make_secret() {
   local name="$1" val
   if docker secret inspect "$name" >/dev/null 2>&1; then
@@ -541,14 +592,20 @@ make_secret() {
   case "$name" in
     ussdgw_db_password)       val="$(openssl rand -base64 32)" ;;
     ussdgw_pg_super_password) val="$(openssl rand -base64 24 | tr -d '\n=')" ;;
-    ussdgw_admin_key)         val="ussd-admin-$(openssl rand -hex 12)" ;;
+    ussdgw_admin_key)
+      val="$(config_admin_key || true)"
+      [[ -n "$val" ]] || die "cannot create $name: no readable ussd.admin.api-key in
+     ${CONFIG_SRC:-<CONFIG_SRC unset>}/application.properties or ${DEST:-<DEST unset>}/application.properties.
+     That property IS the admin key the gateway enforces; the secret only mirrors it for the
+     healthcheck and prove.sh. Set it in the operator config (openssl rand -hex 24), then re-run."
+      ;;
     *) die "make_secret: no generator for '$name'" ;;
   esac
   [[ -n "$val" ]] || die "generated an empty value for secret $name"
   printf '%s' "$val" | docker secret create "$name" - >/dev/null
   case "$name" in
-    # The admin key is the one an operator needs to see: it is the X-USSD-Admin-Key.
-    ussdgw_admin_key) info "secret $name CREATED — value: $val" ;;
+    # Never echo the admin key: it is the operator's own config value, already in their file.
+    ussdgw_admin_key) info "secret $name CREATED as a mirror of ussd.admin.api-key (value not printed — it is in application.properties)" ;;
     # The database passwords are deliberately not echoed. They are recoverable from a
     # running task: docker exec <cid> cat /run/secrets/<name>
     *) info "secret $name CREATED (value not printed; read it with:
@@ -560,11 +617,30 @@ make_secret ussdgw_db_password
 make_secret ussdgw_pg_super_password
 make_secret ussdgw_admin_key
 
+# An EXISTING ussdgw_admin_key may predate the mirror rule (random value) or the operator may
+# have rotated ussd.admin.api-key since. Compare inside the running gateway — it can read both
+# files and no value leaves the container. Drift is a warning, not a failure: the gateway
+# enforces the property either way, and the healthcheck accepts 401.
+ADMIN_CID="$(docker ps -q --filter "name=${STACK_NAME:-ussdgw}_ussdgw" | head -1 || true)"
+if [[ -n "$ADMIN_CID" ]]; then
+  if docker exec "$ADMIN_CID" sh -c '
+       s="$(tr -d "\r\n" < "${USSD_ADMIN_API_KEY_FILE:-/run/secrets/ussdgw_admin_key}" 2>/dev/null)"
+       p="$(sed -n "s/^[[:space:]]*ussd\.admin\.api-key[[:space:]]*=[[:space:]]*//p" /opt/ussdgw/configs/application.properties | head -1 | tr -d "\r\n")"
+       [ -n "$s" ] && [ "$s" = "$p" ]' >/dev/null 2>&1; then
+    info "ussdgw_admin_key mirrors ussd.admin.api-key in the running gateway ✓"
+  else
+    warn "ussdgw_admin_key does NOT match ussd.admin.api-key in the running gateway."
+    warn "  The PROPERTY is the key in force; the secret only feeds the healthcheck/prove.sh."
+    warn "  Re-mirror: docker stack rm ${STACK_NAME:-ussdgw}; docker secret rm ussdgw_admin_key; re-run this script."
+  fi
+fi
+
 # ==================================================================================
 step "5/6 deploy stack '$STACK_NAME' (profile $DEPLOY_PROFILE, images :$TAG)"
 # ==================================================================================
 # Image vars already pinned + exported before .env load (step 0).
-# Rewriting .env keeps a later manual `docker stack deploy` on the same artifact.
+# docker/.env was rewritten too, but `docker stack deploy` never reads it: a later manual
+# deploy must `set -a; . docker/.env; set +a` first to land on the same artifact.
 
 if [[ "$MODE_CHECK" == 1 ]]; then
   info "dry run: would run  docker stack deploy -c ./docker/stack.yml -c $OVERLAY $STACK_NAME"
@@ -587,6 +663,24 @@ if [[ "$MODE_CHECK" == 1 ]]; then
     warn "no running ${STACK_NAME:-ussdgw}_ussdgw container to prove"
   fi
   step "dry run complete — nothing was changed"
+  exit 0
+fi
+
+if [[ "$STANDBY" == 1 ]]; then
+  # No ussdgw container on purpose. Prove what this stack DOES run in standby: the shared
+  # database and the front door the GMLC primary is served through.
+  for svc in "${STACK_NAME:-ussdgw}_postgres" "${STACK_NAME:-ussdgw}_nginx"; do
+    deadline=$(( $(date +%s) + READY_TIMEOUT ))
+    until [[ -n "$(docker ps -q --filter "label=com.docker.swarm.service.name=$svc" | head -1)" ]]; do
+      (( $(date +%s) < deadline )) || { docker service ps "$svc" --no-trunc | head -5 >&2; die "$svc has no running task"; }
+      sleep 3
+    done
+    info "$svc running"
+  done
+  code="$(curl -sS -o /dev/null -w '%{http_code}' http://127.0.0.1/healthz 2>/dev/null || true)"
+  [[ "$code" == 200 ]] && info "nginx /healthz 200" || die "nginx /healthz returned '$code'"
+  step "deployed: $STACK_NAME :$TAG as USSDGW STANDBY (GMLC primary on :8088)"
+  info "switch roles: ./docker/switch-primary.sh ussdgw"
   exit 0
 fi
 

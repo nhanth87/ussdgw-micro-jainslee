@@ -22,10 +22,15 @@ APP_PW="$(cat "$SECRET_FILE")"
 
 echo "initdb: creating role + database 'ussdgw' (dedicated, never shared)"
 
-psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" <<SQL
+# The password is passed as a psql VARIABLE and quoted by psql (:'app_pw'), never spliced
+# into the SQL text by the shell. With the old `PASSWORD '${APP_PW}'` a secret containing a
+# single quote broke initdb at best, and at worst ran whatever followed the quote as SQL as
+# the superuser. The heredoc is quoted ('SQL') so the shell expands nothing inside it.
+psql -v ON_ERROR_STOP=1 -v app_pw="$APP_PW" \
+     --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" <<'SQL'
 -- The application role owns its own database and cannot create extensions or
 -- roles: least privilege for a component that only needs its own tables.
-CREATE ROLE ussdgw WITH LOGIN PASSWORD '${APP_PW}';
+CREATE ROLE ussdgw WITH LOGIN PASSWORD :'app_pw';
 CREATE DATABASE ussdgw OWNER ussdgw;
 SQL
 

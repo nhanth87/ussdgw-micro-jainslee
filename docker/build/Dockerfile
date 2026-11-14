@@ -11,8 +11,10 @@
 FROM docker.io/library/ubuntu:26.04@sha256:61ebaa5cc23ca45450db85eac015435199ec569e28ec222ea13f2aed2110b8a6
 
 ARG DEBIAN_FRONTEND=noninteractive
-ARG MAVEN_VERSION=3.9.9
-ARG MAVEN_SHA512=b5f5d3d1d0b3b0b4e4a4a5c9f0c2c2c4a1a0e0f0c0b0a09080706050403020100f
+# JDK 25 and Maven come from the Ubuntu 26.04 archive (apt), NOT from a pinned tarball.
+# There used to be MAVEN_VERSION/MAVEN_SHA512 ARGs here; neither was used by any step, and
+# the "checksum" was not a real digest — an audit line that verified nothing. What is
+# actually installed is recorded below (dpkg versions → toolchain.txt → BUILD-INFO.json).
 
 # Toolchain only. Note python3: build/package-dist.sh rewrites
 # quarkus-application.dat with inline python heredocs and will fail without it.
@@ -123,6 +125,9 @@ RUN { \
       echo "mvn=$(mvn -v 2>/dev/null | head -1 | sed 's/\x1b\[[0-9;]*m//g')"; \
       echo "git=$(git --version)"; \
       echo "python3=$(python3 --version 2>&1)"; \
+      for pkg in openjdk-25-jdk-headless maven libsctp1 libsctp-dev; do \
+        echo "apt.$pkg=$(dpkg-query -W -f='${Version}' "$pkg")"; \
+      done; \
     } > /usr/local/share/toolchain.txt
 
 # Locale proof: a UTF-8 sun.jnu.encoding is a hard requirement (see above), so fail

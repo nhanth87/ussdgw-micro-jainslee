@@ -368,14 +368,23 @@ Three, all declared `external: true` in `docker/stack.yml`, so all three must ex
 ```bash
 printf '%s' "$(openssl rand -base64 32)" | docker secret create ussdgw_db_password -
 printf '%s' "$(openssl rand -base64 32)" | docker secret create ussdgw_pg_super_password -
-printf '%s' "<your-admin-key>"           | docker secret create ussdgw_admin_key -
+# MIRROR of ussd.admin.api-key — never an independent value (see below)
+sed -n 's/^ussd\.admin\.api-key=//p' /srv/ussdgw/configs/application.properties | head -1 \
+  | tr -d '\r\n' | docker secret create ussdgw_admin_key -
 ```
 
 | Secret | Consumer | Role |
 |--------|----------|------|
 | `ussdgw_db_password` | gateway JDBC + `initdb/01-ussdgw.sh` | application role **`ussdgw`** |
 | `ussdgw_pg_super_password` | `POSTGRES_PASSWORD_FILE` | postgres **superuser** `ussdgw_admin` |
-| `ussdgw_admin_key` | admin UI / API | `X-USSD-Admin-Key` |
+| `ussdgw_admin_key` | healthcheck + `prove.sh` only | **mirror** of `ussd.admin.api-key` |
+
+The admin key the gateway **enforces** is `ussd.admin.api-key` in the operator's
+`application.properties` — that is the `X-USSD-Admin-Key` to use. `ussdgw_admin_key`
+is only a mirror of it for the healthcheck and `prove.sh`. `full-build.sh` creates the
+secret from the property (never a random value) and warns if an existing secret has
+drifted; the entrypoint logs the same check at boot. An earlier version generated a random
+secret and printed it as "the admin key" — a credential that 401'd on every call.
 
 Keep the two database credentials **separate**. The gateway only ever needs the `ussdgw`
 role; sharing one secret would make a leaked JDBC password equal to DDL and
@@ -491,3 +500,50 @@ docker stack rm ussdgw
 * **5432 is loopback-only** by design. Opening it to the network, as the original request
   suggested, would expose the USSD database — if remote access is genuinely needed, add the
   management range in both `postgresql.conf` and `pg_hba.conf`.
+---
+
+## Operating GMLC (primary) + USSDGW (standby) on one host — postgres stays untouched
+
+GMLC and USSDGW both bind `:8088` and SCTP `2011/2019`, so exactly one runs. The `ussdgw`
+stack owns the **shared** `ussdgw_postgres` + `ussdgw_nginx`; the `gmlc` stack owns only
+`gmlc_gmlc`. Every command below leaves postgres alone (data: `/srv/ussdgw/pgdata`).
+
+```bash
+# status: who is primary, :8088, SCTP ports, postgres task id
+./docker/switch-primary.sh status
+docker service ls --filter label=com.docker.stack.namespace
+
+# stop / start / restart GMLC (primary)
+docker service scale gmlc_gmlc=0                 # stop
+docker service scale gmlc_gmlc=1                 # start
+docker service update --force gmlc_gmlc          # restart (new task, same image)
+
+# stop / start / restart USSDGW — only while GMLC is at 0 (never both)
+docker service scale ussdgw_ussdgw=0
+docker service scale ussdgw_ussdgw=1
+docker service update --force ussdgw_ussdgw
+
+# switch roles (stop-first, waits for :8088, auto-rollback, verifies postgres untouched)
+./docker/switch-primary.sh ussdgw                # USSDGW primary, GMLC standby
+./docker/switch-primary.sh gmlc                  # GMLC primary,  USSDGW standby
+
+# nginx only (postgres untouched)
+docker service update --force ussdgw_nginx
+
+# postgres: READ-ONLY checks
+docker service ps ussdgw_postgres --no-trunc | head -3
+docker exec $(docker ps -q -f label=com.docker.swarm.service.name=ussdgw_postgres) pg_isready -U ussdgw -d ussdgw
+
+# logs
+docker service logs --tail 100 gmlc_gmlc
+tail -f /srv/ussdgw/logs/ussdgw.log
+```
+
+**Never** while GMLC is primary:
+- `docker stack rm ussdgw` — removes the **shared postgres and nginx** with it (GMLC loses its DB
+  and front door). Data on `/srv/ussdgw/pgdata` survives, the service does not.
+- a bare `docker stack deploy … ussdgw` — resets `ussdgw_ussdgw` to `USSDGW_REPLICAS` (default 1).
+  Use `./docker/full-build.sh` (forces standby while `gmlc_gmlc` is up) or export
+  `USSDGW_REPLICAS=0` first. (The entrypoint also refuses to start while `:8088` is held.)
+- `docker volume rm`, `docker secret rm ussdgw_db_password|ussdgw_pg_super_password`,
+  `docker service scale ussdgw_postgres=…`.

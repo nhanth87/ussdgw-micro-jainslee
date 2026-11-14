@@ -208,3 +208,26 @@ endpoints / Point Code.
 
 `docker stack rm ussdgw` and the builder's `--rm`. RAM is shared across all worktrees on this
 machine; never leave a stack or a builder container running "for later".
+---
+
+## Review fixes 2026-10-07 — do not undo
+
+- **Fix generic Docker bugs on `main`, then merge to digicom.** `jdk.compiler` and the
+  `full-build.sh` `set -u` defaults were fixed only on `digicom-et/main`, so a `main` build
+  crashed at boot. Only Digicom *data* (carrier JSON/props, private clone URLs) is digicom-only.
+- **`build-images.sh` asserts `jdk.compiler` as well as `jdk.sctp`**; `prove.sh` checks both in
+  the running JRE and greps the container log for `NoClassDefFoundError|ClassNotFoundException`.
+- **The builder image is always rebuilt** (`run-build.sh`, `full-build.sh --fetch-sources`).
+  `build-all.sh` and `sources.lock` are baked into it; "reuse if the tag exists" ran stale
+  scripts against stale pins. Layer cache makes the rebuild cheap.
+- **Admin key has one source of truth: `ussd.admin.api-key`.** The `ussdgw_admin_key` secret
+  is a *mirror* for the healthcheck/prove only; `full-build.sh` creates it from the property
+  (never random) and warns on drift, and the entrypoint logs the same comparison at boot.
+- **PostgreSQL tuning is re-applied on every start** via `ussdgw-pg-entrypoint.sh`, and
+  `02-operator-tuning.sh` *replaces* its marked block. initdb hooks run only on an empty data
+  dir, so an edited `postgresql.conf` never reached an existing cluster before.
+- **`restart_policy.window: 120s`** on every service: without it every restart over the life
+  of the service counts toward `max_attempts: 5`.
+- **nginx:** `/metrics` has the same allow-list on :443 as on :80; ACME uses `^~`; :80 → :443
+  is a **308** (a 301 turns an AS `POST /ussd` into a body-less GET).
+- **`Ss7Watchdog` is off by default** (`enabled=false`, `down-seconds=600` when enabled).

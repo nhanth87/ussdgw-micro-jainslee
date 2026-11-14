@@ -136,6 +136,10 @@ services:
         condition: on-failure
         delay: 10s
         max_attempts: 5
+        # window: a restart that survives this long counts as SUCCESSFUL and does not use
+        # up max_attempts. Without it every restart over the service's whole life counts,
+        # so five unrelated crashes spread over months retire the task for good.
+        window: 120s
     logging:
       driver: json-file
       options:
@@ -222,9 +226,13 @@ services:
     # deploy (the schema rejects it there, which is a useful failure).
     stop_grace_period: 60s
     deploy:
-      # Exactly one instance: two would fight over the same SCTP endpoints and the
+      # At most one instance: two would fight over the same SCTP endpoints and the
       # same Point Code, which on a live network means duplicate dialogs.
-      replicas: 1
+      # USSDGW_REPLICAS=0 = STANDBY: this stack then only provides the shared postgres +
+      # nginx, and the GMLC stack is the gateway on :8088 / SCTP 2011,2019 (the two can
+      # never run together). docker/full-build.sh sets 0 automatically while gmlc_gmlc is
+      # up; docker/switch-primary.sh moves the role between them.
+      replicas: ${USSDGW_REPLICAS:-1}
       update_config:
         # stop-first, NOT start-first. Rolling two instances would put two gateways
         # on the same SCTP endpoints mid-deploy.
@@ -250,6 +258,10 @@ services:
         condition: on-failure
         delay: 10s
         max_attempts: 5
+        # window: a restart that survives this long counts as SUCCESSFUL and does not use
+        # up max_attempts. Without it every restart over the service's whole life counts,
+        # so five unrelated crashes spread over months retire the task for good.
+        window: 120s
       
     ulimits:
       nofile:
@@ -309,6 +321,10 @@ services:
         condition: on-failure
         delay: 5s
         max_attempts: 5
+        # window: a restart that survives this long counts as SUCCESSFUL and does not use
+        # up max_attempts. Without it every restart over the service's whole life counts,
+        # so five unrelated crashes spread over months retire the task for good.
+        window: 120s
       update_config:
         # stop-first, NOT start-first — and the reason is the `ports:` block above, not
         # downtime preference. Swarm reserves host-mode ports for placement, so with
