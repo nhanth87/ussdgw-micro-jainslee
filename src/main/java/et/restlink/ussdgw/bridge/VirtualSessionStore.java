@@ -109,7 +109,14 @@ public class VirtualSessionStore {
         ensureTable();
     }
 
-    public synchronized void ensureTable() {
+    public void ensureTable() {
+        // Volatile fast path: get/put/remove/find/claim all call this (20+ times per
+        // session), so the steady state must not enter a process-wide monitor.
+        if (tableReady) return;
+        provisionTable();
+    }
+
+    private synchronized void provisionTable() {
         if (tableReady) return;
         ProfileFacility f = facility();
         if (f == null) {

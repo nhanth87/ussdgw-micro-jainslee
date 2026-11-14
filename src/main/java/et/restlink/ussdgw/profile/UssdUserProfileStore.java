@@ -73,7 +73,15 @@ public class UssdUserProfileStore {
         ensureTable();
     }
 
-    public synchronized void ensureTable() {
+    public void ensureTable() {
+        // Volatile fast path: called on every store op; only first-time provisioning locks.
+        if (tableReady) {
+            return;
+        }
+        provisionTable();
+    }
+
+    private synchronized void provisionTable() {
         if (tableReady) {
             return;
         }

@@ -380,9 +380,11 @@ public class AdaptiveTimeout {
                 return dropped;
             }
         }
-        // Still over bound — drop an arbitrary entry (temporary profile; not durable SoT).
+        // Still over bound — drop arbitrary entries until under it (temporary profile; not
+        // durable SoT). Dropping just one per 30 s tick let the map grow by every unique
+        // MSISDN seen in the 30 min stale window — millions of entries at 10k TPS.
         var it = perMsisdn.keySet().iterator();
-        if (it.hasNext()) {
+        while (perMsisdn.size() >= MAX_MSISDN_ENTRIES && it.hasNext()) {
             it.next();
             it.remove();
             dropped++;

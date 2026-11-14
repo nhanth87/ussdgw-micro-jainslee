@@ -182,4 +182,18 @@ class AdaptiveTimeoutTest {
         // User profile gone → fall back to network EWMA.
         assertThat(at.suggestGateMs(0, "251911230398", 25_000)).isEqualTo(12_600L);
     }
+
+    @Test
+    void trimMsisdnEnforcesTheBoundOnFreshEntries() {
+        // 10k TPS of unique MSISDNs: every entry is seeded and fresh, so nothing is stale.
+        AdaptiveTimeout at = new AdaptiveTimeout();
+        int seen = AdaptiveTimeout.MAX_MSISDN_ENTRIES * 3;
+        for (int i = 0; i < seen; i++) {
+            at.recordLatency(0, "2519" + (10_000_000 + i), 1_500, 25_000);
+        }
+        assertThat(at.msisdnProfileSize()).isEqualTo(seen);
+        int dropped = at.trimMsisdn();
+        assertThat(at.msisdnProfileSize()).isLessThan(AdaptiveTimeout.MAX_MSISDN_ENTRIES);
+        assertThat(dropped).isEqualTo(seen - at.msisdnProfileSize());
+    }
 }
