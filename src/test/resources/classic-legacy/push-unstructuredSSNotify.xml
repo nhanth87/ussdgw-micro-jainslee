@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<dialog mapMessagesSize="1">
+  <unstructuredSSNotify_Request dataCodingScheme="15" string="Your new balance is 34.38 AFN and expires on 30.07.2012. Cost of last event was 0.50 AFN.">
+    <msisdn nai="international_number" npi="ISDN" number="11111111111111"/>
+  </unstructuredSSNotify_Request>
+</dialog>

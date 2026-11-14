@@ -1,0 +1,6 @@
+<?xml version="1.0"?>
+<dialog appCntx="networkUnstructuredSsContext">
+  <processUnstructuredSSRequest_Request dataCodingScheme="15" string="*100#">
+    <msisdn nai="international_number" npi="ISDN" number="1234567890"/>
+  </processUnstructuredSSRequest_Request>
+</dialog>

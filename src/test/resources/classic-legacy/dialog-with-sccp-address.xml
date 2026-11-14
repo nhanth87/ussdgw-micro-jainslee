@@ -1,0 +1,13 @@
+<?xml version="1.0"?>
+<dialog appCntx="networkUnstructuredSsContext">
+  <localAddress>
+    <ai>2</ai>
+    <pc>146</pc>
+    <ssn>8</ssn>
+    <gt class="GlobalTitle0001">
+      <digits>79023700299</digits>
+      <nai>international_number</nai>
+    </gt>
+  </localAddress>
+  <processUnstructuredSSRequest_Request dataCodingScheme="15" string="*234#"/>
+</dialog>
