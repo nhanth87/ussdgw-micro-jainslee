@@ -97,6 +97,57 @@ if [[ -n "$(git status --porcelain 2>/dev/null || true)" ]]; then
 fi
 TAG="${TAG:-${GIT_SHA}${DIRTY}}"
 
+# --- already built? reuse instead of rebuilding ---------------------------------------
+# A clean tag names exactly one commit, and sources.lock (committed) names exactly one source
+# chain, so images built from HEAD are what a rebuild would produce. The same holds for images of
+# an EARLIER commit when everything changed since then stays outside the images (this script,
+# prove.sh, stack files, docs). Reusing them makes the run after a cutover (stop the host
+# services, run this again) a deploy, not a 30-minute build with the gateway off the air.
+# Any change to code, poms, sources.lock, Dockerfiles or packaged files → full build with tests.
+# A -dirty tree never reuses: two different dirty trees share the same tag.
+outside_images() {   # every changed path is one that no image is built from
+  local f
+  while read -r f; do
+    [[ -z "$f" ]] && continue
+    case "$f" in
+      docker/full-build.sh|docker/prove.sh|docker/host-prep.sh|docker/stack.yml|docker/stack.*.yml) ;;
+      docker/.env.example|docker/README.md|docker/*.md|docs/*|*.md) ;;
+      build/push-dual.sh) ;;
+      *) return 1 ;;
+    esac
+  done
+  return 0
+}
+images_built_from() {   # prints the full ussdgw SHA baked into ussdgw:<tag>, if all 4 images exist
+  local t="$1" img
+  for img in ussdgw ussdgw-nginx ussdgw-postgres ussdgw-clickhouse; do
+    docker image inspect "$img:$t" >/dev/null 2>&1 || return 0
+  done
+  docker run --rm --entrypoint cat "ussdgw:$t" /opt/ussdgw/BUILD-INFO.json 2>/dev/null \
+    | grep -oE '"ussdgw": *"[0-9a-f]{40}"' | grep -oE '[0-9a-f]{40}' | head -1 || true
+}
+if [[ -z "$DIRTY" ]]; then
+  HEAD_FULL="$(git rev-parse HEAD)"
+  REUSE_TAG=""; best=999999
+  for t in $(docker images ussdgw --format '{{.Tag}}' 2>/dev/null | grep -E '^[0-9a-f]{7,40}$' | sort -u); do
+    full="$(git rev-parse --verify -q "${t}^{commit}" 2>/dev/null || true)"
+    [[ -n "$full" ]] && git merge-base --is-ancestor "$full" HEAD 2>/dev/null || continue
+    [[ "$(images_built_from "$t")" == "$full" ]] || continue          # tag really names its build
+    git diff --name-only "$full" HEAD | outside_images || continue      # nothing image-relevant since
+    n="$(git rev-list --count "$full..HEAD")"
+    (( n < best )) && { best="$n"; REUSE_TAG="$t"; }
+  done
+  if [[ -n "$REUSE_TAG" ]]; then
+    MODE_BUILD=0
+    if [[ "$REUSE_TAG" == "$TAG" || "$(git rev-parse "$REUSE_TAG")" == "$HEAD_FULL" ]]; then
+      echo "full-build: images :$REUSE_TAG were already built and proven from this commit — reusing them" >&2
+    else
+      echo "full-build: images :$REUSE_TAG reused — only deploy scripts/docs changed since (no app/image input)" >&2
+    fi
+    TAG="$REUSE_TAG"
+  fi
+fi
+
 # --- load .env (site-specific), created from the example on first run -------------
 ENV_FILE="$HERE/.env"
 if [[ ! -f "$ENV_FILE" ]]; then
