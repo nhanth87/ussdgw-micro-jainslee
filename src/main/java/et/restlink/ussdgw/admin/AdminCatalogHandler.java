@@ -115,12 +115,16 @@ public class AdminCatalogHandler {
         m.put("{{ROWS}}", routingRowsHtml(who));
         String editCode = query == null ? "" : nullToEmpty(query.get("edit")).trim();
         String editApp = query == null ? "" : nullToEmpty(query.get("app")).trim();
+        String editNet = query == null ? "" : nullToEmpty(query.get("net")).trim();
         Optional<ShortCodeRule> seed = Optional.empty();
         if (!editCode.isEmpty()) {
-            seed = routing.byKey(editCode, editApp.isEmpty() ? null : editApp);
+            seed = editNet.isEmpty()
+                    ? routing.byKey(editCode, editApp.isEmpty() ? null : editApp)
+                    : routing.byKey(editCode, parseInt(editNet, 0), editApp.isEmpty() ? null : editApp);
             if (seed.isEmpty() && who != null && who.isTenantScoped()) {
                 seed = routing.listForTenant(who.tenantId()).stream()
                         .filter(r -> editCode.equals(r.shortCode()))
+                        .filter(r -> editNet.isEmpty() || Integer.toString(r.networkId()).equals(editNet))
                         .filter(r -> editApp.isEmpty()
                                 || editApp.equals(nullToEmpty(r.appUsername())))
                         .findFirst();
@@ -294,14 +298,21 @@ public class AdminCatalogHandler {
             if ("delete".equalsIgnoreCase(action)) {
                 String sc = f.getOrDefault("shortCode", "");
                 String appUser = f.getOrDefault("appUsername", "");
+                String netRaw = f.getOrDefault("networkId", "").trim();
                 if (who != null && who.isTenantScoped()) {
                     boolean owned = routing.listForTenant(who.tenantId()).stream()
-                            .anyMatch(r -> sc.equals(r.shortCode()));
+                            .anyMatch(r -> sc.equals(r.shortCode())
+                                    && (netRaw.isEmpty() || Integer.toString(r.networkId()).equals(netRaw))
+                                    && appUser.trim().equals(nullToEmpty(r.appUsername())));
                     if (!owned) {
                         return routingRowsErr(who, "forbidden");
                     }
                 }
-                routing.delete(sc, appUser.isBlank() ? null : appUser);
+                if (netRaw.isEmpty()) {
+                    routing.delete(sc, appUser.isBlank() ? null : appUser);
+                } else {
+                    routing.delete(sc, parseInt(netRaw, 0), appUser.isBlank() ? null : appUser);
+                }
                 return routingRowsOk(who, "deleted - live");
             }
             String code = f.getOrDefault("shortCode", "").trim();
@@ -370,7 +381,12 @@ public class AdminCatalogHandler {
                 return routingRowsErr(who,
                         "redirectUssd required when type=re-route (or Re-route=true)");
             }
-            Optional<ShortCodeRule> existing = routing.byKey(code,
+            // The tenant's link network is part of the rule key: company A on network 1 and
+            // company B on network 2 can both own the same short code.
+            if (!tenantId.isEmpty() && networkId == 0) {
+                networkId = tenants.byId(tenantId).map(t -> t.networkId).orElse(0);
+            }
+            Optional<ShortCodeRule> existing = routing.byKey(code, networkId,
                     appUsername.isEmpty() ? null : appUsername);
             boolean hopEditable = who == null || who.isAdminOrOps();
             boolean clearHop = "true".equalsIgnoreCase(f.getOrDefault("hopDestClear", "false"));
@@ -446,9 +462,6 @@ public class AdminCatalogHandler {
                 if (appErr.isPresent()) {
                     return routingRowsErr(who, appErr.get());
                 }
-            }
-            if (!tenantId.isEmpty() && networkId == 0) {
-                networkId = tenants.byId(tenantId).map(t -> t.networkId).orElse(0);
             }
             String wireNote = "";
             if (f.containsKey("httpAsWireFormat")) {
@@ -610,10 +623,12 @@ public class AdminCatalogHandler {
                     .append("<input type=\"hidden\" name=\"action\" value=\"delete\"/>")
                     .append("<input type=\"hidden\" name=\"shortCode\" value=\"").append(esc(r.shortCode())).append("\"/>")
                     .append("<input type=\"hidden\" name=\"appUsername\" value=\"").append(esc(r.appUsername())).append("\"/>")
+                    .append("<input type=\"hidden\" name=\"networkId\" value=\"").append(r.networkId()).append("\"/>")
                     .append("<button type=\"submit\" class=\"").append(RULE_DEL_BTN).append("\">Del</button></form>")
                     .append("<a class=\"").append(RULE_EDIT_BTN).append("\" href=\"/admin/routing?edit=")
                     .append(esc(java.net.URLEncoder.encode(nullToEmpty(r.shortCode()),
-                            java.nio.charset.StandardCharsets.UTF_8)));
+                            java.nio.charset.StandardCharsets.UTF_8)))
+                    .append("&amp;net=").append(r.networkId());
             if (r.appUsername() != null && !r.appUsername().isBlank()) {
                 sb.append("&amp;app=").append(esc(java.net.URLEncoder.encode(r.appUsername(),
                         java.nio.charset.StandardCharsets.UTF_8)));

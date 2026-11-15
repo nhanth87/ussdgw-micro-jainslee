@@ -171,6 +171,27 @@ class AdminCatalogRoutingTest {
     }
 
     @Test
+    void twoCompaniesOwnTheSameCodeOnTheirOwnLinks() {
+        AdminAuthService.Principal admin = new AdminAuthService.Principal("ADMIN", null);
+        catalog.routingPost("action=save&shortCode=%2A123%23&ruleType=HTTP"
+                + "&asUrl=http%3A%2F%2Fasp1%2Fussd&enabled=true&networkId=1", admin);
+        catalog.routingPost("action=save&shortCode=%2A123%23&ruleType=HTTP"
+                + "&asUrl=http%3A%2F%2Fasp2%2Fussd&enabled=true&networkId=2", admin);
+
+        assertThat(routing.find("*123#", null, 1, null)).get()
+                .extracting(ShortCodeRule::asUrl).isEqualTo("http://asp1/ussd");
+        assertThat(routing.find("*123#", null, 2, null)).get()
+                .extracting(ShortCodeRule::asUrl).isEqualTo("http://asp2/ussd");
+        String rows = catalog.routingRowsHtml(admin);
+        assertThat(rows).contains("edit=*123%23&amp;net=1").contains("edit=*123%23&amp;net=2");
+
+        // Deleting company B's rule leaves company A's alone.
+        catalog.routingPost("action=delete&shortCode=*123%23&appUsername=&networkId=2", admin);
+        assertThat(routing.find("*123#", null, 2, null)).isEmpty();
+        assertThat(routing.find("*123#", null, 1, null)).isPresent();
+    }
+
+    @Test
     void saveBlankHopOnUpdatePreservesExistingHopDest() {
         catalog.routingPost(
                 "action=save&shortCode=%2A804%23&ruleType=RE_ROUTE&asUrl=http%3A%2F%2Fas%2Fold"
@@ -589,8 +610,8 @@ class AdminCatalogRoutingTest {
     }
 
 
+    /** The real routing table (lookup, keys, tiers) with the DB writes switched off. */
     static final class MemoryRouting extends ShortCodeRoutingService {
-        final ConcurrentHashMap<String, ShortCodeRule> map = new ConcurrentHashMap<>();
         final AtomicInteger reloadCalls = new AtomicInteger();
 
         @Override
@@ -599,67 +620,11 @@ class AdminCatalogRoutingTest {
         }
 
         @Override
-        public Optional<ShortCodeRule> byKey(String shortCode, String appUsername) {
-            return Optional.ofNullable(map.get(memKey(shortCode, appUsername)));
-        }
+        protected void persistRow(ShortCodeRule rule) { }
 
         @Override
-        public void putAndPersist(ShortCodeRule rule) {
-            map.put(memKey(rule.shortCode(), rule.appUsername()), rule);
-        }
-
-        @Override
-        public boolean delete(String shortCode) {
-            return delete(shortCode, null);
-        }
-
-        @Override
-        public boolean delete(String shortCode, String appUsername) {
-            return map.remove(memKey(shortCode, appUsername)) != null;
-        }
-
-        @Override
-        public Optional<ShortCodeRule> find(String shortCode) {
-            String sc = shortCode == null ? "" : shortCode.trim();
-            ShortCodeRule exact = null;
-            for (ShortCodeRule r : map.values()) {
-                if (!r.enabled() || r.mark()) continue;
-                if (sc.equalsIgnoreCase(r.shortCode() == null ? "" : r.shortCode())) {
-                    if (r.appUsername() == null || r.appUsername().isBlank()) {
-                        return Optional.of(r);
-                    }
-                    if (exact == null) exact = r;
-                }
-            }
-            if (exact != null) return Optional.of(exact);
-            ShortCodeRule best = null;
-            int bestLen = -1;
-            for (ShortCodeRule r : map.values()) {
-                if (!r.enabled() || !r.mark()) continue;
-                String prefix = r.shortCode() == null ? "" : r.shortCode();
-                if (!prefix.isEmpty() && sc.startsWith(prefix) && prefix.length() > bestLen) {
-                    best = r;
-                    bestLen = prefix.length();
-                }
-            }
-            return Optional.ofNullable(best);
-        }
-
-        @Override
-        public Collection<ShortCodeRule> list() {
-            return map.values();
-        }
-
-        @Override
-        public Collection<ShortCodeRule> listForTenant(String tenantId) {
-            if (tenantId == null || tenantId.isBlank()) return list();
-            return map.values().stream().filter(r -> tenantId.equals(r.tenantId())).toList();
-        }
-
-        private static String memKey(String shortCode, String appUsername) {
-            String sc = shortCode == null ? "" : shortCode.trim().toLowerCase();
-            String app = appUsername == null || appUsername.isBlank() ? null : appUsername.trim();
-            return app == null ? sc : sc + "\t" + app;
+        protected boolean deleteRow(String shortCode, int networkId, String appUsername) {
+            return false;
         }
     }
 

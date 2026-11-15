@@ -175,6 +175,45 @@ class HttpServerSbbNiAuthTest {
     }
 
     @Test
+    void anotherCompanyCannotContinueTheSessionEvenWithItsJsessionId() {
+        // Company A pushes and gets its JSESSIONID back.
+        auth.next = new CallbackAuthService.NiAuth(CallbackAuthService.Result.OK, "compA", 1);
+        post("sess-a1", "text/xml", XML_NI);
+        assertThat(park.completeParked("ni-corr-1", "hello", AsAction.CONTINUE)).isTrue();
+        String setCookie = ((HttpServerCommand.HttpResponseExCommand) last()).headers().get("Set-Cookie");
+        String jsession = setCookie.substring(setCookie.indexOf('=') + 1).split(";", 2)[0];
+        String reply = """
+                <dialog><unstructuredSSRequest_Request><ussdString>1. Pay</ussdString>
+                </unstructuredSSRequest_Request></dialog>
+                """;
+
+        // Company B, with its own valid key, replays A's JSESSIONID: looks like an unknown session.
+        auth.next = new CallbackAuthService.NiAuth(CallbackAuthService.Result.OK, "compB", 2);
+        int before = http.commands.size();
+        postWithCookie("sess-b1", jsession, reply);
+        var r = (HttpServerCommand.HttpResponseCommand) http.commands.get(before);
+        assertThat(r.statusCode()).isEqualTo(404);
+        assertThat(store.get("ni-corr-1")).isPresent();   // A's session untouched
+
+        // Company A itself continues normally: the turn reaches the bridge.
+        java.util.List<String> continued = new CopyOnWriteArrayList<>();
+        set(services, "bridge", new et.restlink.ussdgw.bridge.VirtualSessionBridge() {
+            @Override
+            public boolean onNiAsContinue(String correlationId, String text) {
+                continued.add(correlationId);
+                return true;
+            }
+        });
+        auth.next = new CallbackAuthService.NiAuth(CallbackAuthService.Result.OK, "compA", 1);
+        int beforeA = http.commands.size();
+        postWithCookie("sess-a2", jsession, reply);
+        assertThat(http.commands.subList(beforeA, http.commands.size()))
+                .noneMatch(c -> c instanceof HttpServerCommand.HttpResponseCommand hr
+                        && hr.statusCode() == 404);
+        assertThat(continued).containsExactly("ni-corr-1");
+    }
+
+    @Test
     void authRequiredDefaultsToTrue() {
         assertThat(new UssdConfigService().httpNiAuthRequired()).isTrue();
     }
@@ -191,6 +230,12 @@ class HttpServerSbbNiAuthTest {
     private void post(String sessionId, String contentType, String body) {
         sbb.onEvent(new HttpWebRequestEvent(sessionId, "POST", "/ussd",
                 Map.of("Content-Type", contentType), body), container.createActivityContext("t"));
+    }
+
+    private void postWithCookie(String sessionId, String jsession, String body) {
+        sbb.onEvent(new HttpWebRequestEvent(sessionId, "POST", "/ussd",
+                Map.of("Content-Type", "text/xml", "Cookie", "JSESSIONID=" + jsession), body),
+                container.createActivityContext("t-" + sessionId));
     }
 
     private OutboundCommand last() {

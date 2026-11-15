@@ -22,7 +22,8 @@ class GatedAsNotifyServiceTest {
     void pushToAsRoutesXmlEventToHttpAsUrl() {
         ShortCodeRoutingService routing = new ShortCodeRoutingService() {
             @Override
-            public Optional<ShortCodeRule> find(String shortCode) {
+            public Optional<ShortCodeRule> find(String shortCode, String preferredAppUsername,
+                                                int networkId, String tenantId) {
                 return Optional.of(new ShortCodeRule(
                         "*123#", RuleType.HTTP, "http://as.example/ussd/pull", true));
             }
@@ -64,7 +65,8 @@ class GatedAsNotifyServiceTest {
     void pushSkippedWhenNoHttpRule() {
         ShortCodeRoutingService routing = new ShortCodeRoutingService() {
             @Override
-            public Optional<ShortCodeRule> find(String shortCode) {
+            public Optional<ShortCodeRule> find(String shortCode, String preferredAppUsername,
+                                                int networkId, String tenantId) {
                 return Optional.empty();
             }
         };

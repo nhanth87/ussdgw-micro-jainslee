@@ -105,7 +105,8 @@ public class UssdSchemaInitializer {
             "V10__short_code_reroute.sql",
             "V11__short_code_hop_dest.sql",
             "V12__cdr_hop_outcome.sql",
-            "V13__cdr_session_ledger.sql"
+            "V13__cdr_session_ledger.sql",
+            "V14__short_code_per_network.sql"
     );
 
     @Inject

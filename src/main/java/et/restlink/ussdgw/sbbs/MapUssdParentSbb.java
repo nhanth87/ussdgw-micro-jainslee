@@ -446,7 +446,15 @@ public final class MapUssdParentSbb implements Sbb, SleeEventHandler {
         String ussd = MapDialogHelper.ussdString(req);
         String shortCode = ShortCodeRoutingService.extractShortCode(ussd);
         String msisdn = MapDialogHelper.msisdnHint(req);
-        Optional<ShortCodeRule> rule = svc().routing().find(shortCode);
+        // The SS7 link the dialog came in on tells us the tenant: each company has its own
+        // link (networkId), and the rule for that network wins over the shared (0) rule.
+        int linkNetworkId = 0;
+        try {
+            if (req.getMAPDialog() != null) {
+                linkNetworkId = req.getMAPDialog().getNetworkId();
+            }
+        } catch (Throwable ignored) { }
+        Optional<ShortCodeRule> rule = svc().routing().find(shortCode, null, linkNetworkId, null);
         long invokeId = req.getInvokeId();
         if (rule.isEmpty()) {
             MapDialogHelper.replyAndEnd(ss7, dialogId, invokeId, "Not a valid short code.");
@@ -466,12 +474,7 @@ public final class MapUssdParentSbb implements Sbb, SleeEventHandler {
         // Prefer SCCP/MAP dialog networkId (Digicom lab sim plane=1, live BP=0).
         // Short-code / tenant network_id stays the live-routing key and must not
         // overwrite a non-zero dialog plane — else lab MO replies GTT on net 0.
-        int networkId = 0;
-        try {
-            if (req.getMAPDialog() != null) {
-                networkId = req.getMAPDialog().getNetworkId();
-            }
-        } catch (Throwable ignored) { }
+        int networkId = linkNetworkId;
         if (networkId == 0) {
             networkId = r.networkId();
             if (admit.tenant() != null && networkId == 0) {
@@ -744,7 +747,9 @@ public final class MapUssdParentSbb implements Sbb, SleeEventHandler {
                     + " digit=" + CdrUssdSnippet.of(ussd, 16)
                     : "http-ni-no-park gen=" + s.generation();
         }
-        Optional<ShortCodeRule> rule = svc().routing().find(s.shortCode());
+        // Same tenant as turn 1: the session's network and tenant pick the same AS again.
+        Optional<ShortCodeRule> rule = svc().routing().find(
+                s.shortCode(), null, s.networkId(), s.tenantId());
         if (rule.isEmpty()) {
             svc().store().clearMsDigitClaim(s.correlationId());
             MapDialogHelper.replyAndEnd(ss7, dialogId, incomingInvokeId, "Session ended.");

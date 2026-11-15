@@ -158,7 +158,7 @@ public final class HttpServerSbb implements Sbb, SleeEventHandler {
 
         String jsession = resolveJsession(req);
         if (jsession != null && !jsession.isBlank()) {
-            return handleNiContinue(req, ingress, format, jsession.trim());
+            return handleNiContinue(req, ingress, format, jsession.trim(), auth);
         }
         return handleNiFirst(req, ingress, format, auth);
     }
@@ -176,6 +176,19 @@ public final class HttpServerSbb implements Sbb, SleeEventHandler {
             return auth.networkId();
         }
         return svc().config().httpNiDefaultNetworkId();
+    }
+
+    /**
+     * True when the caller may act on this session: the admin key (no tenant), a session with no
+     * tenant, or the session's own tenant.
+     */
+    private boolean sameTenant(CallbackAuthService.NiAuth auth, String correlationId) {
+        String caller = auth == null ? null : auth.tenantId();
+        if (caller == null || caller.isBlank()) {
+            return true;
+        }
+        String owner = svc().store().get(correlationId).map(VirtualSession::tenantId).orElse(null);
+        return owner == null || owner.isBlank() || owner.equals(caller);
     }
 
     private void replyNiError(HttpWebRequestEvent req, AsHttpWireFormat format,
@@ -259,7 +272,8 @@ public final class HttpServerSbb implements Sbb, SleeEventHandler {
     }
 
     private String handleNiContinue(HttpWebRequestEvent req, ClassicNiIngress ingress,
-                                    AsHttpWireFormat format, String jsession) {
+                                    AsHttpWireFormat format, String jsession,
+                                    CallbackAuthService.NiAuth auth) {
         ClassicNiHttpPark park = svc().niHttpPark();
         Optional<ClassicNiHttpPark.ParkRecord> opt = park.findByJsession(jsession);
         if (opt.isEmpty()) {
@@ -268,6 +282,12 @@ public final class HttpServerSbb implements Sbb, SleeEventHandler {
         }
         ClassicNiHttpPark.ParkRecord prior = opt.get();
         String corr = prior.correlationId();
+        if (!sameTenant(auth, corr)) {
+            // Company B's key must not drive company A's dialog, even with A's JSESSIONID.
+            // Answer exactly like an unknown session so the id cannot be probed.
+            replyJson(req.getSessionId(), 404, Map.of("error", "unknown JSESSIONID"));
+            return "ni-continue-404 tenant-mismatch";
+        }
         String text = ingress.text() == null ? "" : ingress.text();
         String body = req.getBody();
         boolean abort = looksLikeAbort(body);

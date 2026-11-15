@@ -70,6 +70,15 @@
           Use <strong>Edit</strong> on a Live rule to seed this form (incl. hop for
           <code class="font-mono text-signal">*804#</code>). Save updates the live map.
         </p>
+        <p class="mt-1 mb-4 text-sm text-slate-300">
+          <strong>Per tenant:</strong> the same short code can have one rule per
+          <strong>networkId</strong> (the SS7 link of each company). Example: company A on
+          network 1 → <code class="font-mono text-signal">*123#</code> → ASP1, company B on
+          network 2 → <code class="font-mono text-signal">*123#</code> → ASP2. A dial from a
+          link uses that link's rule, else the shared rule (networkId 0) — never another
+          company's. Every later turn of the session, and the AS answer, stay with the same
+          company.
+        </p>
         {{FORM_EDIT_BANNER}}
         <form method="post" action="/admin/routing" class="mb-4"
               hx-post="/admin/routing"
@@ -158,6 +167,11 @@
             <label class="block text-xs uppercase tracking-wider text-ink-mute">networkId</label>
             <input name="networkId" type="number" min="0" value="{{FORM_NETWORK_ID}}"
                    class="mt-1 w-full rounded-md border border-ink-line bg-ink-panel px-3 py-2 text-sm focus:border-signal focus:outline-none focus:ring-1 focus:ring-signal/40"/>
+            <p class="mt-1 text-xs text-ink-mute">
+              SS7 link (SCCP network) this rule answers. <strong>0</strong> = shared, used by any
+              link without its own rule. Left at 0 with a tenant selected, the tenant's network
+              is used. Short code + networkId + app user identify the rule.
+            </p>
           </div>
           <div>
             <label class="block text-xs uppercase tracking-wider text-ink-mute">Mark (prefix)</label>

@@ -44,7 +44,7 @@ public class LabMoService {
         if (sc.isEmpty()) {
             sc = ShortCodeRoutingService.extractShortCode(ussd);
         }
-        Optional<ShortCodeRule> ruleOpt = routing.find(sc);
+        Optional<ShortCodeRule> ruleOpt = routing.find(sc, null, networkId, blank(tenantId));
         if (ruleOpt.isEmpty()) {
             throw new IllegalArgumentException("no route for shortCode=" + sc);
         }

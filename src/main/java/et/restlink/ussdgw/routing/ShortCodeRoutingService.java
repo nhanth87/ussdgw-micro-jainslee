@@ -13,11 +13,40 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.function.Predicate;
 
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.eclipse.microprofile.config.inject.ConfigProperty;
 
+/**
+ * Short-code routing table: which AS answers a dialed USSD code.
+ *
+ * <h2>One code, many tenants</h2>
+ * Several companies (tenants) can own the same short code. Each one reaches the gateway over
+ * its own SS7 link, and the link carries a networkId (the SCCP network the dialog arrived on).
+ * A rule is identified by {@code (shortCode, networkId, appUsername)}, so company A can have
+ * {@code *123#} on network 1 pointing at its AS, and company B {@code *123#} on network 2
+ * pointing at another AS:
+ *
+ * <pre>
+ *   *123#  net=1  tenant=compA  → http://asp1.compA/ussd
+ *   *123#  net=2  tenant=compB  → http://asp2.compB/ussd
+ *   *123#  net=0                → http://default/ussd      (shared rule, any link)
+ * </pre>
+ *
+ * <h2>How a dial is resolved</h2>
+ * {@link #find(String, String, int, String)} looks in two tiers and stops at the first hit:
+ * <ol>
+ *   <li>rules of the dialog's own network ({@code rule.networkId == dialog networkId});</li>
+ *   <li>shared rules ({@code rule.networkId == 0}).</li>
+ * </ol>
+ * Another tenant's network is never used, so company B's subscriber can never reach company
+ * A's AS. A dialog on network 0 (single-link installs, Diameter/SIP planes) has no tenant of its
+ * own: it tries shared rules first, then any rule — the behaviour before tenants existed.
+ * Inside a tier the usual short-code rules apply: exact code beats prefix ({@code mark}),
+ * longest prefix wins, then the preferred app user, then the unbound rule.
+ */
 @ApplicationScoped
 public class ShortCodeRoutingService {
     private static final Logger LOG = LogManager.getLogger(ShortCodeRoutingService.class);
@@ -57,7 +86,7 @@ public class ShortCodeRoutingService {
             boolean reroute = type.impliesReroute()
                     || e.rerouteEnable
                     || (!e.bypass && e.map2mapGt != null && !e.map2mapGt.isBlank());
-            rules.put(mapKey(e.shortCode, e.appUsername),
+            rules.put(mapKey(e.shortCode, e.networkId, e.appUsername),
                     ShortCodeRule.ofReroute(e.shortCode, type, e.asUrl, e.enabled,
                             e.tenantId, e.networkId, e.mark, blankToNull(e.appUsername),
                             reroute, blankToNull(e.map2mapGt), blankToNull(e.hlrMode),
@@ -80,13 +109,18 @@ public class ShortCodeRoutingService {
     }
 
     public void put(ShortCodeRule rule) {
-        rules.put(mapKey(rule.shortCode(), rule.appUsername()), rule);
+        rules.put(keyOf(rule), rule);
     }
 
     @Transactional
     public void putAndPersist(ShortCodeRule rule) {
         put(rule);
-        ShortCodeEntity e = findEntity(rule.shortCode(), rule.appUsername());
+        persistRow(rule);
+    }
+
+    /** Write one rule to {@code ussd_short_code} (insert or update by its key). */
+    protected void persistRow(ShortCodeRule rule) {
+        ShortCodeEntity e = findEntity(rule.shortCode(), rule.networkId(), rule.appUsername());
         if (e == null) {
             e = new ShortCodeEntity();
             e.shortCode = rule.shortCode();
@@ -97,7 +131,7 @@ public class ShortCodeRoutingService {
         e.tenantId = blankToNull(rule.tenantId());
         e.networkId = rule.networkId();
         e.mark = rule.mark();
-        // DB stores unbound as '' (NOT NULL) for composite UNIQUE(short_code, app_username).
+        // DB stores unbound as '' (NOT NULL) for UNIQUE(short_code, network_id, app_username).
         e.appUsername = blankToEmpty(rule.appUsername());
         e.rerouteEnable = rule.rerouteEnable();
         e.bypass = rule.bypass(); // mirror !rerouteEnable for V9 readers
@@ -113,83 +147,112 @@ public class ShortCodeRoutingService {
         return delete(shortCode, null);
     }
 
+    /** Delete the rule for this code + app user, preferring the shared (network 0) one. */
     @Transactional
     public boolean delete(String shortCode, String appUsername) {
-        rules.remove(mapKey(shortCode, appUsername));
-        // Also drop any legacy map key without app user when deleting unbound rule.
-        if (appUsername == null || appUsername.isBlank()) {
-            rules.remove(normalize(shortCode));
-        }
+        int net = byKey(shortCode, appUsername).map(ShortCodeRule::networkId).orElse(0);
+        return delete(shortCode, net, appUsername);
+    }
+
+    @Transactional
+    public boolean delete(String shortCode, int networkId, String appUsername) {
+        boolean wasLive = rules.remove(mapKey(shortCode, networkId, appUsername)) != null;
         try {
-            ShortCodeEntity e = findEntity(shortCode, appUsername);
-            if (e != null) {
-                e.delete();
-                return true;
-            }
-            return false;
+            return deleteRow(shortCode, networkId, appUsername) || wasLive;
         } catch (RuntimeException ex) {
             LOG.warn("short-code DB delete skipped: {}", ex.getMessage());
-            return true;
+            return wasLive;
         }
     }
 
-    /** MO / unbound resolve — prefer rules with null appUsername. */
+    /** Remove one rule row; true when a row was there. */
+    protected boolean deleteRow(String shortCode, int networkId, String appUsername) {
+        ShortCodeEntity e = findEntity(shortCode, networkId, appUsername);
+        if (e == null) {
+            return false;
+        }
+        e.delete();
+        return true;
+    }
+
+    /** Lookup without a link (network 0): shared rules first, then any rule. */
     public Optional<ShortCodeRule> find(String shortCode) {
-        return find(shortCode, null);
+        return find(shortCode, null, 0, null);
+    }
+
+    public Optional<ShortCodeRule> find(String shortCode, String preferredAppUsername) {
+        return find(shortCode, preferredAppUsername, 0, null);
     }
 
     /**
-     * Resolve AS rule for a dialed USSD string.
-     * Exact (non-mark) rules win on equality; otherwise longest enabled mark prefix.
-     * When multiple candidates share the same match strength, prefer
-     * {@code preferredAppUsername}, else unbound ({@code appUsername == null}).
+     * Find the rule for a dial that arrived on {@code networkId}.
+     *
+     * @param shortCode            dialed code ({@code *123#})
+     * @param preferredAppUsername app user to prefer when several rules tie (may be null)
+     * @param networkId            SCCP network of the inbound link; 0 = no tenant link known
+     * @param tenantId             tenant already bound to the session (continue turns, NI);
+     *                             rules of another tenant are skipped. null = not known yet
      */
-    public Optional<ShortCodeRule> find(String shortCode, String preferredAppUsername) {
+    public Optional<ShortCodeRule> find(String shortCode, String preferredAppUsername,
+                                        int networkId, String tenantId) {
         String sc = normalize(shortCode);
         if (sc.isEmpty()) {
             return Optional.empty();
         }
         String prefer = blankToNull(preferredAppUsername);
+        String tenant = blankToNull(tenantId);
+        Predicate<ShortCodeRule> sameTenant =
+                r -> tenant == null || r.tenantId() == null || tenant.equals(r.tenantId());
 
+        if (networkId != 0) {
+            // Tenant link: its own rules, then shared ones. Never another tenant's network.
+            Optional<ShortCodeRule> own = findIn(sc, prefer,
+                    sameTenant.and(r -> r.networkId() == networkId));
+            if (own.isPresent()) {
+                return own;
+            }
+            return findIn(sc, prefer, sameTenant.and(r -> r.networkId() == 0));
+        }
+        // No link known: shared rules first, then any rule (pre-tenant behaviour).
+        Optional<ShortCodeRule> shared = findIn(sc, prefer, sameTenant.and(r -> r.networkId() == 0));
+        if (shared.isPresent()) {
+            return shared;
+        }
+        return findIn(sc, prefer, sameTenant);
+    }
+
+    /**
+     * Short-code match among the rules that pass {@code allowed}: an exact (non-mark) rule wins;
+     * otherwise the longest enabled mark prefix. Ties go to {@link #preferAmong}.
+     */
+    private Optional<ShortCodeRule> findIn(String sc, String prefer, Predicate<ShortCodeRule> allowed) {
         List<ShortCodeRule> exact = new ArrayList<>();
-        for (ShortCodeRule r : rules.values()) {
-            if (!r.enabled() || r.mark()) {
-                continue;
-            }
-            if (sc.equals(normalize(r.shortCode()))) {
-                exact.add(r);
-            }
-        }
-        Optional<ShortCodeRule> exactPick = preferAmong(exact, prefer);
-        if (exactPick.isPresent()) {
-            return exactPick;
-        }
-
         List<ShortCodeRule> marks = new ArrayList<>();
         int bestLen = -1;
         for (ShortCodeRule r : rules.values()) {
-            if (!r.enabled() || !r.mark()) {
+            if (!r.enabled() || !allowed.test(r)) {
                 continue;
             }
-            String prefix = normalize(r.shortCode());
-            if (prefix.isEmpty() || !sc.startsWith(prefix)) {
+            String code = normalize(r.shortCode());
+            if (!r.mark()) {
+                if (sc.equals(code)) {
+                    exact.add(r);
+                }
                 continue;
             }
-            if (prefix.length() > bestLen) {
-                bestLen = prefix.length();
+            if (code.isEmpty() || !sc.startsWith(code)) {
+                continue;
+            }
+            if (code.length() > bestLen) {
+                bestLen = code.length();
                 marks.clear();
                 marks.add(r);
-            } else if (prefix.length() == bestLen) {
+            } else if (code.length() == bestLen) {
                 marks.add(r);
             }
         }
-        Optional<ShortCodeRule> markPick = preferAmong(marks, prefer);
-        if (markPick.isPresent()) {
-            return markPick;
-        }
-
-        // Legacy: mark=false rule stored but treated as fallback exact.
-        return preferAmong(exact, prefer);
+        Optional<ShortCodeRule> exactPick = preferAmong(exact, prefer);
+        return exactPick.isPresent() ? exactPick : preferAmong(marks, prefer);
     }
 
     static Optional<ShortCodeRule> preferAmong(List<ShortCodeRule> candidates, String preferApp) {
@@ -220,8 +283,22 @@ public class ShortCodeRoutingService {
      * Exact map lookup by short-code + optional app user (admin edit / hop preserve).
      * Unlike {@link #find}, does not apply mark-prefix matching or enabled filter.
      */
+    public Optional<ShortCodeRule> byKey(String shortCode, int networkId, String appUsername) {
+        return Optional.ofNullable(rules.get(mapKey(shortCode, networkId, appUsername)));
+    }
+
+    /** Same as {@link #byKey(String, int, String)} on any network; the shared (0) rule first. */
     public Optional<ShortCodeRule> byKey(String shortCode, String appUsername) {
-        return Optional.ofNullable(rules.get(mapKey(shortCode, appUsername)));
+        Optional<ShortCodeRule> shared = byKey(shortCode, 0, appUsername);
+        if (shared.isPresent()) {
+            return shared;
+        }
+        String sc = normalize(shortCode);
+        String app = blankToNull(appUsername);
+        return rules.values().stream()
+                .filter(r -> sc.equals(normalize(r.shortCode())))
+                .filter(r -> java.util.Objects.equals(app, blankToNull(r.appUsername())))
+                .min(Comparator.comparingInt(ShortCodeRule::networkId));
     }
 
     public Collection<ShortCodeRule> list() {
@@ -265,7 +342,7 @@ public class ShortCodeRoutingService {
             return "";
         }
         HashSet<String> seen = new HashSet<>();
-        seen.add(mapKey(firstRule.shortCode(), firstRule.appUsername()));
+        seen.add(keyOf(firstRule));
         String current = hop;
         for (int i = 0; i < MAP2MAP_HOP_CHAIN_MAX; i++) {
             Optional<ShortCodeRule> next = find(extractShortCode(current));
@@ -273,7 +350,7 @@ public class ShortCodeRoutingService {
                 break;
             }
             ShortCodeRule r = next.get();
-            String key = mapKey(r.shortCode(), r.appUsername());
+            String key = keyOf(r);
             if (!seen.add(key)) {
                 break;
             }
@@ -309,16 +386,20 @@ public class ShortCodeRoutingService {
         return resolveMap2MapHopUssd(dialedUssd, seed);
     }
 
-    private ShortCodeEntity findEntity(String shortCode, String appUsername) {
+    private ShortCodeEntity findEntity(String shortCode, int networkId, String appUsername) {
         String sc = normalize(shortCode);
         String app = blankToEmpty(appUsername);
-        return ShortCodeEntity.find("shortCode = ?1 and appUsername = ?2", sc, app).firstResult();
+        return ShortCodeEntity.find("shortCode = ?1 and networkId = ?2 and appUsername = ?3",
+                sc, networkId, app).firstResult();
     }
 
-    private static String mapKey(String shortCode, String appUsername) {
-        String sc = normalize(shortCode);
-        String app = blankToNull(appUsername);
-        return app == null ? sc : sc + "\t" + app;
+    /** In-memory key = the DB unique key (short_code, network_id, app_username). */
+    private static String mapKey(String shortCode, int networkId, String appUsername) {
+        return normalize(shortCode) + "\t" + networkId + "\t" + blankToEmpty(appUsername);
+    }
+
+    private static String keyOf(ShortCodeRule r) {
+        return mapKey(r.shortCode(), r.networkId(), r.appUsername());
     }
 
     private static String normalize(String code) {

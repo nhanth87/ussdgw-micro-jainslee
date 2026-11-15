@@ -145,7 +145,11 @@ public class GatedAsNotifyService {
         if (sc == null || routing == null) {
             return Optional.empty();
         }
-        Optional<ShortCodeRule> rule = routing.find(sc);
+        // The late answer goes to the AS of the tenant that owns this session, not to whichever
+        // tenant happens to share the short code.
+        Optional<ShortCodeRule> rule = session == null
+                ? routing.find(sc)
+                : routing.find(sc, null, session.networkId(), session.tenantId());
         if (rule.isEmpty()) {
             return Optional.empty();
         }

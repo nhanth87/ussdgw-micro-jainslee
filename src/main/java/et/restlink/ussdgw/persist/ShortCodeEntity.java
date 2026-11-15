@@ -12,8 +12,8 @@ import jakarta.persistence.UniqueConstraint;
 @Entity
 @Table(name = "ussd_short_code",
         uniqueConstraints = @UniqueConstraint(
-                name = "uk_ussd_short_code_app",
-                columnNames = {"short_code", "app_username"}))
+                name = "uk_ussd_short_code_net_app",
+                columnNames = {"short_code", "network_id", "app_username"}))
 public class ShortCodeEntity extends PanacheEntityBase {
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)

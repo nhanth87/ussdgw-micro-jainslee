@@ -62,7 +62,8 @@ class LabMoServiceTest {
 
         ShortCodeRoutingService routing = new ShortCodeRoutingService() {
             @Override
-            public Optional<ShortCodeRule> find(String shortCode) {
+            public Optional<ShortCodeRule> find(String shortCode, String preferredAppUsername,
+                                                int networkId, String tenantId) {
                 if ("*123#".equals(shortCode)) {
                     return Optional.of(new ShortCodeRule(
                             "*123#", RuleType.HTTP, "http://as/lab", true, null, 0));
