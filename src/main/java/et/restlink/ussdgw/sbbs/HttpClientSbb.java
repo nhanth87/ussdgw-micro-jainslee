@@ -1,15 +1,21 @@
 package et.restlink.ussdgw.sbbs;
 
+import com.microjainslee.api.ActivityContextInterface;
+import com.microjainslee.api.RaCommandPort;
+import com.microjainslee.api.Sbb;
+import com.microjainslee.api.SleeEvent;
+import com.microjainslee.api.SleeEventHandler;
+import com.microjainslee.api.annotations.InjectRa;
+import com.microjainslee.ra.httpclient.command.HttpCallbackCommand;
 import com.microjainslee.ra.httpclient.cookie.CookieJar;
-import java.util.LinkedHashMap;
-import java.util.Map;
-
+import com.microjainslee.ra.httpclient.events.HttpCallbackCompletedEvent;
 import et.restlink.ussdgw.api.AsHttpWireFormat;
 import et.restlink.ussdgw.api.AsRequest;
 import et.restlink.ussdgw.api.AsResponse;
 import et.restlink.ussdgw.bridge.VirtualSession;
 import et.restlink.ussdgw.cdr.CdrPhase;
 import et.restlink.ussdgw.cdr.CdrStatuses;
+import et.restlink.ussdgw.cdr.CdrUssdSnippet;
 import et.restlink.ussdgw.events.GatedAsNotifyEvent;
 import et.restlink.ussdgw.events.PullHttpEvent;
 import et.restlink.ussdgw.logging.SleeEventTrace;
@@ -18,28 +24,51 @@ import et.restlink.ussdgw.service.AsPullState;
 import et.restlink.ussdgw.service.AsPullTarget;
 import et.restlink.ussdgw.service.GatedAsNotifyService;
 import et.restlink.ussdgw.service.SbbServices;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 
-import com.microjainslee.api.ActivityContextInterface;
-import com.microjainslee.api.RaCommandPort;
-import com.microjainslee.api.Sbb;
-import com.microjainslee.api.SleeEvent;
-import com.microjainslee.api.SleeEventHandler;
-import com.microjainslee.api.annotations.InjectRa;
-import com.microjainslee.ra.httpclient.command.HttpCallbackCommand;
-import com.microjainslee.ra.httpclient.events.HttpCallbackCompletedEvent;
-
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
 import java.util.Optional;
+import java.util.function.Supplier;
 
 /**
- * HTTP pull toward AS — request/response via RA JsonPost (raw body, no poll).
+ * Talks HTTP to the AS (the application server that owns the USSD menu).
  *
- * <p>Holds no per-correlation state. The submit and the completion are delivered to different
- * pooled instances of this class (the container derives the SBB entity id from the activity
- * context name, and the RA names the completion activity after the bare correlation id), so
- * anything kept in an instance field would correlate nothing. Ownership lives in
- * {@code AsPullStateRegistry}.
+ * <h2>What it does</h2>
+ * One USSD turn = one HTTP POST. The flow is:
+ * <ol>
+ *   <li>{@link PullHttpEvent} arrives (the subscriber dialed or pressed a digit) →
+ *       {@link #sendPull} encodes the request and asks the HTTP client RA to POST it.</li>
+ *   <li>The RA answers later with {@link HttpCallbackCompletedEvent} →
+ *       {@link #onAsAnswered} decodes the AS reply and hands it to the virtual-session bridge,
+ *       which sends the menu text to the handset.</li>
+ * </ol>
+ * There is also a one-way POST, {@link GatedAsNotifyEvent}: when the AS answered too late and the
+ * subscriber already got the "please wait" message, the AS is told so (the classic gated push).
+ *
+ * <h2>Keeping the AS session (JSESSIONID)</h2>
+ * Like the classic gateway, every POST of the same USSD dialog carries the cookies the AS set on
+ * the previous answer, so a servlet AS finds its {@code HttpSession} on every menu turn — and no
+ * other dialog ever sees them. See {@link #requestHeaders} and {@link #rememberAsCookies}.
+ *
+ * <h2>Why there are no fields with per-call state</h2>
+ * The POST and its answer are delivered to different pooled instances of this SBB, so a field
+ * set in {@link #sendPull} would not be there in {@link #onAsAnswered}. Everything about an
+ * in-flight POST lives in {@code AsPullStateRegistry} ({@code svc().asPullState()}).
+ *
+ * <h2>Rule for every handler</h2>
+ * Nothing may escape a SLEE event handler, and losing a cookie, a CDR line or a session lookup
+ * must never lose the AS answer. Every side step below is guarded on its own.
  */
 public final class HttpClientSbb implements Sbb, SleeEventHandler {
+    private static final Logger LOG = LogManager.getLogger(HttpClientSbb.class);
+    private static final String NAME = "HttpClientSbb";
+
+    /** HTTP session id prefix of the one-way gated notify; the rest is the correlation id. */
+    private static final String GATED_PREFIX = "gated-";
+
     private final SbbServices services;
 
     @InjectRa(name = "http-callback-ra")
@@ -54,354 +83,349 @@ public final class HttpClientSbb implements Sbb, SleeEventHandler {
     @Override public void sbbPassivate() {}
     @Override public void sbbRemove() {}
 
+    // ------------------------------------------------------------------ event entry point
+
     @Override
     public void onEvent(SleeEvent event, ActivityContextInterface aci) {
-        if (event instanceof GatedAsNotifyEvent gated) {
-            SleeEventTrace.inSbb("HttpClientSbb", event, "gated-url=" + gated.asUrl());
-            String detail;
-            try { detail = sendGatedNotify(gated); }
-            catch (Throwable t) {
-                detail = "error=" + t.getClass().getSimpleName() + ":" + String.valueOf(t.getMessage());
-                org.apache.logging.log4j.LogManager.getLogger(HttpClientSbb.class)
-                        .error("HttpClientSbb sendGatedNotify failed url={}", gated.asUrl(), t);
-            }
-            SleeEventTrace.outSbb("HttpClientSbb", event, detail);
-            return;
-        }
         if (event instanceof PullHttpEvent pull) {
-            SleeEventTrace.inSbb("HttpClientSbb", event, "url=" + pull.asUrl());
-            String detail;
-            try { detail = sendPull(pull); }
-            catch (Throwable t) {
-                detail = "error=" + t.getClass().getSimpleName() + ":" + String.valueOf(t.getMessage());
-                org.apache.logging.log4j.LogManager.getLogger(HttpClientSbb.class)
-                        .error("HttpClientSbb sendPull failed url={}", pull.asUrl(), t);
-            }
-            SleeEventTrace.outSbb("HttpClientSbb", event, detail);
-            return;
-        }
-        if (event instanceof HttpCallbackCompletedEvent done) {
-            SleeEventTrace.inSbb("HttpClientSbb", event, "status=" + done.getStatusCode());
-            String detail;
-            try { detail = onCompleted(done); }
-            catch (Throwable t) {
-                detail = "error=" + t.getClass().getSimpleName() + ":" + String.valueOf(t.getMessage());
-                org.apache.logging.log4j.LogManager.getLogger(HttpClientSbb.class)
-                        .error("HttpClientSbb onCompleted failed status={}", done.getStatusCode(), t);
-            }
-            SleeEventTrace.outSbb("HttpClientSbb", event, detail);
+            handle(event, "url=" + pull.asUrl(), () -> sendPull(pull));
+        } else if (event instanceof HttpCallbackCompletedEvent done) {
+            handle(event, "status=" + done.getStatusCode(), () -> onHttpCompleted(done));
+        } else if (event instanceof GatedAsNotifyEvent gated) {
+            handle(event, "gated-url=" + gated.asUrl(), () -> sendGatedNotify(gated));
         }
     }
 
-    /**
-     * Fire-and-forget classic XML POST to AS asUrl. Uses {@code gated-{corr}} as the
-     * HTTP client session id so completion never merges into an in-flight pull.
-     */
-    private String sendGatedNotify(GatedAsNotifyEvent gated) {
-        if (gated == null || !gated.isValid()) {
-            return "invalid";
-        }
-        String corr = gated.meta().correlationId();
-        String sessionId = GatedAsNotifyEvent.httpSessionId(corr);
-        AsPullClient.Admit admit = svc().asPull().tryAdmit(gated.asUrl());
-        if (!admit.allow()) {
-            return "circuit-open corr=" + corr;
-        }
-        RaCommandPort port = httpClient;
-        if (port == null) {
-            svc().asPull().recordFailure(gated.asUrl());
-            return "no-ra";
-        }
-        AsHttpWireFormat format = GatedAsNotifyService.wireFormat();
+    /** Trace in, run, trace out with the result; an exception becomes the traced result. */
+    private static void handle(SleeEvent event, String inDetail, Supplier<String> work) {
+        SleeEventTrace.inSbb(NAME, event, inDetail);
+        String outDetail;
         try {
-            port.sendCommand(new HttpCallbackCommand.PostRequest(
-                    sessionId, gated.asUrl(), gated.xmlBody(), format.contentType(),
-                    asRequestHeaders(corr, format)));
-        } catch (RuntimeException e) {
-            svc().asPull().recordFailure(gated.asUrl());
-            throw e;
+            outDetail = work.get();
+        } catch (Throwable t) {
+            outDetail = "error=" + t.getClass().getSimpleName() + ":" + t.getMessage();
+            LOG.error("{} failed on {} ({})", NAME, event.getClass().getSimpleName(), inDetail, t);
         }
-        return "gated-submitted corr=" + corr + " reason=" + gated.meta().gateReason();
+        SleeEventTrace.outSbb(NAME, event, outDetail);
     }
+
+    // ------------------------------------------------------------------ 1. send one turn to the AS
 
     private String sendPull(PullHttpEvent pull) {
-        AsRequest req = pull.request();
-        String corr = req.correlationId();
-        AsPullClient.Admit admit = svc().asPull().tryAdmit(pull.asUrl());
+        AsRequest request = pull.request();
+        String corr = request.correlationId();
+        String url = pull.asUrl();
+
+        // Circuit breaker: an AS that keeps failing is not hammered; the subscriber gets the
+        // saga's failure text right away instead of waiting for a timeout.
+        AsPullClient.Admit admit = svc().asPull().tryAdmit(url);
         if (!admit.allow()) {
             svc().saga().onAsPullFailed(corr, admit.reason());
             return "circuit-open corr=" + corr;
         }
-        // Resolve the transport before registering state: an absent RA must not leave an entry
-        // (and a request body) behind.
-        RaCommandPort port = httpClient;
-        if (port == null) {
-            svc().asPull().recordFailure(pull.asUrl());
+        // Check the RA before registering anything, so a missing RA leaves nothing behind.
+        RaCommandPort ra = httpClient;
+        if (ra == null) {
+            svc().asPull().recordFailure(url);
             svc().saga().onAsPullFailed(corr, "NO_HTTP_RA");
             return "no-ra";
         }
-        String tenantId = safeSession(corr).map(VirtualSession::tenantId).orElse(null);
-        AsHttpWireFormat format = svc().wireFormatResolver().resolve(tenantId);
-        String payload = svc().wireFacade().encodePullRequest(req, format);
-        AsPullTarget.Http target = new AsPullTarget.Http(pull.asUrl(), payload, format);
 
-        // P2-1: capture the session's current generation at send time (not the request's generation,
-        // which may be stale). A slow response stamped to its own turn loses the claim once the
-        // session moved on, instead of being applied to the next turn.
-        int sessionGen = 0;
-        try {
-            sessionGen = svc().store().get(corr).map(VirtualSession::generation).orElse(0);
-        } catch (RuntimeException ignored) {
-            // store not available (test stub) or session not found — fall back to 0
-        }
-        if (svc().asPullState().open(corr, target, System.currentTimeMillis(),
-                sessionGen).isEmpty()) {
-            svc().asPull().recordFailure(pull.asUrl());
+        // One session read serves the wire format, the turn number and the bridge headers.
+        Optional<VirtualSession> session = findSession(corr);
+        AsHttpWireFormat format = svc().wireFormatResolver()
+                .resolve(session.map(VirtualSession::tenantId).orElse(null));
+        String body = svc().wireFacade().encodePullRequest(request, format);
+        AsPullTarget.Http target = new AsPullTarget.Http(url, body, format);
+
+        // Remember the turn number at send time: a slow answer to an old turn must lose to the
+        // current turn, never be shown as the answer to the next one.
+        int turnAtSend = session.map(VirtualSession::generation).orElse(0);
+        if (svc().asPullState().open(corr, target, System.currentTimeMillis(), turnAtSend).isEmpty()) {
+            svc().asPull().recordFailure(url);
             svc().saga().onAsPullFailed(corr, "AS_PULL_STATE_SATURATED");
             return "state-saturated corr=" + corr;
         }
         try {
-            submitPost(port, corr, target);
+            post(ra, corr, target, session);
         } catch (RuntimeException e) {
             svc().asPullState().close(corr);
-            svc().asPull().recordFailure(pull.asUrl());
+            svc().asPull().recordFailure(url);
             svc().saga().onAsPullFailed(corr, "AS_SUBMIT_" + e.getClass().getSimpleName());
             throw e;
         }
         return "submitted corr=" + corr + " wire=" + format;
     }
 
-    private String onCompleted(HttpCallbackCompletedEvent done) {
-        String corr = done.getSessionId();
-        rememberAsCookies(corr, done);
-        // Gated AS notify completions are advisory — never drive bridge/saga.
-        if (corr != null && corr.startsWith("gated-")) {
-            int status = done.getStatusCode();
-            String err = done.getErrorMessage();
-            boolean ok = (err == null || err.isBlank()) && status > 0 && status < 400;
-            String realCorr = corr.substring("gated-".length());
-            writeGatedAsCdr(realCorr, ok, status, err);
-            if (ok) {
-                return "gated-ack status=" + status;
-            }
-            return "gated-fail status=" + status
-                    + (err == null || err.isBlank() ? "" : " err=" + err);
+    /** One-way POST telling the AS its late answer was not shown (classic gated push). */
+    private String sendGatedNotify(GatedAsNotifyEvent gated) {
+        if (gated == null || !gated.isValid()) {
+            return "invalid";
         }
-        int status = done.getStatusCode();
-        String err = done.getErrorMessage();
-
-        AsPullState state = svc().asPullState().peek(corr).orElse(null);
-        AsPullTarget.Http target =
-                (state != null && state.target() instanceof AsPullTarget.Http h) ? h : null;
-        AsHttpWireFormat format = target == null ? AsHttpWireFormat.XML : target.format();
-        // No state → no latency sample and no breaker key. Passing a non-positive latency lets
-        // the bridge fall back to its own pull clock; inventing a URL would merge every AS onto
-        // one breaker.
-        long latency = state == null ? -1L : state.latencyMsAt(System.currentTimeMillis());
-        // Guarded: this read feeds the CDR line, the generation stamp below and the
-        // tenant/shortCode resolution. An unguarded lookup that throws is swallowed by the outer
-        // catch and the whole AS response is discarded — the handset gets nothing.
-        // Same rule as the send path, and AGENTS.md: nothing propagates out of a SLEE handler.
-        Optional<VirtualSession> sess = safeSession(corr);
-        String shortCode = sess.map(VirtualSession::shortCode).orElse(null);
-        int networkId = sess.map(VirtualSession::networkId).orElse(0);
-        String tenantId = sess.map(VirtualSession::tenantId).orElse(null);
-        String url = target == null ? null : target.url();
-        // Response Content-Type is not on HttpCallbackCompletedEvent — log request CT when known.
-        String contentType = target == null ? null : target.format().contentType();
-
-        boolean transportFail = (err != null && !err.isBlank() && status <= 0);
-        boolean httpFail = status >= 400;
-        if (transportFail || httpFail) {
-            String reason = transportFail ? "AS_TRANSPORT" : "AS_HTTP_" + status;
-            if (target != null) {
-                RaCommandPort port = httpClient;
-                if (port != null
-                        && svc().asPull().shouldRetry(target.url(), state.attempt(), status, err)) {
-                    AsPullState retry =
-                            svc().asPullState().beginRetry(corr, System.currentTimeMillis())
-                                    .orElse(null);
-                    if (retry != null) {
-                        submitPost(port, corr, target);
-                        return "retry attempt=" + retry.attempt() + " corr=" + corr;
-                    }
-                }
-                svc().asPullState().close(corr);
-                svc().asPull().recordFailure(target.url());
-            } else {
-                // State may still be present when the target was not an HTTP pull (or was swept
-                // mid-flight) — never leave an orphan behind on a terminal failure.
-                svc().asPullState().close(corr);
-            }
-            String body = done.getResponseBody();
-            int bodyLen = body == null ? 0 : body.length();
-            svc().asPull().logHttpPullComplete(corr, url, shortCode, networkId, tenantId,
-                    status, bodyLen, body == null || body.isBlank(), contentType, reason);
-            svc().saga().onAsPullFailed(corr, reason);
-            return "fail " + (err == null ? status : err)
-                    + " corr=" + corr + (url == null ? "" : " url=" + url);
+        String corr = gated.meta().correlationId();
+        String url = gated.asUrl();
+        if (!svc().asPull().tryAdmit(url).allow()) {
+            return "circuit-open corr=" + corr;
         }
-
-        String body = done.getResponseBody();
-        int bodyLen = body == null ? 0 : body.length();
-        if (body == null || body.isBlank()) {
-            svc().asPullState().close(corr);
-            if (target != null) {
-                svc().asPull().recordFailure(target.url());
-            }
-            svc().asPull().logHttpPullComplete(corr, url, shortCode, networkId, tenantId,
-                    status, bodyLen, true, contentType, "AS_EMPTY_BODY");
-            svc().saga().onAsPullFailed(corr, "AS_EMPTY_BODY");
-            return "empty-body corr=" + corr
-                    + (url == null ? "" : " url=" + url)
-                    + (shortCode == null || shortCode.isBlank() ? "" : " sc=" + shortCode);
+        RaCommandPort ra = httpClient;
+        if (ra == null) {
+            svc().asPull().recordFailure(url);
+            return "no-ra";
         }
-        svc().asPullState().close(corr);
-        if (target != null) {
-            svc().asPull().recordSuccess(target.url());
+        // Its own HTTP session id, so this answer never mixes with an in-flight pull.
+        String httpSessionId = GatedAsNotifyEvent.httpSessionId(corr);
+        AsHttpWireFormat format = GatedAsNotifyService.wireFormat();
+        try {
+            ra.sendCommand(new HttpCallbackCommand.PostRequest(httpSessionId, url, gated.xmlBody(),
+                    format.contentType(), requestHeaders(corr, format, findSession(corr))));
+        } catch (RuntimeException e) {
+            svc().asPull().recordFailure(url);
+            throw e;
         }
-        svc().asPull().logHttpPullComplete(corr, url, shortCode, networkId, tenantId,
-                status, bodyLen, false, contentType, "ok");
-        AsResponse resp = svc().wireFacade().decodePullResponse(body, format, corr);
-        int wireGen = resp.generation();
-        // P2-1 stamp rule. A wire gen > 1 means the AS speaks generations — trust it,
-        // so a stale turn loses the claim instead of being stamped onto the next turn.
-        // Classic XML hardcodes 1 (and JSON may omit → 0): no turn info, so stamp the
-        // send-time turn from the pull entry (preferred) or the live session.
-        if (wireGen <= 1) {
-            int pullGen = state == null ? 0 : state.generation();
-            int stampFrom = pullGen > 0 ? pullGen
-                    : sess.map(VirtualSession::generation).orElse(0);
-            if (stampFrom > 0) {
-                resp = resp.stampedToSessionGeneration(stampFrom);
-            }
-        }
-        // EWMA via bridge.onAsResponse(latency) only — avoid double-sample
-        svc().bridge().onAsResponse(resp, latency);
-        String action = resp.action() == null ? "?" : resp.action().name();
-        String asSnip = et.restlink.ussdgw.cdr.CdrUssdSnippet.of(resp.text(), 24);
-        return "ok latencyMs=" + latency + " wire=" + format
-                + " status=" + status + " bodyLen=" + bodyLen
-                + " wireGen=" + wireGen + " gen=" + resp.generation()
-                + " asAction=" + action
-                + (asSnip.isEmpty() ? "" : " asUssd=" + asSnip);
+        return "gated-submitted corr=" + corr + " reason=" + gated.meta().gateReason();
     }
 
-    /** POST raw AS pull body with format Content-Type (XML or JSON). */
-    /** Session lookup for the completion path; never let it cost us the AS response. */
-    private Optional<VirtualSession> safeSession(String corr) {
+    private void post(RaCommandPort ra, String corr, AsPullTarget.Http target,
+                      Optional<VirtualSession> session) {
+        ra.sendCommand(new HttpCallbackCommand.PostRequest(corr, target.url(), target.body(),
+                target.format().contentType(), requestHeaders(corr, target.format(), session)));
+    }
+
+    /**
+     * The headers the classic gateway sent on every AS POST:
+     * <ul>
+     *   <li>{@code Accept}: {@code text/xml} for the classic wire, JSON otherwise;</li>
+     *   <li>{@code Cookie}: this dialog's cookies (JSESSIONID…), so the AS finds its session;</li>
+     *   <li>{@code X-Ussd-Correlation-Id} / {@code X-Ussd-Request-Id} when the HTTP client bridge
+     *       is on (classic SessionBridgeSupport).</li>
+     * </ul>
+     */
+    private Map<String, String> requestHeaders(String corr, AsHttpWireFormat format,
+                                               Optional<VirtualSession> session) {
+        Map<String, String> headers = new LinkedHashMap<>();
+        headers.put("Accept", format == AsHttpWireFormat.JSON ? "application/json" : "text/xml");
+        String cookie = storedCookie(corr);
+        if (cookie != null && !cookie.isBlank()) {
+            headers.put("Cookie", cookie);
+        }
+        if (corr != null && bridgeHeadersEnabled()) {
+            String requestId = session.map(VirtualSession::requestId)
+                    .filter(id -> !id.isBlank()).orElse(corr);
+            headers.put("X-Ussd-Correlation-Id", corr);
+            headers.put("X-Ussd-Request-Id", requestId);
+        }
+        return headers;
+    }
+
+    // ------------------------------------------------------------------ 2. the AS answered
+
+    private String onHttpCompleted(HttpCallbackCompletedEvent done) {
+        String httpSessionId = done.getSessionId();
+        rememberAsCookies(httpSessionId, done);
+        if (httpSessionId != null && httpSessionId.startsWith(GATED_PREFIX)) {
+            return onGatedNotifyAnswered(httpSessionId.substring(GATED_PREFIX.length()), done);
+        }
+        return onAsAnswered(httpSessionId, done);
+    }
+
+    /** The answer to one USSD turn: failure → retry or give up; success → bridge → handset. */
+    private String onAsAnswered(String corr, HttpCallbackCompletedEvent done) {
+        Turn turn = new Turn(corr, svc().asPullState().peek(corr).orElse(null), findSession(corr));
+        int status = done.getStatusCode();
+        String error = done.getErrorMessage();
+        String body = done.getResponseBody();
+
+        boolean transportFailed = error != null && !error.isBlank() && status <= 0;
+        if (transportFailed || status >= 400) {
+            return onAsFailed(turn, status, error, body, transportFailed ? "AS_TRANSPORT" : "AS_HTTP_" + status);
+        }
+        if (body == null || body.isBlank()) {
+            svc().asPullState().close(corr);
+            if (turn.target != null) {
+                svc().asPull().recordFailure(turn.target.url());
+            }
+            logCompletion(turn, status, body, "AS_EMPTY_BODY");
+            svc().saga().onAsPullFailed(corr, "AS_EMPTY_BODY");
+            return "empty-body corr=" + corr + turn.urlSuffix()
+                    + (turn.shortCode() == null || turn.shortCode().isBlank() ? "" : " sc=" + turn.shortCode());
+        }
+
+        svc().asPullState().close(corr);
+        if (turn.target != null) {
+            svc().asPull().recordSuccess(turn.target.url());
+        }
+        logCompletion(turn, status, body, "ok");
+        AsResponse response = svc().wireFacade().decodePullResponse(body, turn.format(), corr);
+        int wireTurn = response.generation();
+        response = stampTurn(response, turn);
+        // The bridge also feeds AdaptiveTimeout with this latency — do not sample it twice.
+        svc().bridge().onAsResponse(response, turn.latencyMs);
+
+        String asText = CdrUssdSnippet.of(response.text(), 24);
+        return "ok latencyMs=" + turn.latencyMs + " wire=" + turn.format()
+                + " status=" + status + " bodyLen=" + (body == null ? 0 : body.length())
+                + " wireGen=" + wireTurn + " gen=" + response.generation()
+                + " asAction=" + (response.action() == null ? "?" : response.action().name())
+                + (asText.isEmpty() ? "" : " asUssd=" + asText);
+    }
+
+    /** HTTP error or no connection: retry when the policy allows, else end the turn as failed. */
+    private String onAsFailed(Turn turn, int status, String error, String body, String reason) {
+        String corr = turn.corr;
+        if (turn.target != null) {
+            RaCommandPort ra = httpClient;
+            if (ra != null && svc().asPull().shouldRetry(turn.target.url(), turn.state.attempt(), status, error)) {
+                AsPullState retry = svc().asPullState().beginRetry(corr, System.currentTimeMillis()).orElse(null);
+                if (retry != null) {
+                    post(ra, corr, turn.target, turn.session);
+                    return "retry attempt=" + retry.attempt() + " corr=" + corr;
+                }
+            }
+            svc().asPull().recordFailure(turn.target.url());
+        }
+        // Close in every case — a non-HTTP or swept entry must not stay behind as an orphan.
+        svc().asPullState().close(corr);
+        logCompletion(turn, status, body, reason);
+        svc().saga().onAsPullFailed(corr, reason);
+        return "fail " + (error == null ? status : error) + " corr=" + corr + turn.urlSuffix();
+    }
+
+    /**
+     * Which turn does this answer belong to? An AS that numbers its turns (wire generation &gt; 1)
+     * is trusted. Classic XML always says 1 and JSON may say nothing, so those answers are stamped
+     * with the turn that was current when the POST was sent.
+     */
+    private static AsResponse stampTurn(AsResponse response, Turn turn) {
+        if (response.generation() > 1) {
+            return response;
+        }
+        int turnAtSend = turn.state == null ? 0 : turn.state.generation();
+        int stamp = turnAtSend > 0 ? turnAtSend : turn.session.map(VirtualSession::generation).orElse(0);
+        return stamp > 0 ? response.stampedToSessionGeneration(stamp) : response;
+    }
+
+    private void logCompletion(Turn turn, int status, String body, String outcome) {
+        svc().asPull().logHttpPullComplete(turn.corr, turn.url(), turn.shortCode(), turn.networkId(),
+                turn.tenantId(), status, body == null ? 0 : body.length(), body == null || body.isBlank(),
+                turn.target == null ? null : turn.target.format().contentType(), outcome);
+    }
+
+    /** The gated notify is advisory: it is written to the CDR and never touches the dialog. */
+    private String onGatedNotifyAnswered(String corr, HttpCallbackCompletedEvent done) {
+        int status = done.getStatusCode();
+        String error = done.getErrorMessage();
+        boolean ok = (error == null || error.isBlank()) && status > 0 && status < 400;
+        writeGatedNotifyCdr(corr, ok, status, error);
+        return ok ? "gated-ack status=" + status
+                : "gated-fail status=" + status + (error == null || error.isBlank() ? "" : " err=" + error);
+    }
+
+    /**
+     * Everything known about the turn an answer belongs to. {@code state} is null when the entry
+     * was already swept; then there is no latency (the bridge uses its own clock) and no URL (a
+     * made-up one would merge every AS onto one circuit breaker).
+     */
+    private static final class Turn {
+        final String corr;
+        final AsPullState state;
+        final AsPullTarget.Http target;
+        final Optional<VirtualSession> session;
+        final long latencyMs;
+
+        Turn(String corr, AsPullState state, Optional<VirtualSession> session) {
+            this.corr = corr;
+            this.state = state;
+            this.target = state != null && state.target() instanceof AsPullTarget.Http h ? h : null;
+            this.session = session;
+            this.latencyMs = state == null ? -1L : state.latencyMsAt(System.currentTimeMillis());
+        }
+
+        AsHttpWireFormat format() { return target == null ? AsHttpWireFormat.XML : target.format(); }
+        String url() { return target == null ? null : target.url(); }
+        String urlSuffix() { return target == null ? "" : " url=" + target.url(); }
+        String shortCode() { return session.map(VirtualSession::shortCode).orElse(null); }
+        int networkId() { return session.map(VirtualSession::networkId).orElse(0); }
+        String tenantId() { return session.map(VirtualSession::tenantId).orElse(null); }
+    }
+
+    // ------------------------------------------------------------------ guarded side steps
+
+    /** Session lookup that can never cost us the AS answer. */
+    private Optional<VirtualSession> findSession(String corr) {
         try {
             var store = svc().store();
             return store == null ? Optional.empty() : store.get(corr);
         } catch (RuntimeException e) {
-            org.apache.logging.log4j.LogManager.getLogger(HttpClientSbb.class)
-                    .warn("HttpClientSbb session lookup failed corr={}: {}", corr, e.toString());
+            LOG.warn("{} session lookup failed corr={}: {}", NAME, corr, e.toString());
             return Optional.empty();
         }
     }
 
-    private void submitPost(RaCommandPort port, String corr, AsPullTarget.Http target) {
-        port.sendCommand(new HttpCallbackCommand.PostRequest(
-                corr, target.url(), target.body(), target.format().contentType(),
-                asRequestHeaders(corr, target.format())));
-    }
-
-    /**
-     * Request headers the classic gateway sent on every AS POST (restcomm http-client RA,
-     * ussdgateway HttpClientSbb.doPost):
-     * <ul>
-     *   <li>{@code Accept} — {@code text/xml} for the classic wire;</li>
-     *   <li>{@code Cookie} — this dialog's jar, so a servlet AS finds its {@code HttpSession}
-     *       (JSESSIONID) on every menu turn of the same USSD dialog and on no other dialog;</li>
-     *   <li>{@code X-Ussd-Correlation-Id} / {@code X-Ussd-Request-Id} when the HTTP client
-     *       bridge is on (classic SessionBridgeSupport).</li>
-     * </ul>
-     */
-    private Map<String, String> asRequestHeaders(String corr, AsHttpWireFormat format) {
-        Map<String, String> h = new LinkedHashMap<>();
-        h.put("Accept", format == AsHttpWireFormat.JSON ? "application/json" : "text/xml");
-        String cookie = null;
+    private String storedCookie(String corr) {
         try {
             var store = svc().store();
-            cookie = store == null ? null : store.asCookie(corr);
-        } catch (RuntimeException ignored) {
-            // no store (unit stub) — no cookie, never fail the send
-        }
-        if (cookie != null && !cookie.isBlank()) {
-            h.put("Cookie", cookie);
-        }
-        boolean bridge = false;
-        try {
-            bridge = svc().config() != null && svc().config().httpClientBridgeEnabled();
-        } catch (RuntimeException ignored) {
-            // config unavailable in a stub — classic default: no correlation headers
-        }
-        if (bridge && corr != null) {
-            String requestId = safeSession(corr).map(VirtualSession::requestId)
-                    .filter(r -> r != null && !r.isBlank()).orElse(corr);
-            h.put("X-Ussd-Correlation-Id", corr);
-            h.put("X-Ussd-Request-Id", requestId);
-        }
-        return h;
-    }
-
-    /**
-     * Fold the AS's {@code Set-Cookie} into this dialog's jar ({@code ussdTx.asCookie}). The
-     * jar keys on the USSD correlation id; a gated completion ({@code gated-<corr>}) belongs to
-     * the same dialog. Never throws — losing a cookie must not lose the AS response.
-     */
-    private void rememberAsCookies(String sessionId, HttpCallbackCompletedEvent done) {
-        try {
-            if (sessionId == null || done == null) {
-                return;
-            }
-            java.util.List<String> setCookies = done.getHeaderValues("Set-Cookie");
-            if (setCookies.isEmpty()) {
-                return;
-            }
-            String corr = sessionId.startsWith("gated-") ? sessionId.substring("gated-".length()) : sessionId;
-            var store = svc().store();
-            if (store == null) {
-                return;
-            }
-            String merged = CookieJar.merge(store.asCookie(corr), setCookies);
-            store.setAsCookie(corr, merged);
+            return store == null ? null : store.asCookie(corr);
         } catch (RuntimeException e) {
-            org.apache.logging.log4j.LogManager.getLogger(HttpClientSbb.class)
-                    .debug("AS cookie not stored session={}: {}", sessionId, e.toString());
+            return null;   // no store (unit stub): send without a cookie
         }
     }
 
-    /** Advisory CDR for gated-{corr} HTTP completion (does not touch bridge/saga). */
-    private void writeGatedAsCdr(String correlationId, boolean ok, int httpStatus, String err) {
-        if (correlationId == null || correlationId.isBlank()) {
+    private boolean bridgeHeadersEnabled() {
+        try {
+            return svc().config() != null && svc().config().httpClientBridgeEnabled();
+        } catch (RuntimeException e) {
+            return false;  // classic default: no correlation headers
+        }
+    }
+
+    /**
+     * Add the AS's {@code Set-Cookie} to this dialog's cookies ({@code ussdTx.asCookie}). The
+     * gated notify ({@code gated-<corr>}) belongs to the same dialog.
+     */
+    private void rememberAsCookies(String httpSessionId, HttpCallbackCompletedEvent done) {
+        try {
+            if (httpSessionId == null || done == null) {
+                return;
+            }
+            List<String> setCookies = done.getHeaderValues("Set-Cookie");
+            var store = svc().store();
+            if (setCookies.isEmpty() || store == null) {
+                return;
+            }
+            String corr = httpSessionId.startsWith(GATED_PREFIX)
+                    ? httpSessionId.substring(GATED_PREFIX.length()) : httpSessionId;
+            store.setAsCookie(corr, CookieJar.merge(store.asCookie(corr), setCookies));
+        } catch (RuntimeException e) {
+            LOG.debug("AS cookie not stored session={}: {}", httpSessionId, e.toString());
+        }
+    }
+
+    private void writeGatedNotifyCdr(String corr, boolean ok, int httpStatus, String error) {
+        if (corr == null || corr.isBlank()) {
             return;
         }
         try {
-            Optional<VirtualSession> sess = safeSession(correlationId);
-            String msisdn = sess.map(VirtualSession::msisdn).orElse(null);
-            String shortCode = sess.map(VirtualSession::shortCode).orElse(null);
-            int networkId = sess.map(VirtualSession::networkId).orElse(0);
-            String tenantId = sess.map(VirtualSession::tenantId).orElse(null);
-            String origin = sess.map(s -> s.originationType() == null
-                    ? "MAP" : s.originationType().name()).orElse("MAP");
-            Long gate = sess.filter(s -> s.gateMs() > 0).map(VirtualSession::gateMs).orElse(null);
+            Optional<VirtualSession> s = findSession(corr);
+            int networkId = s.map(VirtualSession::networkId).orElse(0);
             Long ewma = null;
             try {
-                double v = svc().adaptive().observedLatencyMs(networkId);
-                if (v > 0d) {
-                    ewma = Math.round(v);
+                double observed = svc().adaptive().observedLatencyMs(networkId);
+                if (observed > 0d) {
+                    ewma = Math.round(observed);
                 }
             } catch (Throwable ignored) { }
-            String detail = ok
-                    ? ("service=HttpClientSbb|gated-ack|http=" + httpStatus)
-                    : ("service=HttpClientSbb|gated-fail|http=" + httpStatus
-                            + (err == null || err.isBlank() ? "" : "|err=" + err));
-            svc().cdr().write(correlationId,
+            String detail = "service=" + NAME + "|" + (ok ? "gated-ack" : "gated-fail") + "|http=" + httpStatus
+                    + (ok || error == null || error.isBlank() ? "" : "|err=" + error);
+            svc().cdr().write(corr,
                     ok ? CdrPhase.S1_RELEASED : CdrPhase.FAILED,
-                    msisdn, shortCode,
+                    s.map(VirtualSession::msisdn).orElse(null),
+                    s.map(VirtualSession::shortCode).orElse(null),
                     ok ? CdrStatuses.GATED_AS_ACK : CdrStatuses.GATED_AS_FAIL,
-                    detail, networkId, tenantId, origin, gate, ewma);
+                    detail, networkId,
+                    s.map(VirtualSession::tenantId).orElse(null),
+                    s.map(v -> v.originationType() == null ? "MAP" : v.originationType().name()).orElse("MAP"),
+                    s.filter(v -> v.gateMs() > 0).map(VirtualSession::gateMs).orElse(null),
+                    ewma);
         } catch (Throwable ignored) { }
     }
 }
