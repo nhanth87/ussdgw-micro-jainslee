@@ -875,27 +875,41 @@ until [[ "$(curl -sS --max-time 5 -o /dev/null -w '%{http_code}' "http://127.0.0
 done
 info ":8088/admin/status.json answers"
 
-# Every service: desired == running, no Pending/Rejected/Failed task, and the running
-# container's image ID equals the spec's image ID.
-FAILED=0
-while read -r svc want have img; do
-  [[ -n "$svc" ]] || continue
-  if [[ "$want" != "$have" ]]; then
-    warn "$svc replicas $have/$want"; FAILED=1
-    docker service ps "$svc" --no-trunc | head -8 >&2 || true
+# Every service: running == desired, and the running container's image ID equals the spec's.
+# Swarm counts a task as a running replica only once its healthcheck says healthy, so a gateway
+# still in start_period shows 0/1 for a while. Poll until converged or READY_TIMEOUT, never a
+# single snapshot: digicom-nb 2026-11-15, a one-shot check 22 s after start failed a healthy
+# deploy and rolled the cutover back.
+converged() {   # 0 when every service is converged; the reasons otherwise go to CONVERGE_REPORT
+  local svc running desired img spec_id spec_digest run_cid run_digest rc=0
+  CONVERGE_REPORT=""
+  while read -r svc running desired img; do
+    [[ -n "$svc" ]] || continue
+    if [[ "$running" != "$desired" ]]; then
+      CONVERGE_REPORT+="$svc replicas $running/$desired"$'\n'; rc=1
+    fi
+    spec_id="$(docker service inspect "$svc" --format '{{.Spec.TaskTemplate.ContainerSpec.Image}}' 2>/dev/null || true)"
+    spec_digest="$(docker image inspect "$spec_id" --format '{{.Id}}' 2>/dev/null || true)"
+    run_cid="$(docker ps -q --filter "label=com.docker.swarm.service.name=$svc" | head -1 || true)"
+    run_digest=""
+    [[ -n "$run_cid" ]] && run_digest="$(docker inspect "$run_cid" --format '{{.Image}}' 2>/dev/null || true)"
+    if [[ -n "$spec_digest" && -n "$run_digest" && "$spec_digest" != "$run_digest" ]]; then
+      CONVERGE_REPORT+="$svc is running a DIFFERENT image than its spec (spec ${spec_digest:7:12} / running ${run_digest:7:12}) — an old task is still serving"$'\n'
+      rc=1
+    fi
+  done < <(docker stack services "$STACK_NAME" --format '{{.Name}} {{.Replicas}} {{.Image}}' 2>/dev/null \
+           | awk '{split($2,r,"/"); print $1, r[1], r[2], $3}')
+  return "$rc"
+}
+deadline=$(( $(date +%s) + READY_TIMEOUT ))
+until converged; do
+  if (( $(date +%s) >= deadline )); then
+    while IFS= read -r line; do [[ -n "$line" ]] && warn "$line"; done <<<"$CONVERGE_REPORT"
+    docker stack ps "$STACK_NAME" --no-trunc 2>/dev/null | head -12 >&2 || true
+    die "stack is not converged after ${READY_TIMEOUT}s — see the warnings above"
   fi
-  spec_id="$(docker service inspect "$svc" --format '{{.Spec.TaskTemplate.ContainerSpec.Image}}' 2>/dev/null || true)"
-  spec_digest="$(docker image inspect "$spec_id" --format '{{.Id}}' 2>/dev/null || true)"
-  run_cid="$(docker ps -q --filter "label=com.docker.swarm.service.name=$svc" | head -1 || true)"
-  run_digest=""
-  [[ -n "$run_cid" ]] && run_digest="$(docker inspect "$run_cid" --format '{{.Image}}' 2>/dev/null || true)"
-  if [[ -n "$spec_digest" && -n "$run_digest" && "$spec_digest" != "$run_digest" ]]; then
-    warn "$svc is running a DIFFERENT image than its spec (spec ${spec_digest:7:12} / running ${run_digest:7:12}) — an old task is still serving"
-    FAILED=1
-  fi
-done < <(docker stack services "$STACK_NAME" --format '{{.Name}} {{.Replicas}} {{.Image}}' 2>/dev/null \
-         | awk '{split($2,r,"/"); print $1, r[1], r[2], $3}')
-[[ "$FAILED" == 0 ]] || die "stack is not fully converged — see the warnings above"
+  sleep 5
+done
 info "all services converged on their spec images"
 
 ./docker/prove.sh "$CID" || die "prove.sh reported failures — the deploy is NOT proven"

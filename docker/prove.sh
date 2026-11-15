@@ -310,9 +310,17 @@ else
   if [[ -z "$want" ]]; then
     bad "no local SCTP ports found in $booted_stack (the file ussd.map.config-file selects) — cannot prove the wire"
   else
-    missing=""
-    for p in $want; do
-      [[ " $have " == *" $p "* ]] || missing="$missing $p"
+    # The SS7 stack binds its endpoints while the gateway boots; right after a deploy give it
+    # up to 60 s before calling a port missing.
+    for _ in $(seq 1 12); do
+      missing=""
+      for p in $want; do
+        [[ " $have " == *" $p "* ]] || missing="$missing $p"
+      done
+      [[ -z "$missing" ]] && break
+      sleep 5
+      eps="$(cat /proc/net/sctp/eps 2>/dev/null || docker exec "$CONTAINER" cat /proc/net/sctp/eps 2>/dev/null || true)"
+      have="$(awk 'NR>1 && $6!="" {print $6}' <<<"$eps" | sort -un | tr '\n' ' ')"
     done
     if [[ -z "$missing" ]]; then
       ok "kernel SCTP endpoints listening on:$want (from $booted_stack, the file that boots)"
@@ -420,6 +428,16 @@ code="$(curl -sS --connect-timeout 3 --max-time 10 -o /dev/null -w '%{http_code}
 # in the repo: the TTL is read from system.tables, the bind from the kernel, the flow from
 # the gateway's own counters.
 head_ "CDR store: ClickHouse"
+# The gateway creates the schema when its ClickHouse RA activates and retries with a backoff of
+# up to 30 s while ClickHouse is still starting. Right after a deploy, give that 90 s before
+# judging; a gateway that has been up for a while answers on the first read.
+if [[ -s "$TMPD/status.json" ]] && ! grep -q '"cdr.clickhouse.schemaReady" *: *true' "$TMPD/status.json"; then
+  for _ in $(seq 1 18); do
+    sleep 5
+    admin_get /admin/status.json "$TMPD/status.json" >/dev/null || true
+    grep -q '"cdr.clickhouse.schemaReady" *: *true' "$TMPD/status.json" && break
+  done
+fi
 if [[ -s "$TMPD/status.json" ]]; then
   python3 - "$TMPD/status.json" > "$TMPD/ch-status.txt" <<'PY' || true
 import json, sys
