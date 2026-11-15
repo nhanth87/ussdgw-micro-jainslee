@@ -835,7 +835,7 @@ if [[ "$STANDBY" == 1 ]]; then
     done
     info "$svc running"
   done
-  code="$(curl -sS -o /dev/null -w '%{http_code}' http://127.0.0.1/healthz 2>/dev/null || true)"
+  code="$(curl -sS --max-time 5 -o /dev/null -w '%{http_code}' http://127.0.0.1/healthz 2>/dev/null || true)"
   [[ "$code" == 200 ]] && info "nginx /healthz 200" || die "nginx /healthz returned '$code'"
   step "deployed: $STACK_NAME :$TAG as USSDGW STANDBY (GMLC primary on :8088)"
   info "switch roles: ./docker/switch-primary.sh ussdgw"
@@ -865,7 +865,7 @@ info "container $CID"
 # to look like "not up" and the loop below spun until READY_TIMEOUT on a healthy
 # gateway. 000 (no TCP) is the only "not answering".
 deadline=$(( $(date +%s) + READY_TIMEOUT ))
-until [[ "$(curl -sS -o /dev/null -w '%{http_code}' "http://127.0.0.1:8088/admin/status.json" 2>/dev/null)" != 000 ]]; do
+until [[ "$(curl -sS --max-time 5 -o /dev/null -w '%{http_code}' "http://127.0.0.1:8088/admin/status.json" 2>/dev/null)" != 000 ]]; do
   (( $(date +%s) < deadline )) || {
     echo "--- last 60 log lines ---" >&2
     docker logs --tail 60 "$CID" >&2 2>&1 || true

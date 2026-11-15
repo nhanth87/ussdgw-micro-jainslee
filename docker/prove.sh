@@ -466,11 +466,30 @@ else
   [[ "$mnt" == volume* || "$mnt" == bind* ]] \
     && ok "ClickHouse data on a persistent mount ($mnt)" \
     || bad "ClickHouse /var/lib/clickhouse is not on a persistent mount — CDR dies with the container"
-  wild="$(docker exec "$ch_cid" sh -c 'awk "NR>1 && \$4==\"0A\" {print \$2}" /proc/net/tcp /proc/net/tcp6' \
-          | grep -v -E '^(0100007F|00000000000000000000000001000000):' || true)"
-  [[ -z "$wild" ]] \
-    && ok "ClickHouse listens on loopback only (kernel sockets of the running task)" \
-    || bad "ClickHouse listens beyond loopback on the carrier host: $wild"
+  # The task runs on the host network, so /proc/net/tcp inside it is the WHOLE host's table
+  # (sshd, swarm, nginx…). Only sockets owned by the container's own processes count: match the
+  # socket inodes in /proc/<pid>/fd. Reading another process's fd links needs its uid (no
+  # ptrace cap in the container), so run as the clickhouse-server uid. digicom-nb 2026-11-15: the
+  # host-wide version failed the GMLC cutover on sshd/nginx/swarm ports and forced a rollback.
+  ch_uid="$(docker exec "$ch_cid" sh -c 'for p in /proc/[0-9]*; do
+      case "$(tr "\0" " " < "$p/cmdline" 2>/dev/null)" in
+        *clickhouse*server*) awk "/^Uid:/{print \$2; exit}" "$p/status"; break ;;
+      esac; done' 2>/dev/null || true)"
+  ch_listen="$(docker exec -u "${ch_uid:-0}" "$ch_cid" sh -c '
+      inodes="$(for fd in /proc/[0-9]*/fd/*; do l="$(readlink "$fd" 2>/dev/null)"
+                  case "$l" in socket:*) l="${l#socket:[}"; echo "${l%]}";; esac; done | sort -u | tr "\n" " ")"
+      [ -n "$inodes" ] || exit 3
+      awk -v ino="$inodes" "BEGIN{n=split(ino,a,\" \"); for(i=1;i<=n;i++) want[a[i]]=1}
+           FNR>1 && \$4==\"0A\" && (\$10 in want) {print \$2}" /proc/net/tcp /proc/net/tcp6' 2>/dev/null)" \
+    || ch_listen="UNREADABLE"
+  wild="$(grep -v -E '^(0100007F|00000000000000000000000001000000):' <<<"$ch_listen" | grep . || true)"
+  if [[ "$ch_listen" == "UNREADABLE" || -z "$ch_listen" ]]; then
+    bad "cannot read ClickHouse's own listening sockets (uid ${ch_uid:-?}) — loopback-only is UNPROVEN"
+  elif [[ -z "$wild" ]]; then
+    ok "ClickHouse listens on loopback only ($(tr '\n' ' ' <<<"$ch_listen"| sed 's/ $//'); its own sockets, not the host's)"
+  else
+    bad "ClickHouse listens beyond loopback on the carrier host: $(tr '\n' ' ' <<<"$wild")"
+  fi
 fi
 
 # --- 5. runtime files the operator depends on -----------------------------------
