@@ -575,7 +575,25 @@ stage_live_snapshot() {
   [[ -n "$dir" ]] || return 1
   [[ -r "$dir/application.properties" ]] && return 0        # readable directly: no copy
   cid="$(docker ps -q --filter "name=${STACK_NAME:-ussdgw}_ussdgw" | head -1 || true)"
-  [[ -n "$cid" ]] || { warn "cannot read $dir/application.properties and no running ${STACK_NAME:-ussdgw}_ussdgw container to read it through"; return 1; }
+  if [[ -z "$cid" ]]; then
+    # First deploy (or the stack is down): no gateway to read through yet. Read the operator
+    # tree with sudo -n — the same passwordless sudo host-prep.sh uses — into a private
+    # snapshot (0700, removed on exit). digicom-nb 2026-11-15: without this the first deploy
+    # after the GMLC cutover died here and the cutover rolled back.
+    if sudo -n test -r "$dir/application.properties" 2>/dev/null; then
+      SNAP="$(mktemp -d "${TMPDIR:-/tmp}/ussdgw-cfgsnap.XXXXXX")" || return 1
+      chmod 0755 "$SNAP"
+      dst="$SNAP/configs"; mkdir -p "$dst"; chmod 0700 "$dst"
+      if sudo -n cp -a "$dir/." "$dst/" && sudo -n chown -R "$(id -u):$(id -g)" "$dst" \
+         && chmod -R u+rwX "$dst" && [[ -f "$dst/application.properties" ]]; then
+        info "staged a private snapshot of $dir via sudo -n (no running gateway to read it through)"
+        return 0
+      fi
+      sudo -n rm -rf "$SNAP" 2>/dev/null || rm -rf "$SNAP"; SNAP=""
+    fi
+    warn "cannot read $dir/application.properties and no running ${STACK_NAME:-ussdgw}_ussdgw container to read it through"
+    return 1
+  fi
   SNAP="$(mktemp -d "${TMPDIR:-/tmp}/ussdgw-cfgsnap.XXXXXX")" || return 1
   chmod 0755 "$SNAP"
   dst="$SNAP/configs"; mkdir -p "$dst"; chmod 0755 "$dst"
