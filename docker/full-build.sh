@@ -193,13 +193,22 @@ USSDGW_IMAGE="ussdgw:$TAG"; NGINX_IMAGE="ussdgw-nginx:$TAG"; POSTGRES_IMAGE="uss
 CLICKHOUSE_IMAGE="ussdgw-clickhouse:$TAG"
 export USSDGW_IMAGE NGINX_IMAGE POSTGRES_IMAGE CLICKHOUSE_IMAGE
 if [[ -w "$ENV_FILE" && "$MODE_CHECK" == 0 ]]; then
-  tmp="$(mktemp)"
-  sed -e "s|^USSDGW_IMAGE=.*|USSDGW_IMAGE=$USSDGW_IMAGE|" \
-      -e "s|^NGINX_IMAGE=.*|NGINX_IMAGE=$NGINX_IMAGE|" \
-      -e "s|^POSTGRES_IMAGE=.*|POSTGRES_IMAGE=$POSTGRES_IMAGE|" \
-      -e "s|^CLICKHOUSE_IMAGE=.*|CLICKHOUSE_IMAGE=$CLICKHOUSE_IMAGE|" "$ENV_FILE" > "$tmp"
-  cat "$tmp" > "$ENV_FILE"; rm -f "$tmp"
-  info "$ENV_FILE pinned to :$TAG"
+  # The example ships these lines commented out (#USSDGW_IMAGE=…). Replace a live or commented
+  # line, append a missing one — before this, a commented line made the "pinned" message false.
+  for kv in "USSDGW_IMAGE=$USSDGW_IMAGE" "NGINX_IMAGE=$NGINX_IMAGE" \
+            "POSTGRES_IMAGE=$POSTGRES_IMAGE" "CLICKHOUSE_IMAGE=$CLICKHOUSE_IMAGE"; do
+    k="${kv%%=*}"
+    if grep -qE "^#?[[:space:]]*${k}=" "$ENV_FILE"; then
+      tmp="$(mktemp)"
+      sed -E "s|^#?[[:space:]]*${k}=.*|${kv}|" "$ENV_FILE" > "$tmp"
+      cat "$tmp" > "$ENV_FILE"; rm -f "$tmp"
+    else
+      printf '%s\n' "$kv" >> "$ENV_FILE"
+    fi
+  done
+  grep -q "^USSDGW_IMAGE=$USSDGW_IMAGE\$" "$ENV_FILE" \
+    && info "$ENV_FILE pinned to :$TAG" \
+    || warn "could not pin $ENV_FILE to :$TAG — a manual deploy must export the *_IMAGE vars itself"
 fi
 
 # --- gateway role: GMLC primary ⇒ USSDGW standby ------------------------------------
@@ -911,6 +920,14 @@ until converged; do
   sleep 5
 done
 info "all services converged on their spec images"
+
+# Prove the container that runs NOW. The CID found right after `docker stack deploy` is, on an
+# update, the OLD task (stop-first has not stopped it yet); by now it is gone and every
+# `docker exec` in prove.sh fails (digicom-nb 2026-11-15: "admin key: none of the candidates",
+# rolled back a healthy update). After convergence the service runs exactly the spec image.
+CID="$(docker ps -q --filter "label=com.docker.swarm.service.name=${STACK_NAME:-ussdgw}_ussdgw" | head -1 || true)"
+[[ -n "$CID" ]] || die "converged, yet no running ${STACK_NAME:-ussdgw}_ussdgw container to prove"
+info "proving container ${CID:0:12} ($(docker inspect --format '{{.Config.Image}}' "$CID" 2>/dev/null))"
 
 ./docker/prove.sh "$CID" || die "prove.sh reported failures — the deploy is NOT proven"
 
