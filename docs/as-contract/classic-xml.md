@@ -10,6 +10,7 @@ RestLink USSD GW speaks **dual-mode** HTTP AS wire:
 Resolve format: tenant `http_as_wire_format` (set from **Routing** `HTTP AS wire` or Tenants)
 → global `ussd.as.http.wire-format` → **XML**.  
 Samples + Content-Type: [`map2map-as-xml.md`](map2map-as-xml.md).  
+Worked multi-level example (MAP2MAP + Java servlet `HttpSession`): [`multi-level-ussd.md`](multi-level-ussd.md).  
 Detail: [`openapi-as.yaml`](openapi-as.yaml) (JSON schemas) · this file (XML).
 
 Classic oracle: WildFly `ussdgw` `XmlMAPDialog` / `EventsSerializeFactory` and

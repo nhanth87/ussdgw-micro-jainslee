@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Demo Application Server (AS) for ussdgw: a multi-level USSD menu on a plain Jakarta
+     Servlet that keeps the menu state in the servlet HttpSession (JSESSIONID), the way AS
+     applications behind the classic ussdgateway did. Not part of the gateway build. -->
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+    <groupId>demo.ussd</groupId>
+    <artifactId>as-java-servlet</artifactId>
+    <version>1.0.0</version>
+    <packaging>jar</packaging>
+
+    <properties>
+        <maven.compiler.release>21</maven.compiler.release>
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+        <jetty.version>12.1.15</jetty.version>
+    </properties>
+
+    <dependencies>
+        <!-- Embedded Jetty + the Jakarta Servlet 6 (EE10) API: HttpServlet, HttpSession. -->
+        <dependency>
+            <groupId>org.eclipse.jetty.ee10</groupId>
+            <artifactId>jetty-ee10-servlet</artifactId>
+            <version>${jetty.version}</version>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <finalName>as-java-servlet</finalName>
+        <plugins>
+            <!-- One runnable jar: java -jar target/as-java-servlet.jar 8090 -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-shade-plugin</artifactId>
+                <version>3.6.2</version>
+                <executions>
+                    <execution>
+                        <phase>package</phase>
+                        <goals><goal>shade</goal></goals>
+                        <configuration>
+                            <createDependencyReducedPom>false</createDependencyReducedPom>
+                            <transformers>
+                                <transformer implementation="org.apache.maven.plugins.shade.resource.ManifestResourceTransformer">
+                                    <mainClass>demo.ussd.DemoAsServer</mainClass>
+                                </transformer>
+                                <transformer implementation="org.apache.maven.plugins.shade.resource.ServicesResourceTransformer"/>
+                            </transformers>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+        </plugins>
+    </build>
+</project>
