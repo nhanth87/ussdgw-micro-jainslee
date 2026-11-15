@@ -83,6 +83,9 @@
         <dependency><groupId>com.microjainslee</groupId><artifactId>ra-http-client</artifactId><version>${microjainslee.version}</version></dependency>
         <dependency><groupId>com.microjainslee</groupId><artifactId>ra-grpc-client</artifactId><version>${microjainslee.version}</version></dependency>
         <dependency><groupId>com.microjainslee</groupId><artifactId>ra-grpc-server</artifactId><version>${microjainslee.version}</version></dependency>
+        <!-- Shared ClickHouse store RA: HTTP transport + batched spooling writer + 3-port endpoint.
+             Row/NDJSON/DDL stay app-side (cdr.clickhouse). -->
+        <dependency><groupId>com.microjainslee</groupId><artifactId>ra-clickhouse</artifactId><version>${microjainslee.version}</version></dependency>
         <dependency>
             <groupId>org.restcomm.smpp</groupId>
             <artifactId>ch-smpp</artifactId>

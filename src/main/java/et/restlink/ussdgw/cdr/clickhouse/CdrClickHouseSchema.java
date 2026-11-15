@@ -1,5 +1,7 @@
 package et.restlink.ussdgw.cdr.clickhouse;
 
+import com.microjainslee.ra.clickhouse.ClickHouseHttp;
+
 import java.io.IOException;
 import java.util.List;
 import java.util.Map;

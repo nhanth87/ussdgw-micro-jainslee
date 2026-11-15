@@ -2,9 +2,11 @@ package et.restlink.ussdgw.cdr.clickhouse;
 
 import com.microjainslee.api.RaCommandPort;
 import com.microjainslee.core.MicroSleeContainer;
+import com.microjainslee.ra.clickhouse.ClickHouseCommand;
+import com.microjainslee.ra.clickhouse.ClickHouseHttp;
+import com.microjainslee.ra.clickhouse.ClickHouseRaEndpoint;
+import com.microjainslee.ra.clickhouse.ClickHouseWriter;
 import et.restlink.ussdgw.persist.CdrEntity;
-import et.restlink.ussdgw.ra.cdr.CdrClickHouseRaEndpoint;
-import et.restlink.ussdgw.ra.cdr.CdrStoreCommand;
 import io.quarkus.runtime.ShutdownEvent;
 import io.quarkus.runtime.StartupEvent;
 import jakarta.enterprise.context.ApplicationScoped;
@@ -31,8 +33,10 @@ import java.util.function.Predicate;
  *
  * <ul>
  *   <li><b>Write path</b> (called from SBBs through {@code CdrService}): a
- *       {@link CdrStoreCommand.Record} on the container's {@link RaCommandPort} for
- *       {@code cdr-clickhouse-ra}. All ClickHouse I/O lives in that RA (3-port contract).</li>
+ *       {@link ClickHouseCommand.Store} on the container's {@link RaCommandPort} for
+ *       {@code cdr-clickhouse-ra}. All ClickHouse I/O lives in that shared RA
+ *       ({@code com.microjainslee:ra-clickhouse}, 3-port contract). What a row contains
+ *       stays here ({@link CdrNdjson} codec + {@link CdrClickHouseSchema} DDL).</li>
  *   <li><b>Read path</b> (admin plane only, never an SBB): {@link CdrClickHouseReader}.</li>
  * </ul>
  *
@@ -42,6 +46,9 @@ import java.util.function.Predicate;
 @ApplicationScoped
 public class CdrClickHouseSink {
     private static final Logger LOG = LogManager.getLogger(CdrClickHouseSink.class);
+
+    /** RA instance name — kept stable: {@code /admin/status.json} and logs key on it. */
+    public static final String RA_NAME = "cdr-clickhouse-ra";
 
     @Inject MicroSleeContainer container;
 
@@ -79,7 +86,7 @@ public class CdrClickHouseSink {
     @ConfigProperty(name = "ussd.cdr.clickhouse.node-id")
     Optional<String> nodeId;
 
-    private volatile CdrClickHouseRaEndpoint endpoint;
+    private volatile ClickHouseRaEndpoint<CdrEntity> endpoint;
     private volatile RaCommandPort commandPort;
     private volatile CdrClickHouseReader reader;
     private int effectiveRetention;
@@ -100,9 +107,16 @@ public class CdrClickHouseSink {
         String table = db + "." + CdrClickHouseSchema.TABLE;
         String node = nodeId.filter(s -> !s.isBlank())
                 .orElseGet(() -> Optional.ofNullable(System.getenv("HOSTNAME")).orElse("ussdgw"));
-        CdrClickHouseWriter writer = new CdrClickHouseWriter(ch, table, queueCap, batchSize, flushMs,
-                Path.of(spoolDir), spoolMaxMb * 1024L * 1024L, node);
-        CdrClickHouseRaEndpoint ep = new CdrClickHouseRaEndpoint(ch, db, effectiveRetention, writer);
+        int retention = effectiveRetention;
+        ClickHouseWriter<CdrEntity> writer = new ClickHouseWriter<>(ch, table, queueCap, batchSize,
+                flushMs, Path.of(spoolDir), spoolMaxMb * 1024L * 1024L, node, CdrNdjson::toNdjson);
+        ClickHouseRaEndpoint<CdrEntity> ep = new ClickHouseRaEndpoint<>(RA_NAME, ch, writer, schema -> {
+            schema.execute(CdrClickHouseSchema.createDatabase(db));
+            schema.execute(CdrClickHouseSchema.createTable(db, retention));
+            if (CdrClickHouseSchema.ensureTtl(schema, db, retention)) {
+                LOG.info("[cdr-clickhouse] TTL set to {} months", retention);
+            }
+        });
         container.registerRa(ep, ep);
         endpoint = ep;
         // The container's (observed) port, not the endpoint itself: RA command metrics count it.
@@ -114,7 +128,7 @@ public class CdrClickHouseSink {
     }
 
     void onStop(@Observes ShutdownEvent ev) {
-        CdrClickHouseRaEndpoint ep = endpoint;
+        ClickHouseRaEndpoint<CdrEntity> ep = endpoint;
         if (ep != null) {
             ep.deactivate();  // idempotent; flushes the queue to ClickHouse or the spool
         }
@@ -142,13 +156,13 @@ public class CdrClickHouseSink {
     public void offer(CdrEntity row) {
         RaCommandPort port = commandPort;
         if (port != null && row != null) {
-            port.sendCommand(new CdrStoreCommand.Record(row));
+            port.sendCommand(new ClickHouseCommand.Store<>(row));
         }
     }
 
     /** True when admin reads should come from ClickHouse. */
     public boolean readable() {
-        CdrClickHouseRaEndpoint ep = endpoint;
+        ClickHouseRaEndpoint<CdrEntity> ep = endpoint;
         return enabled && readEnabled && ep != null && ep.isSchemaReady();
     }
 
@@ -163,11 +177,11 @@ public class CdrClickHouseSink {
     public Map<String, Object> status() {
         Map<String, Object> m = new LinkedHashMap<>();
         m.put("cdr.clickhouse.enabled", enabled());
-        CdrClickHouseRaEndpoint ep = endpoint;
+        ClickHouseRaEndpoint<CdrEntity> ep = endpoint;
         if (ep == null) {
             return m;
         }
-        CdrClickHouseWriter w = ep.writer();
+        ClickHouseWriter<CdrEntity> w = ep.writer();
         m.put("cdr.clickhouse.ra", ep.getRaName() + (ep.isActive() ? " ACTIVE" : " INACTIVE"));
         m.put("cdr.clickhouse.schemaReady", ep.isSchemaReady());
         m.put("cdr.clickhouse.retentionMonths", effectiveRetention);

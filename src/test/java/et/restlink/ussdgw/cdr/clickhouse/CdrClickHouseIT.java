@@ -1,5 +1,6 @@
 package et.restlink.ussdgw.cdr.clickhouse;
 
+import com.microjainslee.ra.clickhouse.ClickHouseHttp;
 import et.restlink.ussdgw.persist.CdrEntity;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
@@ -55,7 +56,7 @@ class CdrClickHouseIT {
         String table = DB + "." + CdrClickHouseSchema.TABLE;
         Instant now = Instant.now();
         String corr = "it-" + UUID.randomUUID();
-        byte[] nd = CdrClickHouseWriter.toNdjson(List.of(
+        byte[] nd = CdrNdjson.toNdjson(List.of(
                 row(corr, "BEGIN", null, now.minusMillis(20)),
                 row(corr, "END", "ቀሪ ሂሳብዎ 25.50 ብር ነው። €{}", now)), "it");
         ch.insertJsonEachRow(table, nd, "tok-1");

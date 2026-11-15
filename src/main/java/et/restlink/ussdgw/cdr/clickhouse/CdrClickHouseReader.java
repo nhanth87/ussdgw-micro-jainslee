@@ -2,6 +2,7 @@ package et.restlink.ussdgw.cdr.clickhouse;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.microjainslee.ra.clickhouse.ClickHouseHttp;
 import et.restlink.ussdgw.cdr.CdrFileLedger;
 import et.restlink.ussdgw.persist.CdrEntity;
 
