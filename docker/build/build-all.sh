@@ -355,7 +355,10 @@ pom_prop() { grep -m1 -oE "<$2>[^<]+" "$1" 2>/dev/null | cut -d'>' -f2 || true; 
      Update ARG SS7_VERSION in docker/build/Dockerfile to match sources.lock."
   fi
   # The installed artifacts must match too, not just the poms.
-  for gav in "com.microjainslee:jainslee-core" "com.microjainslee:ra-jss7"; do
+  # Every micro-jainslee artifact ussdgw links against: a stale jain-slee pin that predates one
+  # of them must fail here, by name, not later as an unresolved dependency in the app build.
+  for gav in "com.microjainslee:jainslee-core" "com.microjainslee:ra-jss7" \
+             "com.microjainslee:ra-http-client" "com.microjainslee:ra-clickhouse"; do
     d="$M2/$(echo "${gav%:*}" | tr '.' '/')/${gav#*:}/$got_mj"
     [[ -d "$d" ]] || die "$gav:$got_mj is not installed in $M2 — the reactor did not build it"
   done

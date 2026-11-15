@@ -25,7 +25,7 @@ sctp|git@github.com-digicom:digicom-et/sctp.git|fix/2.27.33-stale-channel|3947dd
 
 jss7|git@github.com-digicom:digicom-et/jss7.git|j25|59b800e99a19fb729664bf380b0ec63cc129a337
 
-jain-slee|git@github.com-digicom:digicom-et/jain-slee.git|micro-jainslee-2|67690096a1f5e902ecdb07a85b8c7b598775b3d8
+jain-slee|git@github.com-digicom:digicom-et/jain-slee.git|micro-jainslee-2|475dfbf06a971bf812982dbda33dbc59712960e6
 
 corsac-diameter|git@github.com-digicom:digicom-et/corsac-diameter.git|diameter-parent-10.0.0-41|0bc4629186a7153ab365568c3c8d7e340c77d862
 
