@@ -56,6 +56,7 @@ info() { echo "full-build: $*"; }
 warn() { echo "full-build: WARN: $*" >&2; }
 step() { echo; echo "=== $* ==="; }
 
+DEPLOY_BLOCKED=""
 SNAP=""   # read-only snapshot of the live config; empty until one is staged
 # No options (owner decision 2026-11-15: "chỉ cần chạy full-build.sh là xong").
 # The MODE_* switches stay as constants so every guarded step below keeps its meaning.
@@ -287,11 +288,22 @@ elif [[ -z "$STACK_TASKS" ]]; then
   [[ "$STANDBY" == 1 ]] && PORTS_RE=':(80|443|5432)$'   # :8088 belongs to the GMLC primary
   BUSY="$(ss -lnt 2>/dev/null | awk 'NR>1{print $4}' | grep -oE "$PORTS_RE" | sort -u | tr '\n' ' ' || true)"
   if [[ -n "${BUSY// /}" ]]; then
-    die "no $STACK_NAME stack is deployed but these ports are already held:$BUSY
-     A host service is still running. Ordered rollback/start:
-       docker stack rm $STACK_NAME; sudo systemctl start postgresql; sudo systemctl start nginx"
+    # Host services (systemd GMLC / ussdgw, host PostgreSQL, host nginx) still hold the ports.
+    # Stopping them is a carrier cutover, never something this script decides. Build and prove
+    # everything anyway; stop before the deploy and say exactly what is in the way.
+    HOLDERS="$(ss -lntpH 2>/dev/null | awk '{print $4, $6}' | grep -E "${PORTS_RE%\$} " | sort -u || true)"
+    SCTP_HOLD="$(ss -lnp --sctp 2>/dev/null | awk 'NR>1{print $4}' | sort -u | tr '\n' ' ' || true)"
+    DEPLOY_BLOCKED="ports already held by host services:$BUSY
+$(printf '       %s\n' "$HOLDERS")
+       SCTP listeners: ${SCTP_HOLD:-none}
+     Cutover (operator decision — it takes the running gateway off the air):
+       sudo systemctl stop gmlc ussdgw nginx postgresql   # whichever hold the ports above
+       ./docker/full-build.sh
+     Rollback: docker stack rm $STACK_NAME; sudo systemctl start postgresql nginx gmlc"
+    warn "deploy will be SKIPPED — $DEPLOY_BLOCKED"
+  else
+    info "ports 80/443/5432/8088 free (first deploy)"
   fi
-  info "ports 80/443/5432/8088 free (first deploy)"
 else
   info "stack '$STACK_NAME' already deployed — this run is an update"
 fi
@@ -438,6 +450,11 @@ fi
 if [[ "$MODE_DEPLOY" == 0 && "$MODE_CHECK" == 0 ]]; then
   step "done — images built and asserted, nothing deployed (--build-only)"
   exit 0
+fi
+if [[ -n "${DEPLOY_BLOCKED:-}" ]]; then
+  step "built and proven: images :$TAG — NOT deployed"
+  echo "full-build: the stack was not deployed: $DEPLOY_BLOCKED" >&2
+  exit 3
 fi
 
 # ==================================================================================
