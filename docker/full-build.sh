@@ -48,13 +48,58 @@ cd "$REPO_ROOT"
 # fail fast: `set -e` + a non-matching grep inside `$( )` exits before any message
 # (that was a real defect in entrypoint.sh step 4b). So the trap prints the line, and a
 # second EXIT trap removes the config snapshot — which holds a 0600 datasource password.
-trap 'echo "full-build: FAILED at line $LINENO (exit $?)" >&2' ERR
-trap '[[ -n "${SNAP:-}" && -d ${SNAP:-} ]] && rm -rf "$SNAP"; :' EXIT
+trap 'spin_stop 2>/dev/null; echo "full-build: FAILED at line $LINENO (exit $?)" >&2' ERR
+trap 'spin_stop 2>/dev/null; [[ -n "${SNAP:-}" && -d ${SNAP:-} ]] && rm -rf "$SNAP"; :' EXIT
 
 die()  { echo "full-build: ERROR: $*" >&2; exit 1; }
 info() { echo "full-build: $*"; }
 warn() { echo "full-build: WARN: $*" >&2; }
 step() { echo; echo "=== $* ==="; }
+
+# --- live progress: spinner + what-is-happening --------------------------------
+# A full run is silent for 10-25 minutes (Maven, image builds, waits). The spinner
+# shows WHAT is running right now plus elapsed time; on a non-TTY (piped through
+# tee into the deploy log) it degrades to plain start/finish lines so the log stays
+# clean grep-able text instead of \r control bytes.
+_SPIN_PID=""; _SPIN_MSG=""; _SPIN_T0=0
+spin_start() {
+  _SPIN_MSG="$1"; _SPIN_T0="$(date +%s)"
+  [[ -t 1 ]] || { echo "full-build: ▶ $1"; return 0; }
+  local frames='⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏'
+  case "${LC_ALL:-${LANG:-}}" in *UTF-8*|*utf8*) ;; *) frames='|/-\' ;; esac
+  ( n="${#frames}"; i=0
+    while :; do
+      printf '\rfull-build: [%s] %s (%ds elapsed)…' "${frames:i%n:1}" "$_SPIN_MSG" "$(( $(date +%s) - _SPIN_T0 ))"
+      i=$(( i + 1 )); sleep 0.5
+    done ) &
+  _SPIN_PID=$!
+}
+spin_stop() {
+  [[ -n "${_SPIN_PID:-}" ]] || return 0
+  kill "$_SPIN_PID" 2>/dev/null || true
+  wait "$_SPIN_PID" 2>/dev/null || true
+  _SPIN_PID=""
+  [[ -t 1 ]] && printf '\r%*s\r' 78 ''
+  return 0
+}
+spin_elapsed() { echo "$(( $(date +%s) - ${_SPIN_T0:-$(date +%s)} ))s"; }
+# run_spin "what" -- cmd args... : streams the command's own output, animates while
+# it runs (TTY) or prints start/finish lines (log), then reports ✔/✘ + elapsed.
+# The return code is the command's; call sites keep their `|| die` semantics.
+run_spin() {
+  local msg="$1"; shift
+  [[ "${1:-}" == "--" ]] && shift
+  spin_start "$msg"
+  local rc=0
+  "$@" || rc=$?
+  spin_stop
+  if (( rc == 0 )); then
+    echo "full-build: ✔ $msg ($(spin_elapsed))"
+  else
+    echo "full-build: ✘ $msg FAILED after $(spin_elapsed)" >&2
+  fi
+  return "$rc"
+}
 
 DEPLOY_BLOCKED=""
 SNAP=""   # read-only snapshot of the live config; empty until one is staged
@@ -73,7 +118,7 @@ fi
 # the source chain is moved by update-sources.sh, which re-pins SHAs and syncs every version.
 if [[ "$MODE_LATEST" == 1 ]]; then
   if git rev-parse --abbrev-ref --symbolic-full-name '@{u}' >/dev/null 2>&1; then
-    if timeout 120 git pull -q --ff-only; then
+    if run_spin "latest code: git pull --ff-only" -- timeout 120 git pull -q --ff-only; then
       info "latest code: $(git rev-parse --abbrev-ref HEAD) fast-forwarded to $(git rev-parse --short HEAD)"
     else
       warn "latest code: cannot pull this repo (no credentials / diverged) — building $(git rev-parse --short HEAD)"
@@ -81,7 +126,8 @@ if [[ "$MODE_LATEST" == 1 ]]; then
   else
     warn "latest code: $(git rev-parse --abbrev-ref HEAD) has no upstream — building $(git rev-parse --short HEAD)"
   fi
-  SOURCE_ROOT="${SOURCE_ROOT:-${BUILD_ROOT:-/srv/ussdgw-build}/src}" ./docker/build/update-sources.sh \
+  run_spin "latest code: sync source chain (update-sources.sh)" -- env \
+    "SOURCE_ROOT=${SOURCE_ROOT:-${BUILD_ROOT:-/srv/ussdgw-build}/src}" ./docker/build/update-sources.sh \
     || die "latest code: update-sources.sh failed"
   git --no-pager diff --stat -- docker/sources.lock docker/build/fetch-sources-digicom.sh pom.xml docker/build/Dockerfile || true
 fi
@@ -96,6 +142,7 @@ if [[ -n "$(git status --porcelain 2>/dev/null || true)" ]]; then
      (unreachable: full-build.sh always builds the working tree; the tag then becomes ${GIT_SHA}-dirty)."
 fi
 TAG="${TAG:-${GIT_SHA}${DIRTY}}"
+info "run plan: latest code → 1/6 build+tests → 2/6 images :$TAG → 3/6 config → 4/6 secrets → 5/6 deploy → 6/6 wait+prove"
 
 # --- already built? reuse instead of rebuilding ---------------------------------------
 # A clean tag names exactly one commit, and sources.lock (committed) names exactly one source
@@ -409,7 +456,7 @@ if [[ "$MODE_FETCH" == 1 ]]; then
     || die "builder image build failed (docker/build/Dockerfile)"
   # fetch-sources.sh verifies every SHA against sources.lock and is fatal on mismatch,
   # so a moved branch cannot silently change what we build.
-  docker run --rm --user "$(id -u):$(id -g)" -e HOME=/tmp \
+  run_spin "sources: fetch at pinned SHAs (fetch-sources.sh)" -- docker run --rm --user "$(id -u):$(id -g)" -e HOME=/tmp \
     -e SOURCE_MODE="$SOURCE_MODE" -e SRC_DIR=/src ${GH_TOKEN:+-e GH_TOKEN} \
     -v "$SOURCE_ROOT:/src" ussdgw-builder:latest fetch-sources.sh
   # The latest-code step ran before these trees existed, so it could not read versions from
@@ -429,8 +476,9 @@ if [[ "$MODE_BUILD" == 1 ]]; then
   # RUN_TESTS defaults to 0 inside run-build.sh. That default is why "the build
   # passed" once meant "no test ever ran". This orchestrator opts in explicitly and
   # prints the evidence, because the counts live in a log file, not on stdout.
-  RUN_TESTS="$MODE_TESTS" SOURCE_MODE="$SOURCE_MODE" SOURCE_ROOT="$SOURCE_ROOT" \
-  BUILD_ROOT="$BUILD_ROOT" USSDGW_SRC="$REPO_ROOT" OUT="$OUT" \
+  run_spin "build from source + tests (sctp → jss7 → corsac → jain-slee → ussdgw)" -- env \
+    "RUN_TESTS=$MODE_TESTS" "SOURCE_MODE=$SOURCE_MODE" "SOURCE_ROOT=$SOURCE_ROOT" \
+    "BUILD_ROOT=$BUILD_ROOT" "USSDGW_SRC=$REPO_ROOT" "OUT=$OUT" \
     ./docker/build/run-build.sh
   TESTLOG="$OUT/logs/ussdgw-test.log"
   if [[ "$MODE_TESTS" == 1 ]]; then
@@ -459,16 +507,16 @@ fi
 
 # ==================================================================================
 if [[ "$MODE_BUILD" == 1 || "$MODE_DEPLOY" == 1 ]]; then
-  step "2/6 stage dist + build the three images under tag $TAG"
+  step "2/6 stage dist + build the images under tag $TAG"
   # ==================================================================================
   if [[ "$MODE_BUILD" == 1 ]]; then
     # stage-dist.sh is a MIRROR (rm -rf then copy). Hand-copying merges, and a merged
     # lib/ ships two versions of one artifact — a classpath conflict resolved at
     # runtime by whichever class sorts first.
-    ./docker/build/stage-dist.sh
+    run_spin "stage dist (mirror rm -rf + copy)" -- ./docker/build/stage-dist.sh
     # TAG must be passed: build-images.sh otherwise recomputes it WITHOUT the -dirty suffix, and
     # every later step (provenance, --skip-build, deploy) looks for an image that does not exist.
-    TAG="$TAG" ./docker/build/build-images.sh
+    run_spin "build 4 images :$TAG (ussdgw, nginx, postgres, clickhouse)" -- env "TAG=$TAG" ./docker/build/build-images.sh
   else
     for img in ussdgw ussdgw-nginx ussdgw-postgres ussdgw-clickhouse; do
       docker image inspect "$img:$TAG" >/dev/null 2>&1 \
@@ -819,7 +867,8 @@ if [[ "$MODE_CHECK" == 1 ]]; then
     docker image inspect "$img" >/dev/null 2>&1 && info "  image present: $img" || warn "  image MISSING: $img"
   done
 else
-  docker stack deploy --resolve-image always -c ./docker/stack.yml -c "$OVERLAY" "$STACK_NAME"
+  run_spin "deploy stack $STACK_NAME (profile $DEPLOY_PROFILE, images :$TAG)" -- \
+    docker stack deploy --resolve-image always -c ./docker/stack.yml -c "$OVERLAY" "$STACK_NAME"
 fi
 
 # ==================================================================================
@@ -841,9 +890,10 @@ if [[ "$STANDBY" == 1 ]]; then
   # No ussdgw container on purpose. Prove what this stack DOES run in standby: the shared
   # database and the front door the GMLC primary is served through.
   for svc in "${STACK_NAME:-ussdgw}_postgres" "${STACK_NAME:-ussdgw}_nginx"; do
-    deadline=$(( $(date +%s) + READY_TIMEOUT ))
+    deadline=$(( $(date +%s) + READY_TIMEOUT )); _w=0
     until [[ -n "$(docker ps -q --filter "label=com.docker.swarm.service.name=$svc" | head -1)" ]]; do
       (( $(date +%s) < deadline )) || { docker service ps "$svc" --no-trunc | head -5 >&2; die "$svc has no running task"; }
+      _w=$((_w+1)); if (( _w % 10 == 0 )); then info "still waiting for $svc task ($(( _w * 3 ))s)…"; fi
       sleep 3
     done
     info "$svc running"
@@ -858,7 +908,7 @@ fi
 # Swarm reports the SPEC, not the running task: `docker stack services` showed 1/1 with
 # the new image while the task was Pending on a host-mode port and the OLD container kept
 # serving. So check tasks and image agreement, not just the service table.
-deadline=$(( $(date +%s) + READY_TIMEOUT )); CID=""
+deadline=$(( $(date +%s) + READY_TIMEOUT )); CID=""; _w=0
 while [[ -z "$CID" ]]; do
   CID="$(docker ps -q --filter "name=${STACK_NAME:-ussdgw}_ussdgw" | head -1 || true)"
   [[ -n "$CID" ]] && break
@@ -867,6 +917,7 @@ while [[ -z "$CID" ]]; do
     docker stack ps "$STACK_NAME" --no-trunc >&2 || true
     die "no ${STACK_NAME:-ussdgw}_ussdgw container after ${READY_TIMEOUT}s (tasks above)"
   fi
+  _w=$((_w+1)); if (( _w % 10 == 0 )); then info "still waiting for the ${STACK_NAME:-ussdgw}_ussdgw task ($(( _w * 3 ))s)…"; fi
   sleep 3
 done
 info "container $CID"
@@ -877,13 +928,14 @@ info "container $CID"
 # X-USSD-Admin-Key, so an unauthenticated curl gets 401; with `curl -f` that used
 # to look like "not up" and the loop below spun until READY_TIMEOUT on a healthy
 # gateway. 000 (no TCP) is the only "not answering".
-deadline=$(( $(date +%s) + READY_TIMEOUT ))
+deadline=$(( $(date +%s) + READY_TIMEOUT )); _w=0
 until [[ "$(curl -sS --max-time 5 -o /dev/null -w '%{http_code}' "http://127.0.0.1:8088/admin/status.json" 2>/dev/null)" != 000 ]]; do
   (( $(date +%s) < deadline )) || {
     echo "--- last 60 log lines ---" >&2
     docker logs --tail 60 "$CID" >&2 2>&1 || true
     die "gateway did not answer on :8088/admin/status.json within ${READY_TIMEOUT}s"
   }
+  _w=$((_w+1)); if (( _w % 6 == 0 )); then info "still waiting for :8088 to answer ($(( _w * 5 ))s; gateway is booting: Flyway/profile tables run before the port binds)…"; fi
   sleep 5
 done
 info ":8088/admin/status.json answers"
@@ -914,13 +966,14 @@ converged() {   # 0 when every service is converged; the reasons otherwise go to
            | awk '{split($2,r,"/"); print $1, r[1], r[2], $3}')
   return "$rc"
 }
-deadline=$(( $(date +%s) + READY_TIMEOUT ))
+deadline=$(( $(date +%s) + READY_TIMEOUT )); _w=0
 until converged; do
   if (( $(date +%s) >= deadline )); then
     while IFS= read -r line; do [[ -n "$line" ]] && warn "$line"; done <<<"$CONVERGE_REPORT"
     docker stack ps "$STACK_NAME" --no-trunc 2>/dev/null | head -12 >&2 || true
     die "stack is not converged after ${READY_TIMEOUT}s — see the warnings above"
   fi
+  _w=$((_w+1)); if (( _w % 6 == 0 )); then info "still waiting for stack convergence ($(( _w * 5 ))s)…"; fi
   sleep 5
 done
 info "all services converged on their spec images"
@@ -933,7 +986,8 @@ CID="$(docker ps -q --filter "label=com.docker.swarm.service.name=${STACK_NAME:-
 [[ -n "$CID" ]] || die "converged, yet no running ${STACK_NAME:-ussdgw}_ussdgw container to prove"
 info "proving container ${CID:0:12} ($(docker inspect --format '{{.Config.Image}}' "$CID" 2>/dev/null))"
 
-./docker/prove.sh "$CID" || die "prove.sh reported failures — the deploy is NOT proven"
+run_spin "prove running container ${CID:0:12} (prove.sh: artifact, SCTP, HTTP, ClickHouse CDR)" -- ./docker/prove.sh "$CID" \
+  || die "prove.sh reported failures — the deploy is NOT proven"
 
 step "deployed and proven: $STACK_NAME :$TAG"
 cat <<EOF
