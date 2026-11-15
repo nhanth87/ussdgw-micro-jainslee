@@ -14,6 +14,11 @@ services:
   ussdgw:
     env_file:
       - ./capacity/ussdgw-5k.env
+    # docker/stack.yml sets the heap under `environment:`, which beats `env_file:` on merge —
+    # without these two lines the 40g in ussdgw-5k.env never reached the JVM (it ran 2g/4g).
+    environment:
+      USSD_XMS: 40g
+      USSD_XMX: 40g
     ulimits:
       nofile:
         soft: 1048576

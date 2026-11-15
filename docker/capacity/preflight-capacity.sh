@@ -16,6 +16,7 @@
 # Usage:
 #   docker/capacity/preflight-capacity.sh test    # always passes; prints the profile
 #   docker/capacity/preflight-capacity.sh 5k      # FAILS unless the host is big enough
+#   docker/capacity/preflight-capacity.sh prod    # 30 CPU / 128 GB production host
 set -euo pipefail
 
 PROFILE="${1:-test}"
@@ -24,11 +25,17 @@ PROFILE="${1:-test}"
 # deliberately well below the target so a half-sized host is caught early.
 MIN_MEM_GIB="${MIN_MEM_GIB:-96}"
 MIN_CPUS="${MIN_CPUS:-28}"
+# prod (docker/capacity/stack.prod.yml): limits add up to 28 CPU / 101 GiB on a 30 CPU / 128 GB
+# host. A 128 GB machine reports ~125 GiB in MemTotal.
+if [[ "$PROFILE" == "prod" ]]; then
+  MIN_MEM_GIB="${MIN_MEM_GIB_PROD:-110}"
+  MIN_CPUS="${MIN_CPUS_PROD:-30}"
+fi
 
 ok()  { echo "preflight: ok   $*"; }
 die() { echo "preflight: ERROR $*" >&2; exit 1; }
 
-if [[ "$PROFILE" != "5k" ]]; then
+if [[ "$PROFILE" != "5k" && "$PROFILE" != "prod" ]]; then
   cat <<EOF
 preflight: profile = TEST (default, low resource)
   ussdgw  : 4 CPU  / 6 GiB   (USSD_XMX=4g, mem limit 6g)
@@ -44,7 +51,7 @@ fi
 mem_gib="$(awk '/MemTotal/ {printf "%d", $2/1024/1024}' /proc/meminfo 2>/dev/null || echo 0)"
 cpus="$(nproc 2>/dev/null || echo 0)"
 
-echo "preflight: profile = 5k PRODUCTION"
+echo "preflight: profile = ${PROFILE} PRODUCTION"
 echo "preflight: host reports ${cpus} CPU, ${mem_gib} GiB RAM"
 echo "preflight: requires >= ${MIN_CPUS} CPU, >= ${MIN_MEM_GIB} GiB"
 

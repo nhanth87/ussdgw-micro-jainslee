@@ -31,7 +31,7 @@
 #
 # Environment (all optional; docker/.env is loaded first and these override it):
 #   TAG                 image tag                default: git short SHA of the working tree
-#   DEPLOY_PROFILE      test | 5k                default: test (5k runs preflight-capacity.sh)
+#   DEPLOY_PROFILE      test | prod | 5k         default: test (prod/5k run preflight-capacity.sh)
 #   DATA_ROOT           /srv/ussdgw              bind mounts + configs + logs
 #   BUILD_ROOT          /srv/ussdgw-build        src/ out/ m2/
 #   CONFIG_SRC          operator config dir      default: $DATA_ROOT/configs
@@ -368,14 +368,18 @@ else
   info "stack '$STACK_NAME' already deployed — this run is an update"
 fi
 
-if [[ "$DEPLOY_PROFILE" == "5k" ]]; then
+if [[ "$DEPLOY_PROFILE" == "prod" ]]; then
+  info "DEPLOY_PROFILE=prod — production host (30 CPU / 128 GB); running the capacity gate"
+  ./docker/capacity/preflight-capacity.sh prod
+  OVERLAY="./docker/capacity/stack.prod.yml"
+elif [[ "$DEPLOY_PROFILE" == "5k" ]]; then
   info "DEPLOY_PROFILE=5k — running the capacity gate (it refuses small hosts)"
   ./docker/capacity/preflight-capacity.sh 5k
   OVERLAY="./docker/capacity/stack.capacity-5k.yml"
 elif [[ "$DEPLOY_PROFILE" == "test" ]]; then
   OVERLAY="./docker/stack.test.yml"
 else
-  die "DEPLOY_PROFILE='$DEPLOY_PROFILE' — only 'test' or '5k'"
+  die "DEPLOY_PROFILE='$DEPLOY_PROFILE' — only 'test', 'prod' or '5k'"
 fi
 [[ -f "$OVERLAY" ]] || die "profile overlay $OVERLAY not found"
 

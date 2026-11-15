@@ -1,0 +1,88 @@
+# Swarm override — PRODUCTION host: 30 CPU / 128 GB RAM, target 10k TPS.
+#   DEPLOY_PROFILE=prod ./docker/full-build.sh
+#   (or: docker stack deploy -c docker/stack.yml -c docker/capacity/stack.prod.yml ussdgw)
+#
+# Budget (CDRs go to ClickHouse; PostgreSQL keeps config, routing, tenants, users only):
+#
+#   service      cpus limit / reserve   memory limit / reserve
+#   ussdgw         20 / 18                 64G / 56G   heap 40g (ZGC), direct 8g, + native
+#   clickhouse      4 /  3                 24G / 16G   CDR inserts + the 3-month store
+#   postgres        3 /  2                 12G /  8G
+#   nginx           1 /  -                  1G /  -
+#   host            2 CPU left unreserved  ~27G left    kernel SCTP, dockerd, page cache
+#
+# Precedence that matters here (both bit the older 5k overlay):
+#   * `environment:` beats `env_file:` when compose files are merged, and docker/stack.yml sets
+#     USSD_XMS / USSD_XMX / USSD_LOG_SLEE_LEVEL under `environment:` — so those are set under
+#     `environment:` HERE, or the base 2g/4g heap silently wins.
+#   * A key written literally in configs/application.properties beats an env var. The sizing keys
+#     read below are written `key=${ENV:default}` in dist/configs, so the env file reaches them on
+#     a host seeded from this repo. An older operator file with literal values must be edited.
+version: "3.9"
+services:
+  ussdgw:
+    env_file:
+      - ./capacity/ussdgw-prod.env
+    environment:
+      USSD_XMS: 40g
+      USSD_XMX: 40g
+      USSD_LOG_SLEE_LEVEL: ${USSD_LOG_SLEE_LEVEL:-WARN}
+    ulimits:
+      nofile:
+        soft: 1048576
+        hard: 1048576
+    stop_grace_period: 60s
+    deploy:
+      resources:
+        limits:
+          cpus: "20"
+          memory: 64G
+        reservations:
+          cpus: "18"
+          memory: 56G
+  clickhouse:
+    ulimits:
+      nofile:
+        soft: 262144
+        hard: 262144
+    deploy:
+      resources:
+        limits:
+          cpus: "4"
+          memory: 24G
+        reservations:
+          cpus: "3"
+          memory: 16G
+  postgres:
+    # The image's entrypoint re-applies its baked tuning (loopback-only listen_addresses) on
+    # every start; these -c flags only resize memory/parallelism on top of it.
+    command: ["postgres",
+              "-c", "max_connections=300",
+              "-c", "shared_buffers=3GB",
+              "-c", "effective_cache_size=8GB",
+              "-c", "work_mem=16MB",
+              "-c", "maintenance_work_mem=1GB",
+              "-c", "wal_buffers=32MB",
+              "-c", "max_worker_processes=4",
+              "-c", "max_parallel_workers=2",
+              "-c", "max_parallel_workers_per_gather=1",
+              "-c", "huge_pages=try"]
+    shm_size: 2g
+    deploy:
+      resources:
+        limits:
+          cpus: "3"
+          memory: 12G
+        reservations:
+          cpus: "2"
+          memory: 8G
+  nginx:
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
+    deploy:
+      resources:
+        limits:
+          cpus: "1"
+          memory: 1G
