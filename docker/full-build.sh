@@ -664,9 +664,18 @@ if ! stat -c %a "$LIVE_CERTS/fullchain.pem" >/dev/null 2>&1; then
       docker cp "$NCID:/etc/nginx/certs/$cf" "$SNAP/certs/$cf" >/dev/null 2>&1 || continue
       chmod u+rw "$SNAP/certs/$cf"
     done
+    CERT_VIA="the nginx container ${NCID:0:12}"
+  elif sudo -n test -r "$LIVE_CERTS/fullchain.pem" 2>/dev/null; then
+    # First deploy: no nginx container yet. Same sudo -n snapshot as the config (private, 0700).
+    mkdir -p "$SNAP/certs"; chmod 0700 "$SNAP/certs"
+    for cf in fullchain.pem privkey.pem; do
+      sudo -n cp "$LIVE_CERTS/$cf" "$SNAP/certs/$cf" 2>/dev/null || continue
+      sudo -n chown "$(id -u):$(id -g)" "$SNAP/certs/$cf"; chmod u+rw "$SNAP/certs/$cf"
+    done
+    CERT_VIA="sudo -n (no nginx container yet)"
   fi
   if [[ -f "$SNAP/certs/fullchain.pem" ]]; then
-    info "certificate read through the nginx container ${NCID:0:12} ($LIVE_CERTS is not stat-able as $(id -un))"
+    info "certificate read through ${CERT_VIA} ($LIVE_CERTS is not stat-able as $(id -un))"
     export CERT_DIR="$SNAP/certs"
   else
     warn "cannot inspect $LIVE_CERTS as $(id -un), and no nginx container to read it through —"
