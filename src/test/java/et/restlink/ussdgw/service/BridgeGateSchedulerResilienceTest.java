@@ -46,6 +46,30 @@ class BridgeGateSchedulerResilienceTest {
         }
     }
 
+    /**
+     * The configured 100 ms tick is the real cadence once armed. Under Quarkus {@code @Scheduled}
+     * it was silently 1 s (the simple scheduler checks triggers once a second), so a gate could
+     * fire up to a second late. Ten ticks a second, give or take scheduling jitter.
+     */
+    @Test
+    void armedTickerRunsAtTheConfiguredHundredMilliseconds() throws Exception {
+        BridgeGateScheduler scheduler = new BridgeGateScheduler();
+        set(scheduler, "store", store);
+        set(scheduler, "bridge", new VirtualSessionBridge());
+        set(scheduler, "gateTickMsProp", 100L);
+        scheduler.armOnBoot();
+        try {
+            Thread.sleep(2_100);
+            // 2 s at 100 ms = ~20 ticks; the old 1 s cadence gives 2.
+            assertThat(scheduler.gateTicks()).isBetween(14L, 22L);
+        } finally {
+            scheduler.stopTicker();
+        }
+        long after = scheduler.gateTicks();
+        Thread.sleep(300);
+        assertThat(scheduler.gateTicks()).as("stopped on shutdown").isEqualTo(after);
+    }
+
     @Test
     void gateTicksIncrementEvenWhenNoSessionsAreDue() {
         BridgeGateScheduler scheduler = new BridgeGateScheduler();

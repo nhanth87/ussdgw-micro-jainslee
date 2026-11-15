@@ -21,11 +21,15 @@ import com.microjainslee.api.RaCommandPort;
 import io.quarkus.scheduler.Scheduled;
 
 import jakarta.annotation.PostConstruct;
+import jakarta.annotation.PreDestroy;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 
 import java.util.List;
 import java.util.Optional;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 
@@ -37,9 +41,14 @@ import org.eclipse.microprofile.config.inject.ConfigProperty;
  * Adaptive-gate ticker + TTL reclaim for ussdTx profiles and pending SRI / MAP2MAP correlations —
  * NOT gRPC/HTTP response polling.
  *
- * <p>Arms automatically on Quarkus boot via {@code @Scheduled} — no admin Start and no
- * {@code ussd.bridge.enabled} gate on the ticker itself (that flag only chooses BRIDGE vs
- * hard-fail when a due session expires).
+ * <p>Arms automatically on boot — no admin Start and no {@code ussd.bridge.enabled} gate on the
+ * ticker itself (that flag only chooses BRIDGE vs hard-fail when a due session expires).
+ *
+ * <p>The adaptive gate ticks on its own thread every {@code ussd.bridge.gate-tick-ms} (100 ms).
+ * It used Quarkus {@code @Scheduled}, whose simple scheduler checks triggers once a second: the
+ * configured 100 ms silently became 1 s and a gate could fire up to a second late (measured on
+ * digicom-nb 2026-11-15: 5 ticks in 5 s). The slower housekeeping jobs below stay on
+ * {@code @Scheduled} — they are 5–30 s periodic and unaffected.
  */
 @ApplicationScoped
 public class BridgeGateScheduler {
@@ -71,10 +80,38 @@ public class BridgeGateScheduler {
     private final AtomicLong hlrProxyExpired = new AtomicLong();
     private final AtomicBoolean firstTickLogged = new AtomicBoolean();
 
+    private volatile ScheduledExecutorService gateTicker;
+
     @PostConstruct
     void armOnBoot() {
-        LOG.info("BridgeGateScheduler armed: gate-tick={}ms (Quarkus @Scheduled, ConcurrentExecution.SKIP)",
-                Math.max(1L, gateTickMsProp));
+        long tickMs = Math.max(1L, gateTickMsProp);
+        ScheduledExecutorService ticker = Executors.newSingleThreadScheduledExecutor(r -> {
+            Thread t = new Thread(r, "bridge-gate-tick");
+            t.setDaemon(true);
+            return t;
+        });
+        // Fixed delay: a tick never overlaps the previous one (what ConcurrentExecution.SKIP did).
+        ticker.scheduleWithFixedDelay(this::tickGatesSafely, tickMs, tickMs, TimeUnit.MILLISECONDS);
+        gateTicker = ticker;
+        LOG.info("BridgeGateScheduler armed: gate-tick={}ms (own thread, fixed delay)", tickMs);
+    }
+
+    @PreDestroy
+    void stopTicker() {
+        ScheduledExecutorService ticker = gateTicker;
+        gateTicker = null;
+        if (ticker != null) {
+            ticker.shutdownNow();
+        }
+    }
+
+    /** A throw would cancel every later run of a ScheduledExecutorService task: never let it out. */
+    private void tickGatesSafely() {
+        try {
+            tickGates();
+        } catch (Throwable t) {
+            LOG.warn("gate tick failed (next tick continues): {}", t.toString());
+        }
     }
 
     /**
@@ -84,8 +121,6 @@ public class BridgeGateScheduler {
      * every tick and no gate would ever fire again. Each session is therefore isolated, and
      * ticks never overlap.
      */
-    @Scheduled(every = "${ussd.bridge.gate-tick-ms:100}ms",
-            concurrentExecution = Scheduled.ConcurrentExecution.SKIP)
     void tickGates() {
         long n = gateTicks.incrementAndGet();
         if (firstTickLogged.compareAndSet(false, true)) {

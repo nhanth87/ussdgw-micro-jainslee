@@ -172,7 +172,9 @@ class GateDeferAndRegistrySweepTest {
 
     @Test
     void sweepsNeverOverlap() throws Exception {
-        for (String method : List.of("tickGates", "reclaimExpiredTx", "sweepPendingCorrelations")) {
+        // tickGates runs on its own single-thread fixed-delay ticker (see the test below);
+        // the slower housekeeping sweeps stay on Quarkus @Scheduled with SKIP.
+        for (String method : List.of("reclaimExpiredTx", "sweepPendingCorrelations")) {
             var m = BridgeGateScheduler.class.getDeclaredMethod(method);
             Scheduled ann = m.getAnnotation(Scheduled.class);
             assertThat(ann).as("@Scheduled on " + method).isNotNull();
@@ -182,7 +184,47 @@ class GateDeferAndRegistrySweepTest {
         }
     }
 
+    /** A gate tick slower than the tick period never runs twice at once. */
+    @Test
+    void gateTicksNeverOverlapEvenWhenATickIsSlow() throws Exception {
+        java.util.concurrent.atomic.AtomicInteger inside = new java.util.concurrent.atomic.AtomicInteger();
+        java.util.concurrent.atomic.AtomicInteger maxInside = new java.util.concurrent.atomic.AtomicInteger();
+        java.util.concurrent.atomic.AtomicInteger calls = new java.util.concurrent.atomic.AtomicInteger();
+        VirtualSessionStore slowStore = new VirtualSessionStore() {
+            @Override
+            public List<VirtualSession> awaitingPastDeadline(long nowMs) {
+                maxInside.accumulateAndGet(inside.incrementAndGet(), Math::max);
+                calls.incrementAndGet();
+                try {
+                    Thread.sleep(250);                       // slower than the 100 ms period
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                } finally {
+                    inside.decrementAndGet();
+                }
+                return List.of();
+            }
+        };
+        BridgeGateScheduler scheduler = new BridgeGateScheduler();
+        set(scheduler, "store", slowStore);
+        set(scheduler, "gateTickMsProp", 100L);
+        invoke(scheduler, "armOnBoot");          // what CDI does at boot
+        try {
+            Thread.sleep(1_500);
+        } finally {
+            invoke(scheduler, "stopTicker");     // what CDI does at shutdown
+        }
+        assertThat(calls.get()).as("ticks ran").isGreaterThanOrEqualTo(3);
+        assertThat(maxInside.get()).as("ticks running at the same time").isEqualTo(1);
+    }
+
     // ---------------------------------------------------------------- helpers
+
+    private static void invoke(Object target, String method) throws Exception {
+        var m = target.getClass().getDeclaredMethod(method);
+        m.setAccessible(true);
+        m.invoke(target);
+    }
 
     private static void set(Object target, String field, Object value) {
         Class<?> c = target.getClass();
