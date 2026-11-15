@@ -120,8 +120,10 @@ public class GatedAsNotifyService {
             return false;
         }
         try {
-            String activity = GatedAsNotifyEvent.httpSessionId(ev.meta().correlationId());
-            container.routeEvent(ev, container.createActivityContext(activity));
+            // Not the RA's session id ("gated-<corr>"): that name belongs to the response activity.
+            String activity = "gated-notify-" + ev.meta().correlationId();
+            com.microjainslee.core.NullActivities.fire(container, activity,
+                ev);
             return true;
         } catch (RuntimeException e) {
             LOG.warn("Gated AS XML push route failed corr={}: {}",

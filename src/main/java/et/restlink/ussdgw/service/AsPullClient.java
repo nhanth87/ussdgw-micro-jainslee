@@ -105,7 +105,7 @@ public class AsPullClient {
                     corr, asUrl, sc, status, bodyLen, networkId, tid, ct);
             return;
         }
-        LOG.info("AS pull HTTP done corr={} url={} shortCode={} status={} bodyLen={} "
+        LOG.debug("AS pull HTTP done corr={} url={} shortCode={} status={} bodyLen={} "
                         + "bodyEmpty={} networkId={} tenantId={} contentType={} outcome={}",
                 corr, asUrl, sc, status, bodyLen, bodyEmpty, networkId, tid, ct,
                 outcome == null ? "-" : outcome);

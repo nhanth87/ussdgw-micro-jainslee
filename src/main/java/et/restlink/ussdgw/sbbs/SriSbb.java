@@ -124,8 +124,8 @@ public final class SriSbb implements Sbb, SleeEventHandler {
     }
 
     static void handoff(SbbServices svc, NiPushRequestEvent ni) {
-        svc.container().routeEvent(NiPushReadyEvent.from(ni),
-                svc.container().createActivityContext("ni-push-" + ni.correlationId()));
+        com.microjainslee.core.NullActivities.fire(svc.container(), "ni-push-" + ni.correlationId(),
+                NiPushReadyEvent.from(ni));
     }
 
     private void handoff(NiPushRequestEvent ni) {

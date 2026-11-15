@@ -96,8 +96,8 @@ public class AsPullRouter {
                 gatedSessions);
 
         if (http) {
-            container.routeEvent(new PullHttpEvent(url, enriched),
-                    container.createActivityContext(pullActivityName(corr)));
+            com.microjainslee.core.NullActivities.fire(container, pullActivityName(corr),
+                new PullHttpEvent(url, enriched));
             return "routed HTTP sc=" + asReq.shortCode();
         }
         String[] parts = url.split("\\|", 2);
@@ -106,8 +106,8 @@ public class AsPullRouter {
             throw new IllegalArgumentException("gRPC target empty for shortCode=" + rule.shortCode());
         }
         String method = parts.length > 1 ? parts[1] : "et.restlink.ussdgw.as.UssdAs/Pull";
-        container.routeEvent(new PullGrpcEvent(target, method, enriched),
-                container.createActivityContext(pullActivityName(corr)));
+        com.microjainslee.core.NullActivities.fire(container, pullActivityName(corr),
+                new PullGrpcEvent(target, method, enriched));
         return "routed GRPC sc=" + asReq.shortCode();
     }
 
@@ -250,8 +250,15 @@ public class AsPullRouter {
         return null;
     }
 
+    /**
+     * Name of the activity that carries a pull to HttpClientSbb / GrpcClientSbb.
+     *
+     * <p>It must differ from the name the client RA uses for the response activity (the bare
+     * correlation id). Both activities would otherwise map to the same SBB entity, and ending the
+     * pull activity would remove that entity while the response is still on its way.</p>
+     */
     public static String pullActivityName(String correlationId) {
-        return correlationId;
+        return "pull-" + correlationId;
     }
 
     /** Encoded SIP MESSAGE body + Content-Type for AS pull. */

@@ -5,7 +5,6 @@ import com.microjainslee.api.RaCommandPort;
 import com.microjainslee.core.MicroSleeContainer;
 import com.microjainslee.ra.httpclient.command.HttpCallbackCommand;
 import com.microjainslee.ra.httpclient.events.HttpCallbackCompletedEvent;
-import et.restlink.ussdgw.api.AsCookieJar;
 import et.restlink.ussdgw.api.AsHttpWireFormat;
 import et.restlink.ussdgw.api.AsRequest;
 import et.restlink.ussdgw.api.AsResponse;
@@ -106,18 +105,6 @@ class HttpClientSbbAsSessionCookieTest {
                 Map.of("set-cookie", List.of("JSESSIONID=NEW77; Path=/ussd", "route=as2"))), aci());
         sbb.onEvent(pull("dlg-A", 2, "2"), aci());
         assertThat(last().headers()).containsEntry("Cookie", "JSESSIONID=NEW77; route=as2");
-    }
-
-    @Test
-    void cookieJarFollowsRfc6265Deletion() {
-        assertThat(AsCookieJar.merge(null, List.of("JSESSIONID=1; Path=/"))).isEqualTo("JSESSIONID=1");
-        assertThat(AsCookieJar.merge("JSESSIONID=1; a=b", List.of("JSESSIONID=; Max-Age=0"))).isEqualTo("a=b");
-        assertThat(AsCookieJar.merge("a=b", List.of("a=x; Expires=Thu, 01 Jan 1970 00:00:00 GMT"))).isNull();
-        // Max-Age wins over a past Expires, whatever the order.
-        assertThat(AsCookieJar.merge(null, List.of("a=x; Expires=Thu, 01 Jan 1970 00:00:00 GMT; Max-Age=60")))
-                .isEqualTo("a=x");
-        assertThat(AsCookieJar.merge(null, List.of("q=\"quoted\""))).isEqualTo("q=quoted");
-        assertThat(AsCookieJar.merge("a=1", null)).isEqualTo("a=1");
     }
 
     // ------------------------------------------------------------------ harness

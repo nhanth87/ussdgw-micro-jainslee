@@ -77,6 +77,19 @@ public class UssdConfigService {
 
     public int httpClientMaxRetries() { return Math.max(0, httpClientMaxRetries); }
 
+    /**
+     * Number of HTTP client RA entities behind the "http-callback-ra" link. Default 0 means one
+     * per CPU core. The connection pool ({@code ussd.http.client.max-pool-size}) is split
+     * between them.
+     */
+    @ConfigProperty(name = "ussd.http.client.ra-instances", defaultValue = "0")
+    int httpClientRaInstances;
+
+    public int httpClientRaInstances() {
+        return httpClientRaInstances > 0 ? httpClientRaInstances
+                : Math.max(1, Runtime.getRuntime().availableProcessors());
+    }
+
     @ConfigProperty(name = "ussd.http.client.max-pool-size", defaultValue = "2048")
     int httpClientMaxPoolProp;
     @ConfigProperty(name = "ussd.http.callback-path", defaultValue = "/as/callback")

@@ -64,9 +64,8 @@ public class CampaignScheduler {
             String corr = tgt.correlationId != null ? tgt.correlationId : tgt.id.toString();
             UssdAlphabet alpha = UssdAlphabet.parse(camp.alphabet);
             try {
-                container.routeEvent(
-                        new NiPushRequestEvent(corr, tgt.msisdn, camp.text, camp.networkId, alpha),
-                        container.createActivityContext("camp-ni-" + corr));
+                com.microjainslee.core.NullActivities.fire(container, "camp-ni-" + corr,
+                new NiPushRequestEvent(corr, tgt.msisdn, camp.text, camp.networkId, alpha));
                 claimed.incrementAndGet();
             } catch (RuntimeException e) {
                 LOG.warn("Campaign NI route fail corr={}: {}", corr, e.toString());

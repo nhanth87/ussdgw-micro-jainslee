@@ -40,10 +40,10 @@ public class MapUssdAccessAdapter implements UssdAccessPort {
             LOG.warn("MAP NI push skipped (no session/container)");
             return;
         }
-        container.routeEvent(new NiPushRequestEvent(
+        com.microjainslee.core.NullActivities.fire(container, "ni-" + session.correlationId(),
+                new NiPushRequestEvent(
                         session.correlationId(), session.msisdn(), text, session.networkId(),
-                        session.pendingAlphabet(), notifyOnly),
-                container.createActivityContext("ni-" + session.correlationId()));
+                        session.pendingAlphabet(), notifyOnly));
     }
 
     @Override

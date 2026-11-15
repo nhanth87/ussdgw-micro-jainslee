@@ -336,9 +336,8 @@ public final class HttpServerSbb implements Sbb, SleeEventHandler {
     private void routeNiPush(String corr, String msisdn, String text, int networkId,
                              boolean notifyOnly) {
         try {
-            svc().container().routeEvent(
-                    new NiPushRequestEvent(corr, msisdn, text, networkId, UssdAlphabet.AUTO, notifyOnly),
-                    svc().container().createActivityContext("http-ni-" + corr));
+            com.microjainslee.core.NullActivities.fire(svc().container(), "http-ni-" + corr,
+                new NiPushRequestEvent(corr, msisdn, text, networkId, UssdAlphabet.AUTO, notifyOnly));
         } catch (RuntimeException e) {
             // Lab / bootstrap without container — park gate or lab echo still covers reply.
         }
@@ -348,10 +347,9 @@ public final class HttpServerSbb implements Sbb, SleeEventHandler {
     private void routeNiContinue(String corr, String msisdn, String text, int networkId,
                                  boolean notifyOnly, String mscGt, String imsi) {
         try {
-            svc().container().routeEvent(
-                    NiPushReadyEvent.continueOnDialog(corr, msisdn, text, networkId,
-                            UssdAlphabet.AUTO, notifyOnly, mscGt, imsi),
-                    svc().container().createActivityContext("http-ni-cont-" + corr));
+            com.microjainslee.core.NullActivities.fire(svc().container(), "http-ni-cont-" + corr,
+                NiPushReadyEvent.continueOnDialog(corr, msisdn, text, networkId,
+                            UssdAlphabet.AUTO, notifyOnly, mscGt, imsi));
         } catch (RuntimeException e) {
             // Lab / bootstrap without container.
         }

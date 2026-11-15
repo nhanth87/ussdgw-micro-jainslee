@@ -353,8 +353,8 @@ public final class SipUssiSbb implements Sbb, SleeEventHandler {
             override.accept(event, activityName);
             return;
         }
-        svc().container().routeEvent(
-                event, svc().container().createActivityContext(activityName));
+        com.microjainslee.core.NullActivities.fire(svc().container(), activityName,
+                event);
     }
 
     private String handleMoPull(SipMessageEvent msg, SipUssdBodyCodec.Decoded decoded) {

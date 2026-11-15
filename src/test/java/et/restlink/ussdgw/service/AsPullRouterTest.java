@@ -65,25 +65,52 @@ class AsPullRouterTest {
     }
 
     /**
-     * Both client RAs fire their completion on {@code createActivityHandle(correlationId)}, and
-     * the container derives the SBB entity id from the activity context name. A decorated name
-     * here would put submit and completion on two different entities.
+     * The pull travels on a JSR 240 Null Activity named "pull-<corr>" — never the bare
+     * correlation id, which is the name of the RA's response activity — and that activity is
+     * ended right after the pull is fired, so nothing stays bound afterwards.
      */
     @Test
-    void pullActivityIsNamedAfterTheBareCorrelationId() {
-        AsRequest req = new AsRequest("vs", "c-name", "r1", 0, "2519", "*123#", "*123#", 1);
-        router.route(new ShortCodeRule("*123#", RuleType.HTTP, "http://as/pull", true),
-                req, "c-name");
-        assertThat(container.getActivityContextNamingFacility().lookup("c-name")).isNotNull();
-        assertThat(container.getActivityContextNamingFacility().lookup("pull-http-c-name"))
-                .isNull();
+    void pullActivityHasItsOwnNameAndIsEnded() throws Exception {
+        java.util.List<String> seen = new java.util.concurrent.CopyOnWriteArrayList<>();
+        java.util.concurrent.CountDownLatch delivered = new java.util.concurrent.CountDownLatch(2);
+        container.registerSbbType(CaptureSbb.class, () -> new CaptureSbb(seen, delivered));
+        container.mapEventToSbb(et.restlink.ussdgw.events.PullHttpEvent.class, "CaptureSbb");
+        container.mapEventToSbb(et.restlink.ussdgw.events.PullGrpcEvent.class, "CaptureSbb");
 
-        AsRequest grpcReq = new AsRequest("vs", "g-name", "r1", 0, "2519", "*456#", "*456#", 1);
+        router.route(new ShortCodeRule("*123#", RuleType.HTTP, "http://as/pull", true),
+                new AsRequest("vs", "c-name", "r1", 0, "2519", "*123#", "*123#", 1), "c-name");
         router.route(new ShortCodeRule("*456#", RuleType.GRPC, "localhost:50051|et.as/Pull", true),
-                grpcReq, "g-name");
-        assertThat(container.getActivityContextNamingFacility().lookup("g-name")).isNotNull();
-        assertThat(container.getActivityContextNamingFacility().lookup("pull-grpc-g-name"))
-                .isNull();
+                new AsRequest("vs", "g-name", "r1", 0, "2519", "*456#", "*456#", 1), "g-name");
+
+        assertThat(delivered.await(10, java.util.concurrent.TimeUnit.SECONDS)).isTrue();
+        assertThat(seen).containsExactlyInAnyOrder("pull-c-name", "pull-g-name");
+        // Ended: neither name is still bound.
+        assertThat(container.getActivityContextNamingFacility().lookup("pull-c-name")).isNull();
+        assertThat(container.getActivityContextNamingFacility().lookup("pull-g-name")).isNull();
+    }
+
+    /** Records the activity-context name each pull event was delivered on. */
+    public static final class CaptureSbb implements com.microjainslee.api.Sbb,
+            com.microjainslee.api.SleeEventHandler {
+        private final java.util.List<String> seen;
+        private final java.util.concurrent.CountDownLatch delivered;
+        CaptureSbb(java.util.List<String> seen, java.util.concurrent.CountDownLatch delivered) {
+            this.seen = seen;
+            this.delivered = delivered;
+        }
+        @Override public void sbbCreate() { }
+        @Override public void sbbActivate() { }
+        @Override public void sbbPassivate() { }
+        @Override public void sbbRemove() { }
+        @Override
+        public void onEvent(com.microjainslee.api.SleeEvent event,
+                            com.microjainslee.api.ActivityContextInterface aci) {
+            if (event instanceof et.restlink.ussdgw.events.PullHttpEvent
+                    || event instanceof et.restlink.ussdgw.events.PullGrpcEvent) {
+                seen.add(aci.getActivityContextName());
+                delivered.countDown();
+            }
+        }
     }
 
     @Test

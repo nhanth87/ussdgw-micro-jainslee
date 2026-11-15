@@ -73,8 +73,8 @@ public final class SmppAsIngressSbb implements Sbb, SleeEventHandler {
         }
         String corr = UUID.randomUUID().toString();
         var container = svc().container();
-        container.routeEvent(new NiPushRequestEvent(corr, msisdn, text, networkId, alphabet),
-                container.createActivityContext("smpp-ni-" + corr));
+        com.microjainslee.core.NullActivities.fire(container, "smpp-ni-" + corr,
+                new NiPushRequestEvent(corr, msisdn, text, networkId, alphabet));
         return "ni-queued msisdn=" + msisdn + " alphabet=" + alphabet.toWire();
     }
 }

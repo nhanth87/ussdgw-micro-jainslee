@@ -315,6 +315,28 @@ public class VirtualSessionStore {
         } catch (RuntimeException e) {
             LOG.warn("remove ussdTx {}: {}", correlationId, e.toString());
         }
+        endAsHttpSession(correlationId);
+    }
+
+    /**
+     * The USSD session is gone, so its conversation with the HTTP AS is over too. Tell the HTTP
+     * client RA, which then forgets the session and releases its node pin: while the session was
+     * alive every request left from the same node (same source IP), so the AS kept its context
+     * and JSESSIONID. The gated notify of this session used the id "gated-&lt;corr&gt;".
+     */
+    private void endAsHttpSession(String correlationId) {
+        com.microjainslee.api.RaCommandPort http = container == null ? null
+                : container.getRaCommandPort(com.microjainslee.ra.httpclient.HttpCallbackRaEndpoint.NAME);
+        if (http == null) {
+            return;
+        }
+        try {
+            http.sendCommand(new com.microjainslee.ra.httpclient.command.HttpCallbackCommand.EndSession(correlationId));
+            http.sendCommand(new com.microjainslee.ra.httpclient.command.HttpCallbackCommand.EndSession(
+                    et.restlink.ussdgw.events.GatedAsNotifyEvent.httpSessionId(correlationId)));
+        } catch (RuntimeException e) {
+            LOG.debug("HTTP session end not sent corr={}: {}", correlationId, e.toString());
+        }
     }
 
     /**

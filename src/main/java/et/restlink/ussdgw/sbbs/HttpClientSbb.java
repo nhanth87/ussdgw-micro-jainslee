@@ -1,6 +1,6 @@
 package et.restlink.ussdgw.sbbs;
 
-import et.restlink.ussdgw.api.AsCookieJar;
+import com.microjainslee.ra.httpclient.cookie.CookieJar;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
@@ -364,7 +364,7 @@ public final class HttpClientSbb implements Sbb, SleeEventHandler {
             if (store == null) {
                 return;
             }
-            String merged = AsCookieJar.merge(store.asCookie(corr), setCookies);
+            String merged = CookieJar.merge(store.asCookie(corr), setCookies);
             store.setAsCookie(corr, merged);
         } catch (RuntimeException e) {
             org.apache.logging.log4j.LogManager.getLogger(HttpClientSbb.class)

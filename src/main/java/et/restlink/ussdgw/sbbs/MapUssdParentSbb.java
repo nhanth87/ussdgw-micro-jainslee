@@ -429,8 +429,8 @@ public final class MapUssdParentSbb implements Sbb, SleeEventHandler {
         } catch (Throwable ignored) { }
         InboundSriSmEvent ev = new InboundSriSmEvent(
                 svc.dialogId(), req.getInvokeId(), msisdn, sc, networkId);
-        svc().container().routeEvent(ev,
-                svc().container().createActivityContext("hlr-sri-" + svc.dialogId()));
+        com.microjainslee.core.NullActivities.fire(svc().container(), "hlr-sri-" + svc.dialogId(),
+                ev);
         return "hlr-face-routed";
     }
 
@@ -513,8 +513,8 @@ public final class MapUssdParentSbb implements Sbb, SleeEventHandler {
                         Map2MapCdr.ARMED, Map2MapCdr.detailArmed(m2m, session),
                         networkId, r.tenantId(), "MAP", null, null);
             } catch (Throwable ignored) { }
-            svc().container().routeEvent(m2m,
-                    svc().container().createActivityContext("map2map-" + corr));
+            com.microjainslee.core.NullActivities.fire(svc().container(), "map2map-" + corr,
+                m2m);
             String hopPreview = resolveHopUssdForReq(svc(), m2m);
             return "map2map-queued sc=" + shortCode + " redirect=" + r.redirectUssdString()
                     + " hopUssd=" + hopPreview
@@ -1196,9 +1196,8 @@ public final class MapUssdParentSbb implements Sbb, SleeEventHandler {
         } catch (Throwable ignored) { }
         try {
             if (svc().container() != null) {
-                svc().container().routeEvent(
-                        et.restlink.ussdgw.events.NiPushReadyEvent.fromSri(ni, r.mscGt(), r.imsi()),
-                        svc().container().createActivityContext("ni-push-" + ni.correlationId()));
+                com.microjainslee.core.NullActivities.fire(svc().container(), "ni-push-" + ni.correlationId(),
+                et.restlink.ussdgw.events.NiPushReadyEvent.fromSri(ni, r.mscGt(), r.imsi()));
             }
         } catch (Throwable ignored) { }
         return "sri-ok msc=" + r.mscGt();

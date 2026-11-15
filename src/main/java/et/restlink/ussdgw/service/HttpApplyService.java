@@ -39,14 +39,15 @@ public class HttpApplyService {
     int httpRaAcceptBacklogProp;
 
     private volatile HttpServerRaEndpoint serverEndpoint;
-    private volatile HttpCallbackRaEndpoint clientEndpoint;
+    /** The HTTP client RA entities behind the "http-callback-ra" link (see wire()). */
+    private volatile java.util.List<HttpCallbackRaEndpoint> clientEntities = java.util.List.of();
 
     public String apply() {
         return tearDown() + ";" + wire();
     }
 
     public String start() {
-        if (serverEndpoint != null || clientEndpoint != null) return apply();
+        if (serverEndpoint != null || !clientEntities.isEmpty()) return apply();
         return wire();
     }
 
@@ -69,16 +70,17 @@ public class HttpApplyService {
             }
         }
         String clientMsg = "http-client-drained=noop";
-        if (clientEndpoint != null) {
-            try {
-                clientEndpoint.deactivate();
-                clientMsg = "http-client-drained=ok";
-            } catch (RuntimeException e) {
-                LOG.warn("http client RA deactivate: {}", e.toString());
-                clientMsg = "http-client-drained=warn";
-            } finally {
-                clientEndpoint = null;
+        if (!clientEntities.isEmpty()) {
+            clientMsg = "http-client-drained=ok";
+            for (HttpCallbackRaEndpoint entity : clientEntities) {
+                try {
+                    entity.deactivate();
+                } catch (RuntimeException e) {
+                    LOG.warn("http client RA {} deactivate: {}", entity.getRaName(), e.toString());
+                    clientMsg = "http-client-drained=warn";
+                }
             }
+            clientEntities = java.util.List.of();
         }
         linkStatus.clearHttp();
         return serverMsg + ";" + clientMsg;
@@ -87,18 +89,31 @@ public class HttpApplyService {
     public String wire() {
         StringBuilder detail = new StringBuilder();
         if (config.httpClientEnabled()) {
-            HttpCallbackClientRa ra = new HttpCallbackClientRa();
-            ra.setConnectTimeoutMs(config.httpConnectTimeoutMs());
-            ra.setRequestTimeoutMs(config.httpRequestTimeoutMs());
-            ra.setMaxPoolSize(config.httpClientMaxPoolSize());
-            // The RA's own default re-sends a POST twice on 5xx/timeout; on top of the pull
-            // retry that hit the AS up to 6 times per USSD turn. Classic never re-sent.
-            ra.setMaxRetries(config.httpClientMaxRetries());
-            clientEndpoint = new HttpCallbackRaEndpoint(ra);
-            container.registerRa(clientEndpoint, clientEndpoint);
-            detail.append("http-client=wired;connectMs=").append(config.httpConnectTimeoutMs())
+            // Several HTTP client RA entities behind one link name. One entity is one Vert.x
+            // instance with one connection pool per AS host, and that single pipe — not the CPU —
+            // limited AS throughput. SBBs keep using @InjectRa("http-callback-ra"); the link sends
+            // all requests of a USSD session to the same entity.
+            int entities = config.httpClientRaInstances();
+            int poolPerEntity = Math.max(1, config.httpClientMaxPoolSize() / entities);
+            java.util.List<HttpCallbackRaEndpoint> created = new java.util.ArrayList<>(entities);
+            for (int i = 0; i < entities; i++) {
+                HttpCallbackClientRa ra = new HttpCallbackClientRa();
+                ra.setConnectTimeoutMs(config.httpConnectTimeoutMs());
+                ra.setRequestTimeoutMs(config.httpRequestTimeoutMs());
+                ra.setMaxPoolSize(poolPerEntity);
+                // Share the Vert.x event loops between the entities (Vert.x default: 2 x cores each).
+                ra.setEventLoopThreads(Math.max(2,
+                        2 * Runtime.getRuntime().availableProcessors() / entities));
+                // Never re-send a POST the AS may already have acted on (classic behaviour).
+                ra.setMaxRetries(config.httpClientMaxRetries());
+                created.add(new HttpCallbackRaEndpoint(HttpCallbackRaEndpoint.NAME + "#" + i, ra));
+            }
+            container.registerRaEntityGroup(HttpCallbackRaEndpoint.NAME, created);
+            clientEntities = java.util.List.copyOf(created);
+            detail.append("http-client=wired;entities=").append(entities)
+                    .append(";connectMs=").append(config.httpConnectTimeoutMs())
                     .append(";requestMs=").append(config.httpRequestTimeoutMs())
-                    .append(";pool=").append(config.httpClientMaxPoolSize())
+                    .append(";poolPerEntity=").append(poolPerEntity)
                     .append(";raRetries=").append(config.httpClientMaxRetries()).append(';');
         } else {
             detail.append("http-client=off;");
@@ -140,9 +155,12 @@ public class HttpApplyService {
     }
 
     public HttpServerRaEndpoint serverEndpoint() { return serverEndpoint; }
-    public HttpCallbackRaEndpoint clientEndpoint() { return clientEndpoint; }
+    /** First client RA entity (status pages); all entities: {@link #clientEntities()}. */
+    public HttpCallbackRaEndpoint clientEndpoint() { return clientEntities.isEmpty() ? null : clientEntities.get(0); }
+
+    public java.util.List<HttpCallbackRaEndpoint> clientEntities() { return clientEntities; }
     public boolean serverUp() { return serverEndpoint != null; }
-    public boolean clientUp() { return clientEndpoint != null; }
+    public boolean clientUp() { return !clientEntities.isEmpty(); }
 
     public int listenPort() {
         return store.getInt(RuntimeConfigStore.Keys.HTTP_RA_PORT, httpRaPortProp);
