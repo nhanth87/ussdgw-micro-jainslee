@@ -3,13 +3,19 @@ package et.restlink.ussdgw.admin;
 import et.restlink.ussdgw.ra.smpp.SmppEndpointRegistry;
 
 import com.microjainslee.ra.diameter.DiameterRaEndpoint;
+import com.microjainslee.ra.httpclient.HttpCallbackClientRa;
+import com.microjainslee.ra.httpclient.HttpCallbackRaEndpoint;
+import com.microjainslee.ra.httpserver.HttpServerRaEndpoint;
+import com.microjainslee.ra.httpserver.HttpServerResourceAdaptor;
 import com.microjainslee.ra.jss7.Ss7ResourceAdaptor;
 import com.microjainslee.ra.sipservlet.SipServletRaEndpoint;
 
 import jakarta.enterprise.context.ApplicationScoped;
 
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
+import java.util.function.Supplier;
 
 @ApplicationScoped
 public class LinkStatusService {
@@ -26,6 +32,15 @@ public class LinkStatusService {
     private volatile String diameterDetail = "down";
     private volatile SipServletRaEndpoint sipEp;
     private volatile String sipDetail = "down";
+    private volatile Supplier<List<HttpCallbackRaEndpoint>> httpClients = List::of;
+    private volatile Supplier<HttpServerRaEndpoint> httpServer = () -> null;
+
+    /** HttpApplyService hands over its live RA entities so the HTTP tab can show them. */
+    public void bindHttpPlane(Supplier<List<HttpCallbackRaEndpoint>> clients,
+                              Supplier<HttpServerRaEndpoint> server) {
+        this.httpClients = clients == null ? List::of : clients;
+        this.httpServer = server == null ? () -> null : server;
+    }
 
     public void bindSs7(Ss7ResourceAdaptor ra) {
         this.ss7Ra = ra;
@@ -192,6 +207,9 @@ public class LinkStatusService {
                     String.valueOf(s.get("http.detail")),
                     "/admin/http", "/telemetry/?tab=http"));
         }
+        if ("http".equals(tab)) {
+            sb.append(httpRaTable());
+        }
         if (wantGrpc) {
             boolean listen = Boolean.TRUE.equals(s.get("grpc.listen"));
             sb.append(planeCard("gRPC", listen,
@@ -221,6 +239,61 @@ public class LinkStatusService {
                             + " · clients=" + clients
                             + " · " + s.get("smpp.detail"),
                     "/admin/smpp", "/telemetry/?tab=smpp"));
+        }
+        sb.append("</div>");
+        return sb.toString();
+    }
+
+    /**
+     * The HTTP plane as micro-jainslee runs it: every HTTP client RA entity (a dialog is pinned to
+     * one entity, so its JSESSIONID always leaves from the same client) and the HTTP server RA.
+     */
+    String httpRaTable() {
+        StringBuilder sb = new StringBuilder();
+        sb.append("<div class=\"form-card rounded-lg border border-ink-line bg-ink-panel/80 p-4 mt-3 lg:col-span-2\">")
+          .append("<h3 class=\"text-sm font-semibold tracking-wide text-slate-100\">HTTP RA entities (micro-jainslee)</h3>")
+          .append("<p class=\"mt-1 text-xs text-ink-mute\">AS pulls: one Vert.x client + pool per entity; ")
+          .append("a USSD dialog always uses the same entity (same source, same JSESSIONID). ")
+          .append("Counters since start.</p>")
+          .append("<div class=\"overflow-x-auto\"><table class=\"mt-2 w-full text-left text-xs font-mono\">")
+          .append("<thead class=\"text-ink-mute\"><tr><th class=\"py-1 pr-4\">entity</th><th class=\"pr-4\">pool</th>")
+          .append("<th class=\"pr-4\">timeout ms</th><th class=\"pr-4\">sent</th><th class=\"pr-4\">answered</th>")
+          .append("<th class=\"pr-4\">failed</th><th>in flight</th></tr></thead><tbody>");
+        List<HttpCallbackRaEndpoint> clients = List.of();
+        try {
+            clients = httpClients.get();
+        } catch (RuntimeException ignored) { }
+        long sent = 0, ok = 0, bad = 0, open = 0;
+        for (HttpCallbackRaEndpoint ep : clients) {
+            HttpCallbackClientRa ra = ep.delegate();
+            sent += ra.postsSent(); ok += ra.answeredCount(); bad += ra.failedCount(); open += ra.inFlight();
+            sb.append("<tr><td class=\"py-1 pr-4\">").append(esc(ep.getRaName())).append("</td><td class=\"pr-4\">")
+              .append(ra.maxPoolSize()).append("</td><td class=\"pr-4\">").append(ra.requestTimeoutMs())
+              .append("</td><td class=\"pr-4\">").append(ra.postsSent()).append("</td><td class=\"pr-4\">")
+              .append(ra.answeredCount()).append("</td><td class=\"pr-4\">").append(ra.failedCount())
+              .append("</td><td>").append(ra.inFlight()).append("</td></tr>");
+        }
+        if (clients.isEmpty()) {
+            sb.append("<tr><td colspan=\"7\" class=\"py-1 italic text-ink-mute\">HTTP client off</td></tr>");
+        } else {
+            sb.append("<tr class=\"text-slate-100\"><td class=\"py-1 pr-4\">total (").append(clients.size())
+              .append(")</td><td></td><td></td><td class=\"pr-4\">").append(sent).append("</td><td class=\"pr-4\">")
+              .append(ok).append("</td><td class=\"pr-4\">").append(bad).append("</td><td>").append(open).append("</td></tr>");
+        }
+        sb.append("</tbody></table></div>");
+        HttpServerRaEndpoint server = null;
+        try {
+            server = httpServer.get();
+        } catch (RuntimeException ignored) { }
+        if (server != null) {
+            HttpServerResourceAdaptor ra = server.delegate();
+            sb.append("<p class=\"mt-3 text-xs font-mono text-slate-300\">http-server-ra: listen ")
+              .append(esc(ra.host())).append(':').append(ra.port())
+              .append(" · waiting for the gateway ").append(ra.pendingCount())
+              .append(" · answered 504 by the RA ").append(ra.timedOutCount())
+              .append(" · deadline ").append(ra.responseTimeoutMs()).append(" ms</p>");
+        } else {
+            sb.append("<p class=\"mt-3 text-xs italic text-ink-mute\">http-server-ra off</p>");
         }
         sb.append("</div>");
         return sb.toString();

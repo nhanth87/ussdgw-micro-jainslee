@@ -18,12 +18,39 @@
         <quarkus.platform.version>3.40.1.2</quarkus.platform.version>
         <microjainslee.version>1.2.2-SNAPSHOT</microjainslee.version>
         <sctp.version>2.27.33</sctp.version>
+        <jackson.version>2.23.0</jackson.version>
+        <log4j.version>2.26.1</log4j.version>
+        <micrometer.version>1.17.2</micrometer.version>
         <surefire.version>3.6.1</surefire.version>
         <quarkus.build.skip>true</quarkus.build.skip>
         <quarkus.package.jar.type>fast-jar</quarkus.package.jar.type>
     </properties>
     <dependencyManagement>
         <dependencies>
+            <!-- Jackson newer than the Quarkus platform pin (2.21.8): imported FIRST so it wins, and as
+                 a BOM so databind/core/annotations/dataformat-xml move together (a mixed set is a
+                 NoSuchMethodError). Drop this when the Quarkus platform reaches it. -->
+            <dependency>
+                <groupId>com.fasterxml.jackson</groupId>
+                <artifactId>jackson-bom</artifactId>
+                <version>${jackson.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+            <!-- Same for Micrometer: the registry and micrometer-core must be one release. -->
+            <dependency>
+                <groupId>io.micrometer</groupId>
+                <artifactId>micrometer-bom</artifactId>
+                <version>${micrometer.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+            <!-- log4j-core is pinned below; keep log4j-api on the same release (platform says 2.26.0). -->
+            <dependency>
+                <groupId>org.apache.logging.log4j</groupId>
+                <artifactId>log4j-api</artifactId>
+                <version>${log4j.version}</version>
+            </dependency>
             <dependency>
                 <groupId>io.quarkus.platform</groupId>
                 <artifactId>quarkus-bom</artifactId>
@@ -55,10 +82,10 @@
         <dependency><groupId>com.microjainslee</groupId><artifactId>jainslee-telemetry</artifactId><version>${microjainslee.version}</version></dependency>
         <dependency><groupId>com.microjainslee</groupId><artifactId>jainslee-admin-spi</artifactId><version>${microjainslee.version}</version></dependency>
         <dependency><groupId>com.microjainslee</groupId><artifactId>jainslee-monitor</artifactId><version>${microjainslee.version}</version></dependency>
-        <dependency><groupId>io.micrometer</groupId><artifactId>micrometer-registry-prometheus</artifactId><version>1.17.2</version></dependency>
+        <dependency><groupId>io.micrometer</groupId><artifactId>micrometer-registry-prometheus</artifactId></dependency>
         <dependency><groupId>com.fasterxml.jackson.core</groupId><artifactId>jackson-databind</artifactId></dependency>
         <dependency><groupId>com.fasterxml.jackson.dataformat</groupId><artifactId>jackson-dataformat-xml</artifactId></dependency>
-        <dependency><groupId>com.microjainslee</groupId><artifactId>ra-jss7</artifactId><version>${microjainslee.version}</version><exclusions><exclusion><groupId>junit</groupId><artifactId>junit</artifactId></exclusion><exclusion><groupId>org.hamcrest</groupId><artifactId>hamcrest-core</artifactId></exclusion></exclusions></dependency>
+        <dependency><groupId>com.microjainslee</groupId><artifactId>ra-jss7</artifactId><version>${microjainslee.version}</version><exclusions><exclusion><groupId>junit</groupId><artifactId>junit</artifactId></exclusion><exclusion><groupId>org.hamcrest</groupId><artifactId>hamcrest-core</artifactId></exclusion><!-- jSS7 / sctp / stream pull log4j 1.2.8; log4j-1.2-api 2.x is the org.apache.log4j API here --><exclusion><groupId>log4j</groupId><artifactId>log4j</artifactId></exclusion></exclusions></dependency>
         <!--
             Kernel SCTP oracle (org.mobicents.protocols.sctp.netty.NettySctpManagementImpl).
             ra-jss7 ships only sctp-api/core/backend-fstack, so sctp-impl otherwise resolves to a
@@ -74,10 +101,13 @@
                 <!-- sctp-impl declares TestNG in compile scope: it would ship in lib/main and
                      surefire 3.6+ refuses to run with TestNG < 6.14.3 on the test classpath. -->
                 <exclusion><groupId>org.testng</groupId><artifactId>testng</artifactId></exclusion>
+                <!-- log4j 1.2.8 (EOL, CVE-2019-17571 class): log4j-1.2-api 2.x already provides
+                     org.apache.log4j.* and routes it to log4j2. -->
+                <exclusion><groupId>log4j</groupId><artifactId>log4j</artifactId></exclusion>
             </exclusions>
         </dependency>
         <dependency><groupId>com.microjainslee</groupId><artifactId>jainslee-cluster</artifactId><version>${microjainslee.version}</version><exclusions><exclusion><groupId>junit</groupId><artifactId>junit</artifactId></exclusion><exclusion><groupId>org.hamcrest</groupId><artifactId>hamcrest-core</artifactId></exclusion></exclusions></dependency>
-        <dependency><groupId>com.microjainslee</groupId><artifactId>ra-diameter</artifactId><version>${microjainslee.version}</version><exclusions><exclusion><groupId>junit</groupId><artifactId>junit</artifactId></exclusion><exclusion><groupId>org.hamcrest</groupId><artifactId>hamcrest-core</artifactId></exclusion></exclusions></dependency>
+        <dependency><groupId>com.microjainslee</groupId><artifactId>ra-diameter</artifactId><version>${microjainslee.version}</version><exclusions><exclusion><groupId>junit</groupId><artifactId>junit</artifactId></exclusion><exclusion><groupId>org.hamcrest</groupId><artifactId>hamcrest-core</artifactId></exclusion><!-- jdiameter binds slf4j 1.7 to log4j 1.x; logging goes to log4j2 --><exclusion><groupId>org.slf4j</groupId><artifactId>slf4j-log4j12</artifactId></exclusion><exclusion><groupId>log4j</groupId><artifactId>log4j</artifactId></exclusion></exclusions></dependency>
         <dependency><groupId>com.microjainslee</groupId><artifactId>ra-sip-servlet</artifactId><version>${microjainslee.version}</version><exclusions><exclusion><groupId>junit</groupId><artifactId>junit</artifactId></exclusion><exclusion><groupId>org.hamcrest</groupId><artifactId>hamcrest-core</artifactId></exclusion></exclusions></dependency>
         <dependency><groupId>com.microjainslee</groupId><artifactId>ra-http-server</artifactId><version>${microjainslee.version}</version></dependency>
         <dependency><groupId>com.microjainslee</groupId><artifactId>ra-http-client</artifactId><version>${microjainslee.version}</version></dependency>
@@ -97,7 +127,7 @@
         <dependency><groupId>com.microjainslee</groupId><artifactId>jainslee-apt</artifactId><version>${microjainslee.version}</version><optional>true</optional></dependency>
         <dependency><groupId>com.microjainslee</groupId><artifactId>adapter-quarkus</artifactId><version>${microjainslee.version}</version></dependency>
         <dependency><groupId>org.apache.logging.log4j</groupId><artifactId>log4j-api</artifactId></dependency>
-        <dependency><groupId>org.apache.logging.log4j</groupId><artifactId>log4j-core</artifactId><version>2.26.1</version></dependency>
+        <dependency><groupId>org.apache.logging.log4j</groupId><artifactId>log4j-core</artifactId><version>${log4j.version}</version></dependency>
         <dependency><groupId>io.quarkus</groupId><artifactId>quarkus-junit</artifactId><scope>test</scope></dependency>
         <dependency><groupId>org.junit.jupiter</groupId><artifactId>junit-jupiter</artifactId><scope>test</scope></dependency>
         <dependency><groupId>org.assertj</groupId><artifactId>assertj-core</artifactId><version>3.27.7</version><scope>test</scope></dependency>

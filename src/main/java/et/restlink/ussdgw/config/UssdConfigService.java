@@ -85,6 +85,19 @@ public class UssdConfigService {
     @ConfigProperty(name = "ussd.http.client.ra-instances", defaultValue = "0")
     int httpClientRaInstances;
 
+    /**
+     * How long the HTTP server RA waits for the gateway's answer to a request before answering
+     * {@code 504} itself. Never shorter than the longest park on purpose: a classic NI request is
+     * held until the subscriber answers (the NI UI timeout, clamped to the dialog timeout).
+     */
+    @ConfigProperty(name = "ussd.http.server.response-timeout-ms", defaultValue = "300000")
+    long httpServerResponseTimeoutMsProp = 300_000L;
+
+    public long httpServerResponseTimeoutMs() {
+        long floor = Math.max(niRequestUiTimeoutMs(), dialogTimeoutMs()) + 30_000L;
+        return httpServerResponseTimeoutMsProp <= 0 ? 0L : Math.max(httpServerResponseTimeoutMsProp, floor);
+    }
+
     public int httpClientRaInstances() {
         return httpClientRaInstances > 0 ? httpClientRaInstances
                 : Math.max(1, Runtime.getRuntime().availableProcessors());

@@ -48,6 +48,8 @@ configs/digicom/
 build/application-digicom.properties
 build/ss7-digicom-balance.json
 build/systemd/install-on-digicom.sh
+# Digicom host runbooks (carrier host, peers) — overlay only, like the seeds above.
+docs/digicom/
 
 # Docker / Swarm (plan.md)
 # .env holds site paths and may hold an admin key — never committed.

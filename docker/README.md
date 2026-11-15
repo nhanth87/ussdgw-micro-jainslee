@@ -614,3 +614,11 @@ docker exec -it "$CH" sh -c 'clickhouse-client -u ussdgw --password "$(cat /run/
 A 96 GB root disk (Digicom test host, 56 GB free) holds 3+ months only at tens of TPS. A 10k TPS
 deployment needs dedicated ClickHouse storage (or fewer milestones per session) — size it
 before raising `CDR_RETENTION_MONTHS`, and before any sustained load test on a shared host.
+
+### Throughput knobs (multi-k TPS)
+
+| knob (`docker/.env`) | default | at load | why |
+|---|---|---|---|
+| `USSD_LOG_SLEE_LEVEL` | `INFO` | `WARN` | `ussdgw-slee.log` writes one IN and one OUT line per SBB/RA event (~12 lines per USSD turn). Past ~2k TPS the non-blocking async appender drops lines and the formatting costs CPU. CDRs are unaffected (own logger + ClickHouse). |
+| `ussd.http.client.ra-instances` (configs) | `0` = one HTTP client RA entity per core | keep | each entity has its own Vert.x client and connection pool; a dialog is pinned to one entity so its JSESSIONID always leaves from the same client |
+| `ussd.http.server.response-timeout-ms` (configs) | `300000` | keep | the HTTP server RA answers `504` itself when the application never answers a request, so no client and no pending entry waits forever |

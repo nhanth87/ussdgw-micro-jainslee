@@ -30,6 +30,7 @@ import com.microjainslee.api.Sbb;
 import com.microjainslee.api.SleeEvent;
 import com.microjainslee.api.SleeEventHandler;
 import com.microjainslee.api.annotations.InjectRa;
+import com.microjainslee.core.NullActivities;
 import com.microjainslee.ra.jss7.event.Ss7MapEvent;
 
 import java.util.Optional;
@@ -49,6 +50,41 @@ import org.restcomm.protocols.ss7.map.api.service.supplementary.ProcessUnstructu
 import org.restcomm.protocols.ss7.map.api.service.supplementary.UnstructuredSSNotifyResponse;
 import org.restcomm.protocols.ss7.map.api.service.supplementary.UnstructuredSSResponse;
 
+/**
+ * The MAP side of every USSD session: receives what the network (MSC/HLR, through the jSS7 RA)
+ * sends, and decides what happens next.
+ *
+ * <h2>Map of this class — which MAP message goes where</h2>
+ * <pre>
+ * onEvent
+ *  ├─ Service (a MAP operation)                       → handleService
+ *  │   ├─ processUnstructuredSS-Request   (subscriber dialed *123#)        → onProcessUnstructured
+ *  │   │      find the rule for the dial on the dialog's SS7 link (tenant), open the
+ *  │   │      session, then either pull the AS, or first hop to another USSD
+ *  │   │      service (MAP2MAP, "re-route") when the rule says so
+ *  │   ├─ unstructuredSS-Request response (subscriber chose a menu digit)  → onUserContinue
+ *  │   │      next turn: same session, same tenant, same AS (and same JSESSIONID)
+ *  │   ├─ … response to OUR hop (MAP2MAP)                                 → onMap2MapHopResponse
+ *  │   ├─ unstructuredSS-Notify response  (network-initiated notify ack)   → onNotifyResponse
+ *  │   ├─ sendRoutingInfoForSM request    (we act as HLR face)            → onInboundSriRequest
+ *  │   └─ sendRoutingInfoForSM response   (where is the subscriber, for NI) → onSriResponse
+ *  ├─ Dialog (open / close / abort / timeout)          → handleDialog → handleInboundOrAbort
+ *  │      a dialog that dies mid-session ends the session (or keeps it on the virtual bridge
+ *  │      when the AS is late and the subscriber already got the "please wait" text)
+ *  └─ Error (TC error / reject)                        → handleError → endDialogOnFailure
+ * </pre>
+ *
+ * <h2>Rules that every path keeps</h2>
+ * <ul>
+ *   <li>The SBB never touches sockets: MAP goes out through the jSS7 RA ({@code ss7}), HTTP/gRPC
+ *       pulls go out as events ({@code AsPullRouter}).</li>
+ *   <li>Every turn bumps the session generation, so a late AS answer to an old turn is dropped
+ *       instead of being shown on the next one.</li>
+ *   <li>The session store's compare-and-transition decides who owns a dialog when two paths race
+ *       (AS answer vs. adaptive-timeout gate vs. user abort): only the winner closes the dialog.</li>
+ *   <li>Nothing escapes {@link #onEvent}: failures are traced and the dialog is ended cleanly.</li>
+ * </ul>
+ */
 public final class MapUssdParentSbb implements Sbb, SleeEventHandler {
     /** Non-SLEE helper logs only — onEvent stays SleeEventTrace. */
     private static final Logger LOG = LogManager.getLogger(MapUssdParentSbb.class);
@@ -383,7 +419,7 @@ public final class MapUssdParentSbb implements Sbb, SleeEventHandler {
                 && svc.message() instanceof ProcessUnstructuredSSResponse procRsp) {
             svc().map2MapCompletion().cancelDeferredHopClose(svc.dialogId());
             var m2m = svc().pendingMap2Map().takeIfPhase(svc.dialogId(),
-                    et.restlink.ussdgw.service.PendingMap2MapRegistry.Phase.AWAITING_USSD);
+                    PendingMap2MapRegistry.Phase.AWAITING_USSD);
             if (m2m.isPresent()) {
                 return onMap2MapHopResponse(m2m.get().req(), ussdText(procRsp));
             }
@@ -393,7 +429,7 @@ public final class MapUssdParentSbb implements Sbb, SleeEventHandler {
                 && svc.message() instanceof UnstructuredSSResponse resp) {
             svc().map2MapCompletion().cancelDeferredHopClose(svc.dialogId());
             var m2m = svc().pendingMap2Map().takeIfPhase(svc.dialogId(),
-                    et.restlink.ussdgw.service.PendingMap2MapRegistry.Phase.AWAITING_USSD);
+                    PendingMap2MapRegistry.Phase.AWAITING_USSD);
             if (m2m.isPresent()) {
                 return onMap2MapHopResponse(m2m.get().req(), ussdText(resp));
             }
@@ -429,7 +465,7 @@ public final class MapUssdParentSbb implements Sbb, SleeEventHandler {
         } catch (Throwable ignored) { }
         InboundSriSmEvent ev = new InboundSriSmEvent(
                 svc.dialogId(), req.getInvokeId(), msisdn, sc, networkId);
-        com.microjainslee.core.NullActivities.fire(svc().container(), "hlr-sri-" + svc.dialogId(),
+        NullActivities.fire(svc().container(), "hlr-sri-" + svc.dialogId(),
                 ev);
         return "hlr-face-routed";
     }
@@ -516,7 +552,7 @@ public final class MapUssdParentSbb implements Sbb, SleeEventHandler {
                         Map2MapCdr.ARMED, Map2MapCdr.detailArmed(m2m, session),
                         networkId, r.tenantId(), "MAP", null, null);
             } catch (Throwable ignored) { }
-            com.microjainslee.core.NullActivities.fire(svc().container(), "map2map-" + corr,
+            NullActivities.fire(svc().container(), "map2map-" + corr,
                 m2m);
             String hopPreview = resolveHopUssdForReq(svc(), m2m);
             return "map2map-queued sc=" + shortCode + " redirect=" + r.redirectUssdString()
@@ -1201,7 +1237,7 @@ public final class MapUssdParentSbb implements Sbb, SleeEventHandler {
         } catch (Throwable ignored) { }
         try {
             if (svc().container() != null) {
-                com.microjainslee.core.NullActivities.fire(svc().container(), "ni-push-" + ni.correlationId(),
+                NullActivities.fire(svc().container(), "ni-push-" + ni.correlationId(),
                 et.restlink.ussdgw.events.NiPushReadyEvent.fromSri(ni, r.mscGt(), r.imsi()));
             }
         } catch (Throwable ignored) { }

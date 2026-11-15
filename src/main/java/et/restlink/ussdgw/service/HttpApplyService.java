@@ -110,6 +110,7 @@ public class HttpApplyService {
             }
             container.registerRaEntityGroup(HttpCallbackRaEndpoint.NAME, created);
             clientEntities = java.util.List.copyOf(created);
+            linkStatus.bindHttpPlane(this::clientEntities, this::serverEndpoint);
             detail.append("http-client=wired;entities=").append(entities)
                     .append(";connectMs=").append(config.httpConnectTimeoutMs())
                     .append(";requestMs=").append(config.httpRequestTimeoutMs())
@@ -134,15 +135,19 @@ public class HttpApplyService {
             invokeIntSetter(ra, "setEventLoopThreads", eventLoop);
             invokeIntSetter(ra, "setWorkerPoolSize", workerPool);
             invokeIntSetter(ra, "setAcceptBacklog", acceptBacklog);
+            // No request waits forever: a request whose event was dropped is answered 504.
+            ra.setResponseTimeoutMs(config.httpServerResponseTimeoutMs());
             serverEndpoint = new HttpServerRaEndpoint(ra);
             serverEndpoint.setPort(port);
             container.registerRa(serverEndpoint, serverEndpoint);
             HttpServerAdminBindings.bind(serverEndpoint);
             linkStatus.markHttpListen(port);
+            linkStatus.bindHttpPlane(this::clientEntities, this::serverEndpoint);
             detail.append("http-server=wired;listen=").append(host).append(':').append(port)
                     .append(";eventLoop=").append(eventLoop)
                     .append(";workerPool=").append(workerPool)
                     .append(";acceptBacklog=").append(acceptBacklog)
+                    .append(";responseTimeoutMs=").append(config.httpServerResponseTimeoutMs())
                     .append(";callback=").append(config.httpCallbackPath());
         } else {
             linkStatus.clearHttp();

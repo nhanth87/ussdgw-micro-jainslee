@@ -36,6 +36,7 @@ DIGICOM_PATHS=(
   "build/systemd/install-on-digicom.sh"
   "dist/configs/ss7-digicom-balance.json"
   "dist/configs/application-digicom.properties"
+  "docs/digicom/DEPLOY-DIGICOM-TEST.md"
 )
 
 DRY_RUN=0
@@ -219,6 +220,7 @@ build_and_push_digicom() {
             build/systemd/install-on-digicom.sh 2>/dev/null || true
   [[ -f dist/configs/ss7-digicom-balance.json ]] && git add -f dist/configs/ss7-digicom-balance.json || true
   [[ -f dist/configs/application-digicom.properties ]] && git add -f dist/configs/application-digicom.properties || true
+  [[ -f docs/digicom/DEPLOY-DIGICOM-TEST.md ]] && git add -f docs/digicom/DEPLOY-DIGICOM-TEST.md || true
 
   if git diff --cached --quiet; then
     info "digicom overlay already present on ${DIGICOM_BRANCH}"

@@ -30,6 +30,11 @@
     <Property name="MAX_SIZE">${sys:ussd.log.max-size:-200MB}</Property>
     <Property name="MAX_FILES">${sys:ussd.log.max-files:-120}</Property>
     <Property name="MAX_AGE">${sys:ussd.log.max-age:-120d}</Property>
+    <!-- SLEE boundary trace (one IN + one OUT line per SBB/RA event, ~6 events per USSD turn).
+         INFO keeps every boundary for troubleshooting; at multi-k TPS that is tens of thousands
+         of lines a second, and the non-blocking async appender drops what it cannot write.
+         WARN (or OFF) for throughput: USSD_LOG_SLEE_LEVEL in docker/.env. -->
+    <Property name="SLEE_LEVEL">${sys:ussd.log.slee-level:-INFO}</Property>
   </Properties>
   <Appenders>
     <RollingFile name="APP" fileName="${LOG_DIR}/ussdgw.log"
@@ -104,7 +109,7 @@
     </Async>
   </Appenders>
   <Loggers>
-    <Logger name="SLEE" level="INFO" additivity="false"><AppenderRef ref="SLEE_ASYNC"/></Logger>
+    <Logger name="SLEE" level="${SLEE_LEVEL}" additivity="false"><AppenderRef ref="SLEE_ASYNC"/></Logger>
     <Logger name="USSD_CDR" level="INFO" additivity="false"><AppenderRef ref="CDR_ASYNC"/></Logger>
     <!-- First-run credentials: console only, never a file with 14d retention. -->
     <Logger name="USSD_FIRST_RUN" level="INFO" additivity="false"><AppenderRef ref="CONSOLE"/></Logger>

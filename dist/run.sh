@@ -97,6 +97,7 @@ exec java \
   "${JAVA_OPTS_DEFAULT[@]}" \
   "${EXTRA_JAVA_OPTS[@]}" \
   -Dussd.log.dir="$USSD_LOG_DIR" \
+  -Dussd.log.slee-level="${USSD_LOG_SLEE_LEVEL:-INFO}" \
   -Dorg.jboss.logging.provider=log4j2 \
   -Dussd.cdr.roll-max-files="${USSD_CDR_ROLL_MAX_FILES:-6}" \
   -Dussd.cdr.roll-max-age="${USSD_CDR_ROLL_MAX_AGE:-30d}" \

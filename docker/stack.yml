@@ -243,6 +243,8 @@ services:
       # to one container. Raise only on a dedicated node.
       USSD_XMS: ${USSD_XMS:-2g}
       USSD_XMX: ${USSD_XMX:-4g}
+      # SLEE boundary trace level (ussdgw-slee.log): INFO = every SBB/RA event; WARN for multi-k TPS.
+      USSD_LOG_SLEE_LEVEL: ${USSD_LOG_SLEE_LEVEL:-INFO}
       TZ: Africa/Addis_Ababa
     depends_on: [postgres, clickhouse]
     # Give live MAP dialogs time to end/abort cleanly on SIGTERM instead of being

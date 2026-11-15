@@ -26,6 +26,7 @@ import com.microjainslee.api.Sbb;
 import com.microjainslee.api.SleeEvent;
 import com.microjainslee.api.SleeEventHandler;
 import com.microjainslee.api.annotations.InjectRa;
+import com.microjainslee.core.NullActivities;
 import com.microjainslee.ra.httpserver.command.HttpServerCommand;
 import com.microjainslee.ra.httpserver.events.HttpWebRequestEvent;
 
@@ -35,7 +36,30 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 
-/** HTTP admin + AS async callback + classic NI sync ingress. */
+/**
+ * Everything that comes IN over HTTP (the HTTP server RA, port 8088).
+ *
+ * <h2>Three entrances</h2>
+ * <ol>
+ *   <li><b>AS callback</b> ({@code ussd.http.callback-path}, POST): an AS answering a pull
+ *       asynchronously. The answer goes to the virtual-session bridge, exactly like a
+ *       synchronous answer would; the caller must hold the API key of the session's tenant.</li>
+ *   <li><b>Classic NI push</b> ({@code ussd.http.ni-path}, default {@code /ussd}, POST): an AS
+ *       starts a USSD dialog towards a subscriber (network initiated). Same contract as the old
+ *       ussdgateway servlet:
+ *       <ul>
+ *         <li>first POST (no {@code JSESSIONID}) → {@link #handleNiFirst}: a session is created,
+ *             the MAP push starts, and the HTTP request is <em>parked</em> until the subscriber
+ *             answers; the reply carries {@code Set-Cookie: JSESSIONID};</li>
+ *         <li>later POSTs with that {@code JSESSIONID} → {@link #handleNiContinue}: the next
+ *             menu on the same MAP dialog, or end/abort. A JSESSIONID only works for the tenant
+ *             that started it.</li>
+ *       </ul></li>
+ *   <li><b>Admin UI and APIs</b>: anything else is handed to {@code AdminHttpHandler}.</li>
+ * </ol>
+ * Every request gets an answer: a failure becomes a 500 here, and the RA itself answers 504 if
+ * this SBB never replies ({@code ussd.http.server.response-timeout-ms}).
+ */
 public final class HttpServerSbb implements Sbb, SleeEventHandler {
     private static final ObjectMapper JSON = new ObjectMapper();
     private static final long LAB_ECHO_DELAY_MS = 50L;
@@ -330,8 +354,8 @@ public final class HttpServerSbb implements Sbb, SleeEventHandler {
                 req.getSessionId(), jsession, corr, prior.format(), prior.networkId(), false);
         // P1-1: re-arm per AS hop with the op-appropriate budget (Request → UI timeout).
         rec.setRequestUi(!ingress.notifyOnly());
-        String msisdn = svc().store().get(corr).map(VirtualSession::msisdn).orElse("");
         Optional<VirtualSession> sess = svc().store().get(corr);
+        String msisdn = sess.map(VirtualSession::msisdn).orElse("");
         boolean reuse = sess.isPresent()
                 && sess.get().dialogAlive()
                 && sess.get().mscGt() != null
@@ -356,7 +380,7 @@ public final class HttpServerSbb implements Sbb, SleeEventHandler {
     private void routeNiPush(String corr, String msisdn, String text, int networkId,
                              boolean notifyOnly) {
         try {
-            com.microjainslee.core.NullActivities.fire(svc().container(), "http-ni-" + corr,
+            NullActivities.fire(svc().container(), "http-ni-" + corr,
                 new NiPushRequestEvent(corr, msisdn, text, networkId, UssdAlphabet.AUTO, notifyOnly));
         } catch (RuntimeException e) {
             // Lab / bootstrap without container — park gate or lab echo still covers reply.
@@ -367,7 +391,7 @@ public final class HttpServerSbb implements Sbb, SleeEventHandler {
     private void routeNiContinue(String corr, String msisdn, String text, int networkId,
                                  boolean notifyOnly, String mscGt, String imsi) {
         try {
-            com.microjainslee.core.NullActivities.fire(svc().container(), "http-ni-cont-" + corr,
+            NullActivities.fire(svc().container(), "http-ni-cont-" + corr,
                 NiPushReadyEvent.continueOnDialog(corr, msisdn, text, networkId,
                             UssdAlphabet.AUTO, notifyOnly, mscGt, imsi));
         } catch (RuntimeException e) {
