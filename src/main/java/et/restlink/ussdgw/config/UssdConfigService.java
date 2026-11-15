@@ -65,7 +65,7 @@ public class UssdConfigService {
     boolean httpServerEnabledProp;
     @ConfigProperty(name = "ussd.http.client.connect-timeout-ms", defaultValue = "5000")
     int httpConnectMsProp;
-    @ConfigProperty(name = "ussd.http.client.request-timeout-ms", defaultValue = "15000")
+    @ConfigProperty(name = "ussd.http.client.request-timeout-ms", defaultValue = "30000")
     int httpRequestMsProp;
     /**
      * Transport-level re-sends of an AS POST inside the HTTP client RA. Default 0 = classic
@@ -145,7 +145,7 @@ public class UssdConfigService {
     boolean grpcClientEnabledProp;
     @ConfigProperty(name = "ussd.grpc.server.enabled", defaultValue = "true")
     boolean grpcServerEnabledProp;
-    @ConfigProperty(name = "ussd.grpc.client.invoke-timeout-ms", defaultValue = "15000")
+    @ConfigProperty(name = "ussd.grpc.client.invoke-timeout-ms", defaultValue = "30000")
     long grpcInvokeMsProp;
 
     @ConfigProperty(name = "ussd.diameter.enabled", defaultValue = "false")
@@ -266,8 +266,33 @@ public class UssdConfigService {
         return integer(RuntimeConfigStore.Keys.HTTP_CONNECT_MS, httpConnectMsProp);
     }
 
+    /**
+     * The least time an AS gets to answer one pull. The gateway keeps the request open until the
+     * AS answers or this much time has passed — never less (owner requirement 2026-11-15). The
+     * subscriber is not left waiting meanwhile: AdaptiveTimeout + the virtual bridge send the
+     * "please wait" text at {@code ussd.bridge.async-gate-timeout-ms} and the late answer follows.
+     * A configured value below this (file, env or admin UI) is raised to it, with a warning.
+     */
+    public static final int AS_ANSWER_MIN_MS = 30_000;
+
+    private static final java.util.Set<String> LOW_TIMEOUT_WARNED = java.util.concurrent.ConcurrentHashMap.newKeySet();
+
+    private static long atLeastAsAnswerMin(String key, long configured) {
+        if (configured >= AS_ANSWER_MIN_MS) {
+            return configured;
+        }
+        if (LOW_TIMEOUT_WARNED.add(key + "=" + configured)) {
+            org.apache.logging.log4j.LogManager.getLogger(UssdConfigService.class).warn(
+                    "{}={} ms is shorter than the AS answer budget — using {} ms (an AS pull is never cut before {} s)",
+                    key, configured, AS_ANSWER_MIN_MS, AS_ANSWER_MIN_MS / 1000);
+        }
+        return AS_ANSWER_MIN_MS;
+    }
+
+    /** HTTP AS pull: how long the gateway waits for the AS answer (≥ {@link #AS_ANSWER_MIN_MS}). */
     public int httpRequestTimeoutMs() {
-        return integer(RuntimeConfigStore.Keys.HTTP_REQUEST_MS, httpRequestMsProp);
+        return (int) atLeastAsAnswerMin("ussd.http.client.request-timeout-ms",
+                integer(RuntimeConfigStore.Keys.HTTP_REQUEST_MS, httpRequestMsProp));
     }
 
     /** Vert.x WebClient max pool size for AS pull / callbacks. */
@@ -348,8 +373,10 @@ public class UssdConfigService {
         return bool(RuntimeConfigStore.Keys.GRPC_SERVER_ENABLED, grpcServerEnabledProp);
     }
 
+    /** gRPC AS pull deadline (≥ {@link #AS_ANSWER_MIN_MS}). */
     public long grpcInvokeTimeoutMs() {
-        return lng(RuntimeConfigStore.Keys.GRPC_INVOKE_MS, grpcInvokeMsProp);
+        return atLeastAsAnswerMin("ussd.grpc.client.invoke-timeout-ms",
+                lng(RuntimeConfigStore.Keys.GRPC_INVOKE_MS, grpcInvokeMsProp));
     }
 
     public boolean diameterEnabled() {

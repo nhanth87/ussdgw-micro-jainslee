@@ -223,7 +223,8 @@ public class AdminHttpAsModeHandler {
             sb.append(field("connectTimeoutMs", "connectMs",
                     String.valueOf(config.httpConnectTimeoutMs()), null));
             sb.append(field("requestTimeoutMs", "requestMs",
-                    String.valueOf(config.httpRequestTimeoutMs()), null));
+                    String.valueOf(config.httpRequestTimeoutMs()),
+                    "AS answer wait, min " + UssdConfigService.AS_ANSWER_MIN_MS));
             sb.append(planeButtons());
             sb.append("</form>");
         } else {
