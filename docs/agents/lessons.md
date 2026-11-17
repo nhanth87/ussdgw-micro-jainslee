@@ -888,3 +888,10 @@ Detail: workspace [`docs/agents/lessons.md`](../../../../../docs/agents/lessons.
 | Convergence judged from **one** snapshot 22 s after start | Swarm counts a replica only once healthy (start_period). Poll until converged or `READY_TIMEOUT`. Same for prove checks that depend on boot (SCTP endpoints, ClickHouse schema). | `full-build.sh`, `prove.sh` |
 | A request the SBB never answered kept the client and the pending entry forever | HTTP server RA answers 504 after `responseTimeoutMs` (ussdgw: `ussd.http.server.response-timeout-ms`, never below the NI park). | micro-jainslee `ra-http-server` |
 | Each failed attempt on a live SS7 host is an outage | Dry-run deploy logic on the host first (copy of `full-build.sh` with `MODE_CHECK=1` and the port block cleared, git-excluded). Cutover script auto-rolls back. `full-build.sh` reuses images when only scripts/docs changed, so a retry is a deploy, not a rebuild. | `/srv/ussdgw-build/cutover.sh` |
+
+## 2026-11-17 — SRI-SM SRI_TIMEOUT: outbound GTT turned into DPC+SSN
+
+| Mistake | Rule | Where |
+|---------|------|-------|
+| NI push: every SRI-SM ended `SRI_TIMEOUT` (TC NOTICE at the 30 s invoke timeout, dialog timeout at 60 s); GT/SSN looked right | Read the **routing indicator** on the wire, not just GT/SSN: the pcap showed Called **RI=0x01 (DPC+SSN)**. Since jSS7 j25 `d85146800` (2026-08-26) a GTT rule whose `to` has only `pc` (gt absent/`*`) builds a DPC+SSN routing address, so the carrier STP (PC 1404) looked for SSN 6 on itself and dropped every outbound SRI / MAP2MAP hop / MO answer. Fix: `"to": {"pc": 1404, "ri": "gt"}` on the live network's `from: local` rule → Called RI=0x00, HLR answered in 125 ms. `install-config.sh` now fails the booted stack file when a live-network outbound rule would leave DPC+SSN. Inbound `remote → own pc` rules stay DPC+SSN. | `ss7-*.json` `sccp.routing`, `docker/install-config.sh` |
+| Test MSISDN answered `absentSubscriberSM` (diag 4) | That is a correct HLR answer for an absent/purged number — routing works; prove delivery with a live, attached MSISDN. | — |

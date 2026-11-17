@@ -246,6 +246,32 @@ validate() {
     fi
   done
 
+  # Outbound GTT toward the carrier STP must stay GT-routed. Since jSS7 j25 (d85146800,
+  # 2026-08-26) a rule whose `to` carries only a pc (gt absent/"*") builds a DPC+SSN routing
+  # address: every SRI-SM / MAP2MAP hop / MO answer then leaves with RI=DPC+SSN, the STP looks
+  # for the called SSN on itself and drops it — no answer, SRI_TIMEOUT (digicom-nb 2026-11-17).
+  # `"ri": "gt"` restores the GT-routed shape. Only the live network's local rules matter here;
+  # the lab simulator plane may legitimately be DPC+SSN.
+  local live_net
+  live_net="$(grep -E '^ussd\.map\.live-network-id=' "$dir/application.properties" 2>/dev/null \
+              | head -1 | cut -d= -f2- | tr -dc '0-9')"
+  live_net="${live_net:-0}"
+  for f in "$dir"/ss7-*.json; do
+    [[ -f "$f" ]] || continue
+    local dpc_rules
+    dpc_rules="$(jq -r --argjson net "$live_net" '
+        (.sccp.routing // [])[]
+        | select(.from == "local" and ((.networkId // 0) == $net) and (.to.pc != null)
+                 and (((.to.ri // "") | ascii_downcase) != "gt")
+                 and (((.to.gt // "*") | tostring) == "*"))
+        | "match gt=\(.match.gt // "*") -> pc \(.to.pc)"' "$f" 2>/dev/null || true)"
+    if [[ -n "$dpc_rules" ]]; then
+      stack_note "$f" "$(basename "$f"): live network $live_net outbound rule(s) would leave RI=DPC+SSN toward the STP: $(echo "$dpc_rules" | tr '\n' ';') — add \"ri\": \"gt\" to their \"to\" (SRI-SM / MAP2MAP / MO answers are dropped otherwise)"
+    else
+      ok "$(basename "$f"): live network $live_net outbound GTT is GT-routed toward the STP"
+    fi
+  done
+
   # tenant network_id must match the SCCP networkId or routing silently fails.
   warn "remember: every tenant network_id must equal the SCCP networkId it routes on"
   warn "  (live Digicom traffic is typically networkId=0 only; a mismatch gives 'no matching Rule')"
