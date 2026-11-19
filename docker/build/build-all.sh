@@ -146,10 +146,10 @@ require_dir "$WORK_DIR/sctp"
 # transport), so skipping is correct rather than a workaround.
 mvn_in sctp -f "$WORK_DIR/sctp/pom.xml" install -DskipTests -Dmaven.test.skip=true -Dexec.skip=true
 
-# The version the step above just installed. jss7 (root pom) and ra-jss7 still declare
-# sctp.version 2.27.32, so without an override they would resolve a 2.27.32 this chain
-# never built — from a warm /m2 that "works" against the wrong transport, from a cold
-# one it fails an hour in. Pass the built version to both reactors instead.
+# The version the step above just installed. jss7 (root pom) and ra-jss7 declare their own
+# sctp.version (2.27.34 since 2026-11-19); if the two ever drift, an override-free build
+# would resolve an sctp this chain never built — from a warm /m2 that "works" against the
+# wrong transport, from a cold one it fails an hour in. Pass the built version to both.
 SCTP_VERSION="$(awk '/<artifactId>sctp-parent<\/artifactId>/{f=1;next} f&&match($0,/<version>[^<]+/){print substr($0,RSTART+9,RLENGTH-9);exit}' \
                 "$WORK_DIR/sctp/pom.xml" 2>/dev/null || true)"
 [[ -n "$SCTP_VERSION" ]] || die "cannot read the sctp-parent version from $WORK_DIR/sctp/pom.xml"

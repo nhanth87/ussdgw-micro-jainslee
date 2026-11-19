@@ -21,8 +21,8 @@
 #   USSD_MIRROR_LEGACY=1  passed through to package-dist.sh → RestLink/Ussdgw
 #
 # Build order:
-#   1) sctp          branch fix/2.27.33-stale-channel → org.mobicents.protocols.sctp:sctp-*:2.27.33
-#   2) jss7          branch j25             → org.restcomm.protocols.ss7.*:9.2.10-j25 (+ ss7-config)
+#   1) sctp          branch fix/2.27.34-write-drop  → org.mobicents.protocols.sctp:sctp-*:2.27.34
+#   2) jss7          branch j25             → org.restcomm.protocols.ss7.*:9.2.11-j25 (+ ss7-config)
 #   3) jain-slee     branch micro-jainslee-2→ com.microjainslee:*:1.2.2-SNAPSHOT
 #        (reactor installs core/api/adapter-quarkus + vendor-ras:
 #         ra-http-server, ra-jss7, ra-sip-servlet, ra-diameter, …)
@@ -123,7 +123,7 @@ log "mvn=$(mvn -v 2>&1 | head -1)"
 
 # name|branch|dir_under_workspace
 REPOS=(
-  "sctp|fix/2.27.33-stale-channel|sctp"
+  "sctp|fix/2.27.34-write-drop|sctp"
   "jss7|j25|jss7"
   "jain-slee|micro-jainslee-2|jain-slee"
 )
@@ -270,17 +270,17 @@ mvn_install() {
 }
 
 if need_build "sctp" \
-  "org.mobicents.protocols.sctp:sctp-impl:2.27.33" \
-  "org.mobicents.protocols.sctp:sctp-api:2.27.33"; then
+  "org.mobicents.protocols.sctp:sctp-impl:2.27.34" \
+  "org.mobicents.protocols.sctp:sctp-api:2.27.34"; then
   mvn_install "sctp" "${SCTP_ROOT}"
 fi
 
-# jss7 and ra-jss7 still declare sctp.version 2.27.32; build them against the sctp we ship.
-SCTP_VERSION=2.27.33
+# jss7 9.2.11-j25 and ra-jss7 declare sctp 2.27.34 too; pass it anyway so they always match the sctp we ship.
+SCTP_VERSION=2.27.34
 
 if need_build "jss7" \
-  "org.restcomm.protocols.ss7.config:ss7-config:9.2.10-j25" \
-  "org.restcomm.protocols.ss7.map:map-impl:9.2.10-j25"; then
+  "org.restcomm.protocols.ss7.config:ss7-config:9.2.11-j25" \
+  "org.restcomm.protocols.ss7.map:map-impl:9.2.11-j25"; then
   mvn_install "jss7" "${JSS7_ROOT}" -Dmaven.test.skip=true -Dsctp.version="${SCTP_VERSION}"
 fi
 

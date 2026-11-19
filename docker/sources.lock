@@ -31,11 +31,11 @@
 # The commit SHA is authoritative. Branch names are documentation only and are
 # IGNORED by the verifier — a moved branch cannot silently change what we build.
 
-sctp|https://github.com/nhanth87/sctp.git|fix/2.27.33-stale-channel|3947dd2d6ba01a84401347836e926f6520b10d78
+sctp|https://github.com/nhanth87/sctp.git|fix/2.27.34-write-drop|954f3bc765eb6605144a7e32fe07720a0e867146
 
-jss7|https://github.com/nhanth87/jss7.git|j25|59b800e99a19fb729664bf380b0ec63cc129a337
+jss7|https://github.com/nhanth87/jss7.git|j25|00b29426ca7b27062c39b8d2cbe672c1c1d0f8a6
 
-jain-slee|https://github.com/nhanth87/jain-slee.git|micro-jainslee-2|313c1af482d5c869ee396043461c574776448909
+jain-slee|https://github.com/nhanth87/jain-slee.git|micro-jainslee-2|75e1bf99eca647fb13cbbf4176cf3ea80a16c558
 
 corsac-diameter|https://github.com/mobius-software-ltd/corsac-diameter.git|diameter-parent-10.0.0-41|0bc4629186a7153ab365568c3c8d7e340c77d862
 
@@ -46,7 +46,18 @@ corsac-diameter|https://github.com/mobius-software-ltd/corsac-diameter.git|diame
 #   whose pom.xml literally reads 10.0.0-41-SNAPSHOT. We install it AS-IS — we are
 #   not rewriting version coordinates to fake a release.
 #
-# NOTE on the version bump (2026-11-15) — latest pushed heads of the chain:
+# NOTE on the version bump (2026-11-19) — sctp 2.27.34 + jSS7 9.2.11-j25:
+#     sctp       954f3bc76  fix/2.27.34-write-drop  2.27.34, every module (2.27.33 + 1: a full
+#                           send buffer, peer a_rwnd 0, no longer drops the M3UA message while
+#                           the write reports success — PooledNioSctpChannel.doWriteMessage)
+#     jss7       00b29426c  j25 (= release/9.2.11-j25)  9.2.11-j25 on sctp 2.27.34; map/load
+#                           no longer declares lombok twice (Maven 3.9 refused the reactor)
+#     jain-slee  75e1bf99e  micro-jainslee-2  ra-jss7 ss7.version 9.2.11-j25, sctp 2.27.34
+#   jss7 and ra-jss7 now declare sctp 2.27.34 themselves; build-all.sh still passes
+#   -Dsctp.version=<the version the sctp step built> as a guard.
+#   ussdgw's pom.xml carries sctp.version=2.27.34.
+#
+# NOTE on the version bump (2026-11-15) — pushed heads of the chain at that time:
 #     sctp       3947dd2d6  fix/2.27.33-stale-channel  2.27.33 (java25-upgrade + 1: a
 #                           replaced channel's late close no longer takes the live
 #                           association down after an STP SCTP RESTART)
