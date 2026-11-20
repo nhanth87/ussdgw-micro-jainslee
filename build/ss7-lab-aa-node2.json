@@ -1,0 +1,104 @@
+{
+  "_comment": "AA node-2 lab template (ADR 0007 D11/D12). Same AS/opc/rc/ssn/loadshare as node-1; binds 127.0.0.1:8023; DISJOINT OTID range [1000000001, 2000000000]. Loopback lab only — no carrier data. SCTP only, never TCP.",
+  "stackName": "ra-jss7",
+  "protocols": {
+    "map": true,
+    "cap": false
+  },
+  "sctp": {
+    "connectDelay": 10000,
+    "workerThreads": 8,
+    "backend": "NETTY_KERNEL",
+    "links": [
+      {
+        "name": "L2",
+        "type": "server",
+        "channel": "sctp",
+        "local": "127.0.0.1:8023",
+        "peer": "127.0.0.1:8024",
+        "localSecondary": []
+      }
+    ]
+  },
+  "m3ua": {
+    "as": [
+      {
+        "name": "AS1",
+        "mode": "loadshare",
+        "functionality": "as",
+        "ipsp": "server",
+        "routingContext": 12,
+        "links": [
+          "L2"
+        ]
+      }
+    ],
+    "routes": [
+      {
+        "to": {
+          "dpc": 2,
+          "opc": 1
+        },
+        "via": "AS1"
+      }
+    ]
+  },
+  "sccp": {
+    "localPoints": [
+      {
+        "pc": 1,
+        "networkIndicator": "national",
+        "networkId": 0,
+        "reachablePointCodes": [
+          2
+        ]
+      }
+    ],
+    "routing": [
+      {
+        "from": "remote",
+        "match": {
+          "gt": "*"
+        },
+        "to": {
+          "pc": 1
+        },
+        "mask": "K"
+      },
+      {
+        "from": "local",
+        "match": {
+          "gt": "*"
+        },
+        "to": {
+          "pc": 2
+        },
+        "mask": "K"
+      }
+    ]
+  },
+  "tcap": {
+    "dialogIdleTimeout": 300000,
+    "invokeTimeout": 120000,
+    "maxDialogs": 5000,
+    "dialogIdRangeStart": 1000000001,
+    "dialogIdRangeEnd": 2000000000
+  },
+  "services": [
+    {
+      "name": "primary",
+      "ssn": 8,
+      "protocol": "map"
+    },
+    {
+      "name": "gsmscf",
+      "ssn": 147,
+      "protocol": "map"
+    },
+    {
+      "name": "hlr",
+      "ssn": 6,
+      "protocol": "map"
+    }
+  ]
+}

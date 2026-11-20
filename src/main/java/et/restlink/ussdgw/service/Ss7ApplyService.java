@@ -1,10 +1,12 @@
 package et.restlink.ussdgw.service;
 
 import et.restlink.ussdgw.admin.LinkStatusService;
+import et.restlink.ussdgw.bootstrap.ClusterBootstrap;
 import et.restlink.ussdgw.bridge.UssdSagaCoordinator;
 import et.restlink.ussdgw.bridge.VirtualSessionBridge;
 import et.restlink.ussdgw.config.RuntimeConfigStore;
 import et.restlink.ussdgw.config.Ss7PersistDirs;
+import et.restlink.ussdgw.config.UssdConfigService;
 import et.restlink.ussdgw.hlr.PendingHlrProxyRegistry;
 
 import com.microjainslee.core.MicroSleeContainer;
@@ -43,6 +45,8 @@ public class Ss7ApplyService {
     @Inject PendingMap2MapRegistry pendingMap2Map;
     @Inject RuntimeConfigStore store;
     @Inject Ss7PeerRouteService peerRoutes;
+    @Inject ClusterBootstrap cluster;
+    @Inject UssdConfigService config;
 
     @ConfigProperty(name = "ussd.map.enabled", defaultValue = "false")
     boolean mapEnabledProp;
@@ -242,7 +246,22 @@ public class Ss7ApplyService {
         LOG.info("jSS7 persist dir={}", persist);
 
         Ss7ResourceAdaptor ra = new Ss7ResourceAdaptor();
+        com.microjainslee.cluster.ClusterManager cm =
+                cluster != null ? cluster.clusterManager() : null;
         if (full != null) {
+            if (cm != null) {
+                // ADR 0007 D11: cluster mode without a TCAP OTID range refuses to
+                // start (routing by DTID would misdeliver). Ranges live in the
+                // JSON "tcap" block; disjointness is enforced at join by the router.
+                long s = full.tcap() == null ? 0L : full.tcap().dialogIdRangeStart();
+                long e = full.tcap() == null ? 0L : full.tcap().dialogIdRangeEnd();
+                if (s <= 0 || e <= s) {
+                    throw new IllegalStateException(
+                            "Cluster mode requires tcap.dialogIdRangeStart/End "
+                                    + "(start > 0, end > start) in " + configFile()
+                                    + " — refusing start (got [" + s + ", " + e + "])");
+                }
+            }
             ra.setSs7Config(full);
         } else {
             if (!mapEnabled()) {
@@ -254,12 +273,39 @@ public class Ss7ApplyService {
                     .originatingPointCode(opc()).destinationPointCode(dpc())
                     .mapEnabled(true).capEnabled(false)
                     .ipChannelType(channel());
+            if (cm != null) {
+                // Cluster mode: flat props must still carry this node's OTID slice
+                // and bind (SCTP only — M3UA-over-TCP is RFC 4666 §3 violation).
+                cfg.dialogIdRangeStart(config.otidRangeStart())
+                        .dialogIdRangeEnd(config.otidRangeEnd());
+                cfg.validateDialogIdRange();
+                List<String> endpoints = config.sctpLocalEndpoints();
+                if (!endpoints.isEmpty()) {
+                    cfg.sctpLocalEndpoints(endpoints)
+                            .sctpEndpointIndex(config.sctpEndpointIndex());
+                    cfg.resolvedLocalEndpoint();
+                    LOG.info("SS7 cluster bind endpoint[{}]={} of {}",
+                            config.sctpEndpointIndex(), cfg.resolvedLocalEndpoint(),
+                            endpoints);
+                }
+                if (!"SCTP".equalsIgnoreCase(channel())) {
+                    LOG.warn("Cluster mode forces ipChannelType=SCTP (configured '{}' "
+                            + "rejected — M3UA never rides TCP)", channel());
+                    cfg.ipChannelType("SCTP");
+                }
+            }
             ra.setConfig(cfg);
+        }
+        if (cm != null) {
+            ra.setClusterManager(cm);
         }
         ss7Ra = ra;
         ss7Endpoint = new Ss7RaEndpoint(ra);
         if (full != null && peerRoutes != null) {
             peerRoutes.refreshFromConfig(full);
+        }
+        if (peerRoutes != null) {
+            peerRoutes.bindCluster(cm);
         }
         container.registerRa(ss7Endpoint, ss7Endpoint);
         if (!ra.isActive()) {

@@ -28,6 +28,19 @@
     </properties>
     <dependencyManagement>
         <dependencies>
+            <!-- Infinispan moves as one release with jainslee-cluster (currently 15.2.6.Final):
+                  the Quarkus platform BOM pins org.infinispan:* to 16.0.15, which mixed
+                  infinispan-core 15.2.6 with commons/counter-api 16.0.15 and blocked
+                  ClusterManager wiring (AA cluster, ADR 0007). Imported FIRST so it wins,
+                  same pattern as the Jackson / Micrometer BOMs below. Drop when the
+                  Quarkus platform and jainslee-cluster converge. -->
+            <dependency>
+                <groupId>org.infinispan</groupId>
+                <artifactId>infinispan-bom</artifactId>
+                <version>15.2.6.Final</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
             <!-- Jackson newer than the Quarkus platform pin (2.21.8): imported FIRST so it wins, and as
                  a BOM so databind/core/annotations/dataformat-xml move together (a mixed set is a
                  NoSuchMethodError). Drop this when the Quarkus platform reaches it. -->

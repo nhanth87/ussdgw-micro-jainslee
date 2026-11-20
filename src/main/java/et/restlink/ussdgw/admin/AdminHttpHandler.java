@@ -101,6 +101,8 @@ public class AdminHttpHandler {
     @Inject AppTelemetry appTelemetry;
     @Inject et.restlink.ussdgw.bridge.GatedSessionRegistry gatedSessions;
     @Inject et.restlink.ussdgw.api.classic.ClassicNiHttpPark niHttpPark;
+    @Inject et.restlink.ussdgw.bootstrap.ClusterBootstrap cluster;
+    @Inject et.restlink.ussdgw.service.NiFlowRegistry niFlows;
 
     /**
      * {@code Secure} on the admin session cookie. Defaults to on; the plain-HTTP Digicom lab
@@ -603,6 +605,20 @@ public class AdminHttpHandler {
         if (niHttpPark != null) {
             try {
                 m.put("ni.park.size", niHttpPark.size());
+            } catch (RuntimeException ignored) {
+                // best-effort telemetry
+            }
+        }
+        if (cluster != null) {
+            try {
+                m.putAll(cluster.status());
+            } catch (RuntimeException ignored) {
+                // best-effort telemetry
+            }
+        }
+        if (niFlows != null) {
+            try {
+                m.put("ni.flow.size", niFlows.size());
             } catch (RuntimeException ignored) {
                 // best-effort telemetry
             }

@@ -1,5 +1,6 @@
 package et.restlink.ussdgw.service;
 
+import com.microjainslee.cluster.ClusterManager;
 import com.microjainslee.cluster.Ss7PeerRouteAffinity;
 import com.microjainslee.cluster.Ss7PeerRouteAffinity.PeerRoute;
 
@@ -51,6 +52,28 @@ public class Ss7PeerRouteService {
     }
 
     /**
+     * Bind the cluster-wide N–N affinity (ADR 0007 D11). Call after the RA owns a
+     * {@link ClusterManager}; {@code null} unbinds back to the deterministic local
+     * hash (single node / tests). Cluster stays OFF by default so this is a no-op
+     * unless the operator enabled it.
+     */
+    public synchronized void bindCluster(ClusterManager clusterManager) {
+        if (clusterManager == null) {
+            affinity = null;
+            LOG.info("Ss7PeerRouteService: affinity unbound (local hash)");
+            return;
+        }
+        affinity = new Ss7PeerRouteAffinity(clusterManager);
+        LOG.info("Ss7PeerRouteService: affinity bound node={} clustered={}",
+                clusterManager.getNodeId(), clusterManager.isClusterMode());
+    }
+
+    /** True when picks coordinate across the cluster instead of the local hash. */
+    public boolean affinityBound() {
+        return affinity != null;
+    }
+
+    /**
      * Pick+pin for a new outbound session. Returns null when LB disabled / no candidates /
      * no ClusterManager — caller keeps classic SLS.
      */
@@ -80,8 +103,8 @@ public class Ss7PeerRouteService {
     }
 
     private Ss7PeerRouteAffinity ensureAffinity() {
-        // ISPN ClusterManager bind deferred until Digicom Infinispan API aligns —
-        // without it, pickForNewSession uses local hash when N>1 (or null when disabled).
+        // Local deterministic hash until the cluster binds the shared affinity
+        // (ClusterBootstrap → Ss7PeerRouteService.bindCluster when enabled).
         return affinity;
     }
 

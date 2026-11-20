@@ -11,10 +11,47 @@ import java.util.List;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class Ss7PeerRouteServiceTest {
+
+    @Test
+    void affinityUnboundByDefaultBoundAfterBindCluster() {
+        Ss7PeerRouteService svc = new Ss7PeerRouteService();
+        assertFalse(svc.affinityBound());
+        com.microjainslee.cluster.ClusterManager cm = localClusterManager("aff-1");
+        try {
+            svc.bindCluster(cm);
+            assertTrue(svc.affinityBound());
+            svc.bindCluster(null);
+            assertFalse(svc.affinityBound());
+        } finally {
+            cm.stop();
+        }
+    }
+
+    @Test
+    void boundAffinityRoundRobinsAcrossCandidates() throws Exception {
+        Ss7PeerRouteService svc = new Ss7PeerRouteService();
+        set(svc, "enabled", true);
+        com.microjainslee.cluster.ClusterManager cm = localClusterManager("aff-2");
+        try {
+            svc.bindCluster(cm);
+            svc.refreshFromConfig(multiAsLabConfig());
+            var pool = new java.util.HashSet<String>();
+            for (int i = 0; i < 8; i++) {
+                var pick = svc.pickForNewSession(0, "pool-" + i);
+                assertNotNull(pick);
+                pool.add(pick.aspName());
+            }
+            // N=2 candidates: cluster-wide round-robin must visit both.
+            assertEquals(2, pool.size());
+        } finally {
+            cm.stop();
+        }
+    }
 
     @Test
     void buildCandidatesFromMultiAsLabJson() throws Exception {
@@ -82,5 +119,63 @@ class Ss7PeerRouteServiceTest {
             assertNotNull(in, name);
             return Ss7ConfigLoader.load(in);
         }
+    }
+
+    /** Local (non-clustered) ClusterManager — proves the Infinispan API alignment. */
+    private static com.microjainslee.cluster.ClusterManager localClusterManager(String nodeId) {
+        com.microjainslee.core.MicroSleeConfiguration cfg =
+                com.microjainslee.core.MicroSleeConfiguration.builder()
+                        .clusterEnabled(false)
+                        .nodeId(nodeId)
+                        .build();
+        com.microjainslee.cluster.ClusterManager cm =
+                new com.microjainslee.cluster.ClusterManager(cfg, nodeId);
+        cm.start();
+        return cm;
+    }
+
+    private static void set(Object target, String field, Object value) {
+        try {
+            var f = target.getClass().getDeclaredField(field);
+            f.setAccessible(true);
+            f.set(target, value);
+        } catch (ReflectiveOperationException e) {
+            throw new IllegalStateException(e);
+        }
+    }
+
+    private static Ss7Config multiAsLabConfig() throws Exception {
+        String json = """
+                {
+                  "stackName": "nn",
+                  "protocols": { "map": true },
+                  "sctp": { "links": [
+                    { "name": "L1-BP-1404", "type": "server", "channel": "sctp",
+                      "local": "127.0.0.1:8013", "peer": "127.0.0.1:8014" },
+                    { "name": "L2-BP-1403", "type": "server", "channel": "sctp",
+                      "local": "127.0.0.1:8023", "peer": "127.0.0.1:8024" }
+                  ]},
+                  "m3ua": {
+                    "as": [{
+                      "name": "AS-BP", "mode": "loadshare", "functionality": "ipsp",
+                      "ipsp": "server", "exchangeType": "DE", "routingContext": 1,
+                      "links": ["L1-BP-1404", "L2-BP-1403"]
+                    }],
+                    "routes": [
+                      { "to": { "dpc": 1404, "opc": 1 }, "via": "AS-BP" },
+                      { "to": { "dpc": 1403, "opc": 1 }, "via": "AS-BP" }
+                    ]
+                  },
+                  "sccp": {
+                    "localPoints": [{
+                      "pc": 1, "networkIndicator": "national", "networkId": 0,
+                      "reachablePointCodes": [1403, 1404]
+                    }]
+                  },
+                  "services": [{ "name": "primary", "ssn": 8, "protocol": "map" }]
+                }
+                """;
+        return Ss7ConfigLoader.load(
+                new java.io.ByteArrayInputStream(json.getBytes(java.nio.charset.StandardCharsets.UTF_8)));
     }
 }

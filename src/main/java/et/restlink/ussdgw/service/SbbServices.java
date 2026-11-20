@@ -68,6 +68,7 @@ public class SbbServices {
     @Inject ClassicNiHttpPark niHttpPark;
     @Inject Map2MapTelemetry map2MapTelemetry;
     @Inject Ss7PeerRouteService peerRoutes;
+    @Inject NiFlowRegistry niFlows;
 
     @PostConstruct
     void install() { INSTANCE = this; }
@@ -109,6 +110,7 @@ public class SbbServices {
     public AsWireFacade wireFacade() { return wireFacade; }
     public WireFormatResolver wireFormatResolver() { return wireFormatResolver; }
     public ClassicNiHttpPark niHttpPark() { return niHttpPark; }
+    public NiFlowRegistry niFlows() { return niFlows; }
     public Map2MapTelemetry map2MapTelemetry() { return map2MapTelemetry; }
     public Ss7PeerRouteService peerRoutes() { return peerRoutes; }
 

@@ -16,6 +16,7 @@ import et.restlink.ussdgw.cdr.CdrService;
 import et.restlink.ussdgw.config.UssdConfigService;
 import et.restlink.ussdgw.service.GatedAsNotifyService;
 import et.restlink.ussdgw.service.MapDialogHelper;
+import et.restlink.ussdgw.service.NiFlowRegistry;
 
 import com.microjainslee.api.RaCommandPort;
 import com.microjainslee.ra.httpserver.command.HttpServerCommand;
@@ -102,6 +103,8 @@ public class ClassicNiHttpPark {
     @Inject VirtualSessionStore store;
     @Inject GatedSessionRegistry gatedSessions;
     @Inject GatedAsNotifyService gatedAsNotify;
+    /** Optional: idempotent async-flow index (null in unit tests that build the park by hand). */
+    @Inject NiFlowRegistry niFlows;
 
     private final ConcurrentHashMap<String, ParkRecord> byJsession = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<String, ParkRecord> byCorr = new ConcurrentHashMap<>();
@@ -257,6 +260,7 @@ public class ClassicNiHttpPark {
         rec.setHttpSessionId(null);
         String body = wireFacade.encodeNiResponse(rec.correlationId(), text, act, false, rec.format());
         reply(rec, httpId, 200, body);
+        markFlow(rec.correlationId(), "COMPLETE", text);
         return true;
     }
 
@@ -288,6 +292,7 @@ public class ClassicNiHttpPark {
         rec.setHttpSessionId(null);
         String body = encodedBody == null ? "" : encodedBody;
         reply(rec, httpId, 200, body);
+        markFlow(rec.correlationId(), "COMPLETE", null);
         return true;
     }
 
@@ -303,7 +308,13 @@ public class ClassicNiHttpPark {
         ParkRecord rec = opt.get();
         String httpId = rec.httpSessionId();
         if (httpId == null || httpId.isBlank()) {
+            // Fire-and-status flow (202, no HTTP waiter): the gate still owns the
+            // MAP leg lifetime — unpark and record the terminal snapshot, unless
+            // an earlier completion already settled the single reply.
             unpark(correlationId);
+            if (!rec.expired()) {
+                markFlow(correlationId, "GATE_EXPIRED", null);
+            }
             return;
         }
         if (!rec.trySettle()) {
@@ -353,6 +364,7 @@ public class ClassicNiHttpPark {
         cancelGate(rec);
         rec.setHttpSessionId(null);
         reply(rec, httpId, 200, body);
+        markFlow(rec.correlationId(), "GATE_EXPIRED", null);
     }
 
     /**
@@ -522,6 +534,17 @@ public class ClassicNiHttpPark {
         }
     }
 
+    /** Best-effort async-flow snapshot (null-safe for hand-built test parks). */
+    private void markFlow(String correlationId, String state, String text) {
+        try {
+            if (niFlows != null) {
+                niFlows.mark(correlationId, state, text);
+            }
+        } catch (RuntimeException ignored) {
+            // telemetry only — never break the park reply
+        }
+    }
+
     private void cancelGate(ParkRecord rec) {
         if (rec == null) {
             return;
@@ -609,6 +632,7 @@ public class ClassicNiHttpPark {
         rec.setHttpSessionId(null);
         reply(rec, httpId, 200, body);
         unpark(correlationId);
+        markFlow(correlationId, "ABORTED", null);
         return true;
     }
 }

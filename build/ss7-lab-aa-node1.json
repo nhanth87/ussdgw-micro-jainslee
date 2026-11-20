@@ -1,0 +1,104 @@
+{
+  "_comment": "AA node-1 lab template (ADR 0007 D11/D12). Pair with ss7-lab-aa-node2.json: ONE AS, both ASPs, SAME opc/rc/ssn, loadshare; DISJOINT tcap OTID ranges; node-2 binds 127.0.0.1:8023. Loopback lab only — no carrier data. Witness is a JVM flag, not SS7 (see docs/cluster-ha.md). SCTP only, never TCP.",
+  "stackName": "ra-jss7",
+  "protocols": {
+    "map": true,
+    "cap": false
+  },
+  "sctp": {
+    "connectDelay": 10000,
+    "workerThreads": 8,
+    "backend": "NETTY_KERNEL",
+    "links": [
+      {
+        "name": "L1",
+        "type": "server",
+        "channel": "sctp",
+        "local": "127.0.0.1:8013",
+        "peer": "127.0.0.1:8014",
+        "localSecondary": []
+      }
+    ]
+  },
+  "m3ua": {
+    "as": [
+      {
+        "name": "AS1",
+        "mode": "loadshare",
+        "functionality": "as",
+        "ipsp": "server",
+        "routingContext": 12,
+        "links": [
+          "L1"
+        ]
+      }
+    ],
+    "routes": [
+      {
+        "to": {
+          "dpc": 2,
+          "opc": 1
+        },
+        "via": "AS1"
+      }
+    ]
+  },
+  "sccp": {
+    "localPoints": [
+      {
+        "pc": 1,
+        "networkIndicator": "national",
+        "networkId": 0,
+        "reachablePointCodes": [
+          2
+        ]
+      }
+    ],
+    "routing": [
+      {
+        "from": "remote",
+        "match": {
+          "gt": "*"
+        },
+        "to": {
+          "pc": 1
+        },
+        "mask": "K"
+      },
+      {
+        "from": "local",
+        "match": {
+          "gt": "*"
+        },
+        "to": {
+          "pc": 2
+        },
+        "mask": "K"
+      }
+    ]
+  },
+  "tcap": {
+    "dialogIdleTimeout": 300000,
+    "invokeTimeout": 120000,
+    "maxDialogs": 5000,
+    "dialogIdRangeStart": 1,
+    "dialogIdRangeEnd": 1000000000
+  },
+  "services": [
+    {
+      "name": "primary",
+      "ssn": 8,
+      "protocol": "map"
+    },
+    {
+      "name": "gsmscf",
+      "ssn": 147,
+      "protocol": "map"
+    },
+    {
+      "name": "hlr",
+      "ssn": 6,
+      "protocol": "map"
+    }
+  ]
+}

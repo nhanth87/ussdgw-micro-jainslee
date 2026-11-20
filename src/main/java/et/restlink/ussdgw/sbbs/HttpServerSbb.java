@@ -15,6 +15,7 @@ import et.restlink.ussdgw.events.NiPushReadyEvent;
 import et.restlink.ussdgw.events.NiPushRequestEvent;
 import et.restlink.ussdgw.logging.SleeEventTrace;
 import et.restlink.ussdgw.service.MapDialogHelper;
+import et.restlink.ussdgw.service.NiFlowRegistry;
 import et.restlink.ussdgw.service.SbbServices;
 import et.restlink.ussdgw.tenant.CallbackAuthService;
 import et.restlink.ussdgw.tenant.TenantGuard;
@@ -112,6 +113,9 @@ public final class HttpServerSbb implements Sbb, SleeEventHandler {
         }
         if (pathStartsWith(path, niPath) && "POST".equalsIgnoreCase(req.getMethod())) {
             return handleNi(req);
+        }
+        if ("GET".equalsIgnoreCase(req.getMethod()) && pathStartsWith(path, niPath + "/status/")) {
+            return handleNiStatus(req, path.substring((niPath + "/status/").length()));
         }
         Optional<AdminHttpHandler.HttpReply> reply = svc().adminHttp().tryHandle(
                 req.getMethod(), path, req.getHeaders(), req.getQueryParams(), req.getBody());
@@ -228,6 +232,14 @@ public final class HttpServerSbb implements Sbb, SleeEventHandler {
 
     private String handleNiFirst(HttpWebRequestEvent req, ClassicNiIngress ingress,
                                  AsHttpWireFormat format, CallbackAuthService.NiAuth auth) {
+        // Idempotent async contract (opt-in): X-USSD-Activity-Id makes the push
+        // idempotent across nodes (NiFlowRegistry claim) and answers 202
+        // {flowId, statusUrl} instead of parking the caller's HTTP. Without the
+        // header the classic sync-park behaviour is unchanged.
+        String activityId = NiFlowRegistry.activityHeader(req.getHeaders());
+        if (activityId != null) {
+            return handleNiFirstAsync(req, ingress, format, auth, activityId);
+        }
         String jsessionId = UUID.randomUUID().toString();
         String corr = (ingress.correlationId() != null && !ingress.correlationId().isBlank())
                 ? ingress.correlationId().trim()
@@ -293,6 +305,122 @@ public final class HttpServerSbb implements Sbb, SleeEventHandler {
             park.scheduleAdaptiveGate(rec);
         }
         return "ni-parked";
+    }
+
+    /**
+     * Idempotent async NI push: the activity id is the cluster-wide idempotency
+     * key (one claim → one MAP dialog). A duplicate POST — on any node — replays
+     * the original {@code 202 {flowId, statusUrl}} without a second push. The
+     * flow is parked with <em>no</em> HTTP waiter (fire-and-status): the MAP leg
+     * and the AdaptiveTimeout gate run exactly as in the classic path, and the
+     * client learns progress via {@code GET {niPath}/status/{flowId}}.
+     */
+    private String handleNiFirstAsync(HttpWebRequestEvent req, ClassicNiIngress ingress,
+                                      AsHttpWireFormat format, CallbackAuthService.NiAuth auth,
+                                      String activityId) {
+        String msisdn = ingress.msisdn() == null ? "" : ingress.msisdn().trim();
+        NiFlowRegistry.Claim claim = svc().niFlows().claim(activityId, msisdn);
+        String flowId = claim.flow().flowId();
+        String statusUrl = niStatusUrl() + flowId;
+        if (claim.duplicate()) {
+            replyJson(req.getSessionId(), 202, Map.of("flowId", flowId, "statusUrl", statusUrl));
+            return "ni-flow-dup flow=" + flowId;
+        }
+        String text = ingress.text() == null ? "" : ingress.text();
+        int networkId = resolveNiNetworkId(ingress, auth);
+        String jsessionId = UUID.randomUUID().toString();
+
+        // Client-supplied correlationId must not steal another subscriber's ussdTx row.
+        Optional<VirtualSession> existing = svc().store().get(flowId);
+        if (existing.isPresent()) {
+            replyNiError(req, format, 409, "flow already bound to another msisdn");
+            return "ni-flow-msisdn-conflict";
+        }
+        VirtualSession session = new VirtualSession(
+                UUID.randomUUID().toString(), flowId, UUID.randomUUID().toString(),
+                msisdn, networkId, flowId, "");
+        session.setOriginationType(OriginationType.MAP);
+        session.setState(VirtualSessionState.ACTIVE);
+        session.setPendingText(text);
+        session.setDialogAlive(true);
+        session.setTenantId(auth.tenantId());
+        try {
+            svc().store().put(session);
+        } catch (IllegalStateException e) {
+            replyNiError(req, format, 409, e.getMessage() == null ? "session conflict" : e.getMessage());
+            return "ni-flow-msisdn-conflict";
+        }
+        ClassicNiHttpPark park = svc().niHttpPark();
+        // Fire-and-status: null HTTP waiter — the gate still guards the MAP leg
+        // and the park funnels still move the flow snapshot (COMPLETE / EXPIRED).
+        ClassicNiHttpPark.ParkRecord rec = park.park(
+                null, jsessionId, flowId, format, networkId, false);
+        rec.setRequestUi(!ingress.notifyOnly());
+        routeNiPush(flowId, msisdn, text, networkId, ingress.notifyOnly());
+        if (!svc().config().mapEnabled()) {
+            park.scheduleLabEcho(flowId, text, LAB_ECHO_DELAY_MS);
+        } else {
+            park.scheduleAdaptiveGate(rec);
+        }
+        replyJson(req.getSessionId(), 202, Map.of("flowId", flowId, "statusUrl", statusUrl));
+        return "ni-flow-parked flow=" + flowId;
+    }
+
+    /** Live NI flow state for {@code GET {niPath}/status/{flowId}}. */
+    private String handleNiStatus(HttpWebRequestEvent req, String flowId) {
+        String id = flowId == null ? "" : flowId.trim();
+        int cut = id.indexOf('?');
+        if (cut >= 0) {
+            id = id.substring(0, cut);
+        }
+        var flow = svc().niFlows().findByFlow(id);
+        if (flow.isEmpty() || id.isEmpty()) {
+            replyJson(req.getSessionId(), 404, Map.of("error", "unknown flow"));
+            return "ni-status-404";
+        }
+        var fr = flow.get();
+        String state = liveFlowState(fr.flowId());
+        if (state == null) {
+            state = fr.state();
+            if ("PARKED".equals(state)) {
+                // Session and park are both gone with no terminal snapshot —
+                // the row was reclaimed after finishing.
+                state = "COMPLETE";
+            }
+        }
+        replyJson(req.getSessionId(), 200, Map.of(
+                "flowId", fr.flowId(),
+                "activityId", fr.activityId(),
+                "state", state,
+                "msisdn", fr.msisdn() == null ? "" : fr.msisdn(),
+                "nodeId", fr.nodeId() == null ? "" : fr.nodeId(),
+                "updatedAtMs", fr.updatedAtMs()));
+        return "ni-status state=" + state;
+    }
+
+    /** Live override: parked/active work in progress, else null (use snapshot). */
+    private String liveFlowState(String flowId) {
+        try {
+            if (svc().niHttpPark().findByCorr(flowId).isPresent()) {
+                return "PARKED";
+            }
+            Optional<VirtualSession> s = svc().store().get(flowId);
+            if (s.isPresent() && s.get().state() != VirtualSessionState.COMPLETED) {
+                return "IN_PROGRESS";
+            }
+        } catch (RuntimeException ignored) {
+            // fall through to the snapshot
+        }
+        return null;
+    }
+
+    private String niStatusUrl() {
+        String niPath = svc().config().httpNiPath();
+        if (niPath == null || niPath.isBlank()) {
+            niPath = "/ussd";
+        }
+        String base = niPath.endsWith("/") ? niPath : niPath + "/";
+        return base + "status/";
     }
 
     private String handleNiContinue(HttpWebRequestEvent req, ClassicNiIngress ingress,

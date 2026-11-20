@@ -134,6 +134,52 @@ public class UssdConfigService {
     @ConfigProperty(name = "ussd.map.enabled", defaultValue = "false")
     boolean mapEnabledProp;
     /**
+     * Active/active SS7 cluster (ADR 0007 D11/D12). OFF by default — single-node
+     * behaviour is unchanged. When true the app builds its own
+     * {@link com.microjainslee.cluster.ClusterManager} (JGroups/Infinispan),
+     * hands it to ra-jss7 via {@code setClusterManager}, and the cluster layer
+     * refuses to start without disjoint OTID ranges (see {@code ussd.ss7.otid-range-*}).
+     * Boot-time only (never admin-overridable): flipping it needs a restart so a
+     * node cannot half-join a view.
+     */
+    @ConfigProperty(name = "ussd.cluster.enabled", defaultValue = "false")
+    boolean clusterEnabledProp;
+    /** Stable node id (hostname / systemd instance). Lease fencing keys on it — never random. */
+    @ConfigProperty(name = "ussd.cluster.node-id", defaultValue = "ussdgw-1")
+    String clusterNodeIdProp = "ussdgw-1";
+    /** JGroups stack flavour: {@code tcp} (default) or {@code udp}. */
+    @ConfigProperty(name = "ussd.cluster.stack", defaultValue = "tcp")
+    String clusterStackProp = "tcp";
+    /**
+     * JGroups TCPPING initial hosts, comma-separated {@code host[port]}.
+     * Must include the witness for any 2-node deployment (ADR 0007 D12):
+     * without a third voter a partition fences <em>both</em> sides and no
+     * takeover happens anywhere.
+     */
+    @ConfigProperty(name = "ussd.cluster.initial-hosts",
+            defaultValue = "ussdgw-1[7800],ussdgw-2[7800],witness-1[7800]")
+    String clusterInitialHostsProp = "ussdgw-1[7800],ussdgw-2[7800],witness-1[7800]";
+    /**
+     * This node's inclusive TCAP OTID range. {@code 0,0} = unset (single node).
+     * Cluster mode refuses to start unless {@code start > 0 && end > start};
+     * ranges must be disjoint across nodes — the inbound dialog router throws
+     * on overlap at join time (ADR 0007 D11).
+     */
+    @ConfigProperty(name = "ussd.ss7.otid-range-start", defaultValue = "0")
+    long otidRangeStartProp;
+    @ConfigProperty(name = "ussd.ss7.otid-range-end", defaultValue = "0")
+    long otidRangeEndProp;
+    /**
+     * Cluster-wide local SCTP endpoints as {@code ip:port} CSV. Each node binds
+     * exactly one entry (see {@code ussd.ss7.sctp-endpoint-index}). Empty keeps
+     * the single {@code ussd.map.host-ip/host-port} bind (single node).
+     */
+    @ConfigProperty(name = "ussd.ss7.sctp-local-endpoints", defaultValue = "")
+    String sctpLocalEndpointsProp;
+    /** 0-based index into {@code ussd.ss7.sctp-local-endpoints} for this node. */
+    @ConfigProperty(name = "ussd.ss7.sctp-endpoint-index", defaultValue = "0")
+    int sctpEndpointIndexProp;
+    /**
      * SCCP {@code networkId} for <strong>live</strong> carrier links (Digicom BP = 0).
      * Lab sim on a co-hosted stack uses a different id (typically 1). MAP2MAP Case 2 hop /
      * NI toward Ethio must use this plane even when MO arrived on the lab networkId.
@@ -355,6 +401,52 @@ public class UssdConfigService {
     /** MAP plane enabled (same key as SS7 apply {@code ussd.map.enabled}). */
     public boolean mapEnabled() {
         return bool(RuntimeConfigStore.Keys.MAP_ENABLED, mapEnabledProp);
+    }
+
+    /** Active/active SS7 cluster enabled. OFF by default; boot-time only. */
+    public boolean clusterEnabled() {
+        return clusterEnabledProp;
+    }
+
+    public String clusterNodeId() {
+        String id = clusterNodeIdProp == null ? "" : clusterNodeIdProp.trim();
+        return id.isEmpty() ? "ussdgw-1" : id;
+    }
+
+    public String clusterStack() {
+        String s = clusterStackProp == null ? "" : clusterStackProp.trim().toLowerCase(java.util.Locale.ROOT);
+        return "udp".equals(s) ? "udp" : "tcp";
+    }
+
+    public String clusterInitialHosts() {
+        return clusterInitialHostsProp == null ? "" : clusterInitialHostsProp.trim();
+    }
+
+    public long otidRangeStart() {
+        return otidRangeStartProp;
+    }
+
+    public long otidRangeEnd() {
+        return otidRangeEndProp;
+    }
+
+    /** Cluster-wide local SCTP endpoints ({@code ip:port} list); empty = single bind. */
+    public java.util.List<String> sctpLocalEndpoints() {
+        if (sctpLocalEndpointsProp == null || sctpLocalEndpointsProp.isBlank()) {
+            return java.util.List.of();
+        }
+        java.util.List<String> out = new java.util.ArrayList<>();
+        for (String part : sctpLocalEndpointsProp.split(",")) {
+            String ep = part == null ? "" : part.trim();
+            if (!ep.isEmpty()) {
+                out.add(ep);
+            }
+        }
+        return java.util.List.copyOf(out);
+    }
+
+    public int sctpEndpointIndex() {
+        return Math.max(0, sctpEndpointIndexProp);
     }
 
     /**
