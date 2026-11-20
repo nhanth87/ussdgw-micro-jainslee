@@ -72,26 +72,26 @@ class Ss7PeerRouteServiceTest {
                   "stackName": "nn",
                   "protocols": { "map": true },
                   "sctp": { "links": [
-                    { "name": "L1-BP-1404", "type": "server", "channel": "sctp",
+                    { "name": "L1-STP-2", "type": "server", "channel": "sctp",
                       "local": "127.0.0.1:8013", "peer": "127.0.0.1:8014" },
-                    { "name": "L2-BP-1403", "type": "server", "channel": "sctp",
+                    { "name": "L2-STP-3", "type": "server", "channel": "sctp",
                       "local": "127.0.0.1:8023", "peer": "127.0.0.1:8024" }
                   ]},
                   "m3ua": {
                     "as": [{
-                      "name": "AS-BP", "mode": "loadshare", "functionality": "ipsp",
+                      "name": "AS-LAB", "mode": "loadshare", "functionality": "ipsp",
                       "ipsp": "server", "exchangeType": "DE", "routingContext": 1,
-                      "links": ["L1-BP-1404", "L2-BP-1403"]
+                      "links": ["L1-STP-2", "L2-STP-3"]
                     }],
                     "routes": [
-                      { "to": { "dpc": 1404, "opc": 1 }, "via": "AS-BP" },
-                      { "to": { "dpc": 1403, "opc": 1 }, "via": "AS-BP" }
+                      { "to": { "dpc": 2, "opc": 1 }, "via": "AS-LAB" },
+                      { "to": { "dpc": 3, "opc": 1 }, "via": "AS-LAB" }
                     ]
                   },
                   "sccp": {
                     "localPoints": [{
                       "pc": 1, "networkIndicator": "national", "networkId": 0,
-                      "reachablePointCodes": [1403, 1404]
+                      "reachablePointCodes": [2, 3]
                     }]
                   },
                   "services": [{ "name": "primary", "ssn": 8, "protocol": "map" }]
@@ -102,16 +102,16 @@ class Ss7PeerRouteServiceTest {
         List<PeerRoute> n0 = Ss7PeerRouteService.buildCandidates(cfg).get(0);
         assertNotNull(n0);
         assertEquals(2, n0.size());
-        assertTrue(n0.contains(new PeerRoute("L1-BP-1404-ASP", 1404)));
-        assertTrue(n0.contains(new PeerRoute("L2-BP-1403-ASP", 1403)));
+        assertTrue(n0.contains(new PeerRoute("L1-STP-2-ASP", 2)));
+        assertTrue(n0.contains(new PeerRoute("L2-STP-3-ASP", 3)));
     }
 
     @Test
     void matchAspForDpcPrefersExactSuffix() {
-        assertEquals("L1-BP-1404-ASP",
-                Ss7PeerRouteService.matchAspForDpc(List.of("L1-BP-1404", "L2-BP-1403"), 1404));
-        assertEquals("L2-BP-1403-ASP",
-                Ss7PeerRouteService.matchAspForDpc(List.of("L1-BP-1404", "L2-BP-1403"), 1403));
+        assertEquals("L1-STP-2-ASP",
+                Ss7PeerRouteService.matchAspForDpc(List.of("L1-STP-2", "L2-STP-3"), 2));
+        assertEquals("L2-STP-3-ASP",
+                Ss7PeerRouteService.matchAspForDpc(List.of("L1-STP-2", "L2-STP-3"), 3));
     }
 
     private static Ss7Config loadClasspath(String name) throws Exception {
@@ -150,26 +150,26 @@ class Ss7PeerRouteServiceTest {
                   "stackName": "nn",
                   "protocols": { "map": true },
                   "sctp": { "links": [
-                    { "name": "L1-BP-1404", "type": "server", "channel": "sctp",
+                    { "name": "L1-STP-2", "type": "server", "channel": "sctp",
                       "local": "127.0.0.1:8013", "peer": "127.0.0.1:8014" },
-                    { "name": "L2-BP-1403", "type": "server", "channel": "sctp",
+                    { "name": "L2-STP-3", "type": "server", "channel": "sctp",
                       "local": "127.0.0.1:8023", "peer": "127.0.0.1:8024" }
                   ]},
                   "m3ua": {
                     "as": [{
-                      "name": "AS-BP", "mode": "loadshare", "functionality": "ipsp",
+                      "name": "AS-LAB", "mode": "loadshare", "functionality": "ipsp",
                       "ipsp": "server", "exchangeType": "DE", "routingContext": 1,
-                      "links": ["L1-BP-1404", "L2-BP-1403"]
+                      "links": ["L1-STP-2", "L2-STP-3"]
                     }],
                     "routes": [
-                      { "to": { "dpc": 1404, "opc": 1 }, "via": "AS-BP" },
-                      { "to": { "dpc": 1403, "opc": 1 }, "via": "AS-BP" }
+                      { "to": { "dpc": 2, "opc": 1 }, "via": "AS-LAB" },
+                      { "to": { "dpc": 3, "opc": 1 }, "via": "AS-LAB" }
                     ]
                   },
                   "sccp": {
                     "localPoints": [{
                       "pc": 1, "networkIndicator": "national", "networkId": 0,
-                      "reachablePointCodes": [1403, 1404]
+                      "reachablePointCodes": [2, 3]
                     }]
                   },
                   "services": [{ "name": "primary", "ssn": 8, "protocol": "map" }]

@@ -22,8 +22,8 @@ import org.restcomm.protocols.ss7.config.Ss7Config;
 
 /**
  * N–N peer-route LB for <em>new</em> NI / GTT / MAP2MAP outbound (no ingress ASP).
- * Candidates derived from {@link Ss7Config} (AS links + route DPCs); Digicom AS-BP
- * example is N=2 (1403/1404) but N is not limited to 2.
+ * Candidates derived from {@link Ss7Config} (AS links + route DPCs); lab
+ * example is N=2 (DPC 2/3) but N is not limited to 2.
  */
     @ApplicationScoped
 public class Ss7PeerRouteService {
@@ -110,7 +110,7 @@ public class Ss7PeerRouteService {
 
     /**
      * Derive N candidates: for each M3UA route DPC via an AS, match an AS link whose name
-     * contains that DPC (Digicom {@code L1-BP-1404} / {@code L2-BP-1403}), else zip by order.
+     * contains that DPC ({@code L1-STP-2} / {@code L2-STP-3}), else zip by order.
      * SCCP {@code networkId} on localPoints scopes which DPCs belong to which plane.
      */
     static Map<Integer, List<PeerRoute>> buildCandidates(Ss7Config cfg) {
