@@ -2,6 +2,7 @@ package et.restlink.ussdgw.admin;
 
 import et.restlink.ussdgw.admin.smpp.SmppAdminBindings;
 import et.restlink.ussdgw.admin.smpp.SmppAdminController;
+import et.restlink.ussdgw.bootstrap.ClusterBootstrap;
 import et.restlink.ussdgw.bridge.AdaptiveTimeout;
 import et.restlink.ussdgw.bridge.UssdSagaCoordinator;
 import et.restlink.ussdgw.bridge.VirtualSessionBridge;
@@ -101,6 +102,7 @@ public class AdminHttpHandler {
     @Inject AppTelemetry appTelemetry;
     @Inject et.restlink.ussdgw.bridge.GatedSessionRegistry gatedSessions;
     @Inject et.restlink.ussdgw.api.classic.ClassicNiHttpPark niHttpPark;
+    @Inject ClusterBootstrap clusterBootstrap;
 
     /**
      * {@code Secure} on the admin session cookie. Defaults to on; the plain-HTTP Digicom lab
@@ -848,6 +850,13 @@ public class AdminHttpHandler {
                         + " · TTL-after-bridge " + m2mAfterBridge
                         + " · hops " + (map2MapTelemetry != null
                         ? map2MapTelemetry.hopStartedCount() : 0L)));
+        cards.append(metricCard("Cluster",
+                clusterBootstrap != null && clusterBootstrap.clusterActive() ? "ACTIVE" : "OFF",
+                clusterBootstrap == null ? "n/a"
+                        : "mode " + clusterBootstrap.clusterMode()
+                                + " · node " + clusterBootstrap.nodeId()
+                                + (clusterBootstrap.blocker() != null
+                                ? " · blocker " + shortBlocker(clusterBootstrap.blocker()) : "")));
 
         StringBuilder sb = new StringBuilder();
         sb.append("<div class=\"status\">");
@@ -879,12 +888,16 @@ public class AdminHttpHandler {
         for (String k : new String[]{
                 "ss7.live", "ss7.detail", "smpp.detail", "http.detail", "grpc.detail",
                 "diameter.live", "diameter.detail", "sip.live", "sip.detail",
+                "cluster.enabled", "cluster.active", "cluster.mode",
                 "sessions", "bridge.count", "bridge.enabled", "scheduler.gateTicks",
                 "adaptive.ewma", "map2map.armed", "map2map.pending", "map2map.gatedDuringHop",
                 "map2map.timeoutAfterBridge", "scheduler.map2mapExpired"}) {
             Object v = "sessions".equals(k) ? sessions
                     : "bridge.count".equals(k) ? bridgeCount
                     : "bridge.enabled".equals(k) ? config.bridgeEnabled()
+                    : "cluster.enabled".equals(k) ? (clusterBootstrap != null && clusterBootstrap.clusterEnabled())
+                    : "cluster.active".equals(k) ? (clusterBootstrap != null && clusterBootstrap.clusterActive())
+                    : "cluster.mode".equals(k) ? (clusterBootstrap != null ? clusterBootstrap.clusterMode() : "OFF")
                     : "scheduler.gateTicks".equals(k) ? (bridgeGate != null ? bridgeGate.gateTicks() : 0L)
                     : "adaptive.ewma".equals(k) ? ewmaSnap
                     : "map2map.armed".equals(k) ? m2mArmed
@@ -900,6 +913,12 @@ public class AdminHttpHandler {
         }
         sb.append("</pre></details></div>");
         return HttpReply.html(sb.toString());
+    }
+
+    /** Blocker chains can be long; the card shows a prefix, status.json keeps the full chain. */
+    private static String shortBlocker(String blocker) {
+        String oneLine = blocker.replace('\n', ' ');
+        return oneLine.length() <= 160 ? oneLine : oneLine.substring(0, 157) + "...";
     }
 
     private static String metricCard(String title, String value, String detail) {
@@ -961,6 +980,11 @@ public class AdminHttpHandler {
         }
         if (cdrClickHouse != null) {
             m.putAll(cdrClickHouse.status());
+        }
+        if (clusterBootstrap != null) {
+            // Feature-flagged app cluster (REPL_SYNC Profile CMP). OFF by default; when
+            // enabled=true but the ISPN API mismatches, cluster.active=false + cluster.blocker.
+            m.putAll(clusterBootstrap.status());
         }
         return HttpReply.json(200, m);
     }

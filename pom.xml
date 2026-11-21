@@ -21,6 +21,13 @@
         <sctp.version>2.27.34</sctp.version>
         <jackson.version>2.23.0</jackson.version>
         <log4j.version>2.26.1</log4j.version>
+        <!-- micro-jainslee (jainslee-cluster / jainslee-profile-infinispan) 1.2.2-SNAPSHOT is
+             built against ISPN 15.2.6.Final (jainslee-pom). The Quarkus BOM manages
+             infinispan-commons to 16.x, which removes StreamingMarshaller and kills
+             ClusterManager at construction (GMLC hit the same Attribute.set skew). -->
+        <infinispan.version>15.2.6.Final</infinispan.version>
+        <!-- protostream must follow the ISPN baseline (15.2.6 → 5.0.13.Final). -->
+        <protostream.version>5.0.13.Final</protostream.version>
         <micrometer.version>1.17.2</micrometer.version>
         <surefire.version>3.6.1</surefire.version>
         <quarkus.build.skip>true</quarkus.build.skip>
@@ -58,6 +65,40 @@
                 <version>${quarkus.platform.version}</version>
                 <type>pom</type>
                 <scope>import</scope>
+            </dependency>
+            <!-- GMLC parity: pin Infinispan to the micro-jainslee baseline (15.2.6.Final).
+                 Quarkus BOM otherwise manages infinispan-commons to 16.x and ClusterManager
+                 dies at construction (NoClassDefFoundError StreamingMarshaller / Attribute.set).
+                 This is app build config only — the shared jainslee jars are untouched. -->
+            <dependency>
+                <groupId>org.infinispan</groupId>
+                <artifactId>infinispan-core</artifactId>
+                <version>${infinispan.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.infinispan</groupId>
+                <artifactId>infinispan-commons</artifactId>
+                <version>${infinispan.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.infinispan</groupId>
+                <artifactId>infinispan-counter-api</artifactId>
+                <version>${infinispan.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.infinispan.protostream</groupId>
+                <artifactId>protostream</artifactId>
+                <version>${protostream.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.infinispan.protostream</groupId>
+                <artifactId>protostream-types</artifactId>
+                <version>${protostream.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.infinispan.protostream</groupId>
+                <artifactId>protostream-processor</artifactId>
+                <version>${protostream.version}</version>
             </dependency>
             <!-- jSS7 / corsac-diameter poms declare junit in COMPILE scope. Which version wins
                  depends on the resolution path (4.13.2 here, 4.11 on a from-source /m2), and
