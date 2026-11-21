@@ -1,5 +1,11 @@
 # ussdgw-micro-jainslee
 
+<!-- knowledge-vault:start -->
+## Knowledge base
+
+This project's docs are mirrored and cross-linked in the shared Obsidian vault: `~/Desktop/knowledge-vault/telecom-project/Projects/Ethiopia/USSDGW (micro-jainslee)/USSDGW (micro-jainslee) — Index.md` (home: `~/Desktop/knowledge-vault/telecom-project/Home.md`). Search there first; the files in this repo stay the source of truth.
+<!-- knowledge-vault:end -->
+
 ![Java 25](https://img.shields.io/badge/Java-25-orange) ![License](https://img.shields.io/badge/license-Dual_(GPLv3_|_Commercial)-blueviolet)
 
 RestLink greenfield USSD gateway (Quarkus + micro-jainslee + ra-jss7). **Java 25.**

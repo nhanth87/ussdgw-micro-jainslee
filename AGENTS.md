@@ -1,5 +1,21 @@
 # AGENTS.md — Digicom-ET USSDGW (ussdgw-jainslee)
 
+<!-- knowledge-vault:start -->
+## Knowledge vault — search first, update after (mandatory for every request and every AI agent)
+
+The shared Obsidian vault `~/Desktop/knowledge-vault/telecom-project` mirrors the README, docs and design files of every project, plus the supermemory export, with cross-project topic indexes and agent-written notes.
+
+**1. Search first.** Before exploring this repo or answering, look in the vault:
+- Home: `~/Desktop/knowledge-vault/telecom-project/Home.md`. This project: `~/Desktop/knowledge-vault/telecom-project/Projects/Ethiopia/USSDGW (micro-jainslee)/USSDGW (micro-jainslee) — Index.md`. Topics: `~/Desktop/knowledge-vault/telecom-project/Topics/`.
+- `rg -n "<term>" ~/Desktop/knowledge-vault/telecom-project`. Every note has `vault_source:` = the real file; open that file to edit or quote.
+- Claude Code sessions get relevant vault hits injected automatically (UserPromptSubmit hook). Other agents (opencode, codex, cursor, kimi, gemini) must run the `rg` themselves.
+
+**2. Update after.** When the request produces knowledge (a decision, lesson, deploy or rollback, investigation or root cause, design, howto, status change):
+- if it belongs in this repo, edit the repo docs (README, docs/, ADR, lessons) — never the vault copy;
+- otherwise, or in addition, write `~/Desktop/knowledge-vault/telecom-project/Notes/<Project>/YYYY-MM-DD <title>.md` following `~/Desktop/knowledge-vault/telecom-project/Notes/README.md`. **No secrets in notes.**
+- Then re-sync: `python3 -I ~/Desktop/knowledge-vault/telecom-project/_meta/sync_vault.py`. Claude's Stop hook and a 30-min timer also sync automatically.
+<!-- knowledge-vault:end -->
+
 **JDK: Java 25 only** (`maven.compiler.release=25`, mise **zulu-25**). Never Java 8/11/17/21.
 
 Thin index for agents. Durable detail → [`docs/agents/`](docs/agents/) — start at [`docs/agents/README.md`](docs/agents/README.md). **Before admin/UI/packaging edits:** [`lessons.md`](docs/agents/lessons.md) + [`skills.md`](docs/agents/skills.md).
