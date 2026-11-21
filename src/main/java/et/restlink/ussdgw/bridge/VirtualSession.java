@@ -31,6 +31,8 @@ public final class VirtualSession {
     private volatile long pullStartedAtNanos;
     private volatile long invokeId;
     private volatile boolean dialogAlive = true;
+    private volatile long msDigitInvokeId = Long.MIN_VALUE;
+    private volatile boolean msDigitInFlight;
     private volatile boolean adaptiveBridgeArm = true;
     /**
      * MAP2MAP Case 2: outbound hop UnstructuredSS is on the wire and has not yet
@@ -106,6 +108,10 @@ public final class VirtualSession {
     }
     public long invokeId() { return invokeId; }
     public void setInvokeId(long invokeId) { this.invokeId = invokeId; }
+    public long msDigitInvokeId() { return msDigitInvokeId; }
+    public void setMsDigitInvokeId(long v) { this.msDigitInvokeId = v; }
+    public boolean msDigitInFlight() { return msDigitInFlight; }
+    public void setMsDigitInFlight(boolean v) { this.msDigitInFlight = v; }
 
     /**
      * Heap-only claim on <em>this</em> instance. Prefer

@@ -29,6 +29,18 @@ public final class UssdTxProfileMapper {
         p.setPullStartedAtMs(s.pullStartedAtMs());
         p.setPullStartedAtNanos(s.pullStartedAtNanos());
         p.setInvokeId(s.invokeId());
+        // msDigit claim is CAS-owned (VirtualSessionStore.tryClaimMsDigitContinue /
+        // releaseMsDigitInFlight): never overwrite a persisted claim with a stale session
+        // snapshot (CAS single-field law, like asCookie which the mapper never touches).
+        // Initialize defaults only when the row has no claim yet, so a fresh put() carries
+        // an explicit hydration value while later puts preserve the winning CAS.
+        if (p.getMsDigitInvokeId() == null) {
+            long v = s.msDigitInvokeId();
+            p.setMsDigitInvokeId(v == Long.MIN_VALUE ? null : v);
+        }
+        if (p.getMsDigitInFlight() == null) {
+            p.setMsDigitInFlight(s.msDigitInFlight() ? Boolean.TRUE : Boolean.FALSE);
+        }
         p.setDialogAlive(s.dialogAlive());
         p.setAdaptiveBridgeArm(s.adaptiveBridgeArm());
         p.setMap2mapHopOutstanding(s.map2mapHopOutstanding());
@@ -88,6 +100,12 @@ public final class UssdTxProfileMapper {
         }
         if (p.getInvokeId() != null) {
             s.setInvokeId(p.getInvokeId());
+        }
+        if (p.getMsDigitInvokeId() != null) {
+            s.setMsDigitInvokeId(p.getMsDigitInvokeId());
+        }
+        if (p.getMsDigitInFlight() != null) {
+            s.setMsDigitInFlight(p.getMsDigitInFlight());
         }
         if (p.getDialogAlive() != null) {
             s.setDialogAlive(p.getDialogAlive());

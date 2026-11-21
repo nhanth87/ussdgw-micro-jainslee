@@ -342,6 +342,12 @@ public class VirtualSessionStore {
     /**
      * Claim one MS digit continue for {@code correlationId} (race-safe across rehydrate).
      *
+     * <p>Source of truth is the replicated {@code ussdTx} row
+     * ({@code msDigitInvokeId}/{@code msDigitInFlight}) via
+     * {@link ProfileFacility#compareAndSetField} — never the heap alone, so a session
+     * taken over by another node after rehydrate still loses duplicates. The heap
+     * {@link #msDigitClaims} stays as a fast-path mirror only.
+     *
      * <ul>
      *   <li>Same {@code invokeId} already claimed → empty ({@link MsDigitClaimLoss#INVOKE})</li>
      *   <li>Another digit still in-flight (AS not yet CONTINUE→ACTIVE) → empty
@@ -349,11 +355,77 @@ public class VirtualSessionStore {
      *       before {@code AWAITING_AS} persists</li>
      *   <li>Else win and mark in-flight until {@link #releaseMsDigitInFlight}</li>
      * </ul>
+     *
+     * <p>CAS single-field law: only single-field {@code compareAndSetField}/
+     * {@code updateField} on the two claim fields — never a full {@link #put}.
      */
     public Optional<MsDigitClaimLoss> tryClaimMsDigitContinue(String correlationId, long invokeId) {
         if (correlationId == null || correlationId.isBlank()) {
             return Optional.of(MsDigitClaimLoss.IN_FLIGHT);
         }
+        ProfileFacility f = facility();
+        if (f == null) {
+            return tryClaimHeapOnly(correlationId, invokeId);
+        }
+        rebindLocator(f);
+        ProfileID id = new ProfileID(UssdTxProfile.TABLE_NAME, correlationId);
+        for (;;) {
+            Long curInvokeObj;
+            Boolean curFlightObj;
+            try {
+                ProfileLocalObject plo = f.getProfile(id);
+                if (plo == null) {
+                    return tryClaimHeapOnly(correlationId, invokeId);
+                }
+                rebindLocator(f);
+                UssdTxProfile p = (UssdTxProfile) plo.getProfile();
+                curInvokeObj = p.getMsDigitInvokeId();
+                curFlightObj = p.getMsDigitInFlight();
+            } catch (RuntimeException e) {
+                // Row removed / table dropped mid-claim: best-effort heap fallback.
+                return tryClaimHeapOnly(correlationId, invokeId);
+            }
+            boolean curFlight = curFlightObj != null && curFlightObj;
+            if (curInvokeObj != null && invokeId == curInvokeObj.longValue()) {
+                syncHeapClaim(correlationId, curInvokeObj.longValue(), curFlight);
+                return Optional.of(MsDigitClaimLoss.INVOKE);
+            }
+            if (curFlight) {
+                syncHeapClaim(correlationId,
+                        curInvokeObj == null ? Long.MIN_VALUE : curInvokeObj.longValue(), true);
+                return Optional.of(MsDigitClaimLoss.IN_FLIGHT);
+            }
+            // Free: try to win by CASing in-flight false->true (or null->true on first
+            // claim). Only the winner writes its invokeId afterwards, so a loser can never
+            // overwrite the winner's invokeId.
+            boolean casOk;
+            try {
+                if (curFlightObj == null) {
+                    casOk = f.compareAndSetField(id, "msDigitInFlight", null, Boolean.TRUE);
+                } else {
+                    casOk = f.compareAndSetField(
+                            id, "msDigitInFlight", Boolean.FALSE, Boolean.TRUE);
+                }
+            } catch (RuntimeException e) {
+                return tryClaimHeapOnly(correlationId, invokeId);
+            }
+            if (!casOk) {
+                continue;
+            }
+            try {
+                final long won = invokeId;
+                f.updateField(id, "msDigitInvokeId", old -> Long.valueOf(won));
+            } catch (RuntimeException e) {
+                LOG.debug("msDigit claim invokeId store skipped corr={}: {}",
+                        correlationId, e.toString());
+            }
+            syncHeapClaim(correlationId, invokeId, true);
+            return Optional.empty();
+        }
+    }
+
+    /** Heap-only claim used when no ProfileFacility is available (plain unit tests). */
+    private Optional<MsDigitClaimLoss> tryClaimHeapOnly(String correlationId, long invokeId) {
         AtomicReference<MsDigitClaim> slot = msDigitClaims.computeIfAbsent(
                 correlationId, k -> new AtomicReference<>(new MsDigitClaim(Long.MIN_VALUE, false)));
         for (;;) {
@@ -371,35 +443,84 @@ public class VirtualSessionStore {
         }
     }
 
+    /** Mirror a durable decision into the heap fast-path cache. */
+    private void syncHeapClaim(String correlationId, long invokeId, boolean inFlight) {
+        msDigitClaims.compute(correlationId, (k, existing) -> {
+            if (existing == null) {
+                return new AtomicReference<>(new MsDigitClaim(invokeId, inFlight));
+            }
+            existing.set(new MsDigitClaim(invokeId, inFlight));
+            return existing;
+        });
+    }
+
+    private void rebindLocator(ProfileFacility f) {
+        if (f instanceof com.microjainslee.core.ProfileFieldAccess access) {
+            com.microjainslee.core.ProfileFieldStoreLocator.set(access);
+        }
+    }
+
     /**
      * Clear in-flight after AS CONTINUE→ACTIVE (menu shown; next real digit allowed).
      * Keeps last invokeId so a late duplicate of the same component still loses.
+     * Durable: single-field reset of {@code msDigitInFlight}; never a full {@link #put}.
      */
     public void releaseMsDigitInFlight(String correlationId) {
         if (correlationId == null || correlationId.isBlank()) {
             return;
         }
         AtomicReference<MsDigitClaim> slot = msDigitClaims.get(correlationId);
-        if (slot == null) {
+        if (slot != null) {
+            for (;;) {
+                MsDigitClaim cur = slot.get();
+                if (!cur.inFlight()) {
+                    break;
+                }
+                if (slot.compareAndSet(cur, new MsDigitClaim(cur.invokeId(), false))) {
+                    break;
+                }
+            }
+        }
+        ProfileFacility f = facility();
+        if (f == null) {
             return;
         }
-        for (;;) {
-            MsDigitClaim cur = slot.get();
-            if (!cur.inFlight()) {
-                return;
-            }
-            if (slot.compareAndSet(cur, new MsDigitClaim(cur.invokeId(), false))) {
-                return;
-            }
+        rebindLocator(f);
+        try {
+            f.updateField(new ProfileID(UssdTxProfile.TABLE_NAME, correlationId),
+                    "msDigitInFlight", old -> Boolean.FALSE);
+        } catch (RuntimeException e) {
+            LOG.debug("msDigit release skipped corr={}: {}", correlationId, e.toString());
         }
     }
 
-    /** Drop claim row on saga end / remove. */
+    /**
+     * Drop claim row on saga end / remove. Clears the heap mirror and resets the
+     * persisted {@code msDigitInvokeId}/{@code msDigitInFlight} via single-field
+     * writes (never a full {@link #put}); missing rows are ignored.
+     */
     public void clearMsDigitClaim(String correlationId) {
         if (correlationId == null || correlationId.isBlank()) {
             return;
         }
         msDigitClaims.remove(correlationId);
+        ProfileFacility f = facility();
+        if (f == null) {
+            return;
+        }
+        rebindLocator(f);
+        ProfileID id = new ProfileID(UssdTxProfile.TABLE_NAME, correlationId);
+        try {
+            f.updateField(id, "msDigitInFlight", old -> Boolean.FALSE);
+        } catch (RuntimeException e) {
+            LOG.debug("msDigit clear inFlight skipped corr={}: {}", correlationId, e.toString());
+            return;
+        }
+        try {
+            f.updateField(id, "msDigitInvokeId", old -> Long.valueOf(Long.MIN_VALUE));
+        } catch (RuntimeException e) {
+            LOG.debug("msDigit clear invokeId skipped corr={}: {}", correlationId, e.toString());
+        }
     }
 
     /**

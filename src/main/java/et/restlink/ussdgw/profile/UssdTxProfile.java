@@ -161,6 +161,22 @@ public final class UssdTxProfile extends ProfileAbstractCmp {
         set(s("invokeId", Long.class), v);
     }
 
+    public Long getMsDigitInvokeId() {
+        return (Long) ProfileAccessorInvoker.getValue(this, g("msDigitInvokeId"));
+    }
+
+    public void setMsDigitInvokeId(Long v) {
+        set(s("msDigitInvokeId", Long.class), v);
+    }
+
+    public Boolean getMsDigitInFlight() {
+        return (Boolean) ProfileAccessorInvoker.getValue(this, g("msDigitInFlight"));
+    }
+
+    public void setMsDigitInFlight(Boolean v) {
+        set(s("msDigitInFlight", Boolean.class), v);
+    }
+
     public Boolean getDialogAlive() {
         return (Boolean) ProfileAccessorInvoker.getValue(this, g("dialogAlive"));
     }
