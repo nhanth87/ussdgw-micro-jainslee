@@ -1,9 +1,13 @@
 package et.restlink.ussdgw.service;
 
+import et.restlink.ussdgw.bootstrap.ClusterBootstrap;
+
+import com.microjainslee.cluster.ClusterManager;
 import com.microjainslee.cluster.Ss7PeerRouteAffinity;
 import com.microjainslee.cluster.Ss7PeerRouteAffinity.PeerRoute;
 
 import jakarta.enterprise.context.ApplicationScoped;
+import jakarta.inject.Inject;
 
 import java.util.ArrayList;
 import java.util.Collections;
@@ -31,6 +35,9 @@ public class Ss7PeerRouteService {
     @ConfigProperty(name = "ussd.ss7.peer-route-lb.enabled", defaultValue = "false")
     boolean enabled;
 
+    /** Feature-flagged cluster: gives this LB a real ClusterManager only when it is active. */
+    @Inject ClusterBootstrap clusterBootstrap;
+
     private volatile Ss7PeerRouteAffinity affinity;
     private final ConcurrentMap<Integer, List<PeerRoute>> candidatesByNetworkId = new ConcurrentHashMap<>();
 
@@ -52,7 +59,7 @@ public class Ss7PeerRouteService {
 
     /**
      * Pick+pin for a new outbound session. Returns null when LB disabled / no candidates /
-     * no ClusterManager — caller keeps classic SLS.
+     * no active ClusterManager — caller keeps classic SLS.
      */
     public PeerRoute pickForNewSession(int networkId, String affinityKey) {
         if (!enabled) {
@@ -80,9 +87,27 @@ public class Ss7PeerRouteService {
     }
 
     private Ss7PeerRouteAffinity ensureAffinity() {
-        // ISPN ClusterManager bind deferred until Digicom Infinispan API aligns —
-        // without it, pickForNewSession uses local hash when N>1 (or null when disabled).
-        return affinity;
+        Ss7PeerRouteAffinity local = affinity;
+        if (local != null) {
+            return local;
+        }
+        ClusterManager manager = clusterBootstrap == null ? null : clusterBootstrap.clusterManager();
+        if (manager == null || !manager.isClustered()) {
+            // Cluster OFF / failed safe (or a plain unit test): pickForNewSession falls back
+            // to the deterministic local hash when N>1, or null when the LB is disabled.
+            return null;
+        }
+        try {
+            local = new Ss7PeerRouteAffinity(manager);
+        } catch (RuntimeException e) {
+            LOG.warn("Ss7PeerRouteService: cluster active but affinity unavailable — "
+                    + "keeping local hash: {}", e.toString());
+            return null;
+        }
+        affinity = local;
+        LOG.info("Ss7PeerRouteService: cluster active (node {}) — peer-route affinity "
+                + "pinned via ClusterManager", manager.getNodeId());
+        return local;
     }
 
     /**
